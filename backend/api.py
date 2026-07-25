@@ -310,4 +310,4 @@ def create_app(config: Config | None = None) -> FastAPI:
 
 # Module-level app for `gunicorn backend.api:app` / `uvicorn backend.api:app`.
 app = create_app()
-print("App started")
+logger.info("App started")
