@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (pinned build tool — a specific version for reproducible group handling)
-COPY --from=ghcr.io/astral-sh/uv:0.9.18 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /usr/local/bin/uv
 
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 \
