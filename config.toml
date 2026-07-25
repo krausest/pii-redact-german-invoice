@@ -1,0 +1,27 @@
+# Redaction service configuration. Every field has a code default, so you may
+# delete any of these; the values below are the committed defaults.
+
+[engine]
+name = "onnx"          # native | onnx | gliner
+# Advanced: override either axis to unlock combinations the presets don't name.
+# ocr_backend = "paddle"   # paddle | onnxruntime
+# classifier = "presidio"  # presidio | gliner
+
+[redaction]
+fill = [0, 0, 0]           # black
+padding = 2                # pixels added around each OCR line box
+score_threshold = 0.4      # Presidio minimum entity score
+unwarp = true              # flatten the page before OCR (default for ?unwarp=)
+pdf_dpi = 200              # rasterization DPI for uploaded PDFs (default for ?pdf-dpi=)
+max_pages = 30             # reject PDFs with more pages than this
+jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
+
+[api]
+max_upload_bytes = 31457280          # 30 MiB — covers PDF uploads + /api/assemble payloads
+input_content_types = ["image/png", "image/jpeg", "application/pdf"]
+max_image_pixels = 40000000          # decompression-bomb guard (~40 MP), per page
+host = "0.0.0.0"
+port = 8000
+workers = 2                          # gunicorn worker processes (scale by RAM)
+request_timeout_s = 120
+max_concurrent_per_worker = 1        # in-flight redactions per worker

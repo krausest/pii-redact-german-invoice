@@ -1,0 +1,55 @@
+[project]
+name = "pii-redact-german-invoice"
+version = "0.1.0"
+description = "Tries to remove personal information from german invoices"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "de-core-news-lg",
+    "fastapi>=0.115.0",
+    "gunicorn>=23.0.0",
+    "onnxruntime>=1.19.0",
+    "paddleocr>=3.7.0",
+    "paddlepaddle>=3.3.1",
+    "pillow>=12.3.0",
+    "presidio-analyzer>=2.2.0",
+    # Config + request validation. FastAPI pulls it in anyway; declared because
+    # backend.config and backend.options import it directly.
+    "pydantic>=2.9.0",
+    "pymupdf>=1.28.0",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[project.optional-dependencies]
+# The gliner engine pulls torch (+ ~4.6 GB of CUDA libs on linux/amd64) that the
+# default presidio/onnx engines don't need. Kept optional so it's excluded from the
+# Docker image; install locally with `uv sync --extra gliner` to use engine=gliner.
+gliner = ["gliner>=0.2.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
+
+[project.scripts]
+pii-redact = "backend.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    # Jupyter notebooks (dev only, not the runtime service). The notebooks call the
+    # API with requests.post; nothing in `backend` imports it.
+    "ipykernel>=7.3.0",
+    "requests>=2.34.2",
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: end-to-end tests that load real ML models (deselect with -m 'not slow')",
+]
+
+[tool.uv.sources]
+de-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl" }

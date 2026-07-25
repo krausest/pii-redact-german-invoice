@@ -1,0 +1,65 @@
+"""Deterministic redaction rules the NER/NLP stack misses.
+
+These regexes and the spatial birthdate matcher are shared by every classifier:
+they are applied uniformly in :func:`backend.pipeline.RedactionPipeline.compute_boxes`
+*before* the model-based classifier runs. Applying the German street / ZIP+city
+patterns uniformly is behavior-preserving for the Presidio path — its DE_ADDRESS
+recognizer uses the same regexes at score 0.7/0.6 with threshold 0.4, so it
+already always fires on those matches; the GLiNER path relied on them explicitly
+because its zero-shot "address" label is unreliable.
+"""
+
+from __future__ import annotations
+
+import re
+
+from backend.models import Line
+
+# Anrede: any line containing a salutation word is redacted — lone ("Herrn" above
+# the address) or with a name ("Herr Mustermann", where NER only tags the single
+# token "Mustermann", which the PERSON guard drops). A lone salutation carries no
+# information, so over-redacting it is harmless and needs just one regex.
+SALUT = re.compile(r"\b(?:Herrn?|Frau|Fräulein|Frl|Familie|Fam|Eheleute)\b")
+
+# German street: "<Street>strasse 23".
+DE_STREET = re.compile(
+    r"\b[A-ZÄÖÜ][a-zäöüß.\-]+(?:stra(?:ße|sse)|str\.?|weg|platz|gasse|allee|ring|damm)\s*\d+[a-zA-Z]?\b"
+)
+# German ZIP + city: "12345 Musterstadt". The city token must contain lowercase
+# letters so we don't match spec noise like "15118 MID".
+DE_PLZ_CITY = re.compile(r"\b\d{5}\s+[A-ZÄÖÜ][a-zäöüß]{2,}(?:[ \-][A-ZÄÖÜ][a-zäöüß]+)?\b")
+
+# Date of birth: the "Geburtstag/Geburtsdatum/geboren" label and the date sit in
+# different columns, so they are separate OCR lines — matched spatially below.
+# Only full birth words: the bare abbreviation "geb." also means "Gebühren"
+# ("Geb.Nr." fee-number column), which would redact treatment dates by mistake.
+BIRTH_LABEL = re.compile(r"(?i)geburt|geboren")
+DATE_RE = re.compile(r"\b\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}\b")
+
+
+def line_matches_static_rule(text: str) -> bool:
+    """True if a line is redactable by the per-line deterministic rules
+    (salutation or German street / ZIP+city). Birthdates need the whole page, so
+    they are handled separately by :func:`birthdate_indices`."""
+    return bool(SALUT.search(text) or DE_STREET.search(text) or DE_PLZ_CITY.search(text))
+
+
+def birthdate_indices(lines: list[Line]) -> set[int]:
+    """Indices of lines holding a date of birth: a date line sharing a row with a
+    "Geburtstag/geb." label line (two-column layout), or label+date on one line."""
+    label_spans = [
+        (ln.top, ln.top + ln.height) for ln in lines if BIRTH_LABEL.search(ln.text)
+    ]
+
+    idx: set[int] = set()
+    for i, ln in enumerate(lines):
+        if not DATE_RE.search(ln.text):
+            continue
+        if BIRTH_LABEL.search(ln.text):  # label + date merged on one line
+            idx.add(i)
+            continue
+        center = ln.top + ln.height / 2
+        tol = ln.height / 2
+        if any(y0 - tol <= center <= y1 + tol for y0, y1 in label_spans):
+            idx.add(i)
+    return idx

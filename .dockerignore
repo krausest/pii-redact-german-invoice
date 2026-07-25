@@ -1,0 +1,34 @@
+# Keep the build context small and reproducible.
+
+# Virtualenv (2.3 GB) — rebuilt in the image
+.venv/
+
+# Large / irrelevant files
+Download.zip
+Arztrechnung/
+temp.jpg
+*.ipynb
+
+# Model caches — rebuilt by the warmup step inside the image
+.paddle_cache/
+.gliner_cache/
+
+# Frontend build artifacts — rebuilt in the frontend stage
+**/node_modules/
+**/dist/
+
+# Python / tooling cruft
+**/__pycache__/
+*.py[cod]
+
+# Tests (not needed at runtime)
+tests/
+
+# VCS / editor
+.git/
+.gitignore
+.DS_Store
+
+# Docs not needed for the build (README.md IS needed — hatchling metadata — so not excluded)
+"README copy.md"
+INSTALL.md
