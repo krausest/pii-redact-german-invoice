@@ -43,6 +43,10 @@ jobs:
             type=sha,prefix=,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+          # The auto-derived licenses label would be the repo license (MIT), but
+          # the *image* is AGPL because it bundles PyMuPDF — see LICENSE.md.
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
 
       # amd64 only: paddlepaddle ships no linux-arm64 wheel (see Dockerfile).
       # ubuntu-latest runners are already amd64, so this build never needs qemu.
