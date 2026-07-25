@@ -36,6 +36,13 @@ jobs:
       - name: Derive image tags
         id: meta
         uses: docker/metadata-action@v6
+        env:
+          # The provenance attestation (build-push-action default) wraps the
+          # single-arch image in an OCI *index*, and GHCR's UI reads the
+          # description/licenses from index annotations — never from the image
+          # config labels the Dockerfile sets. So annotations must be emitted at
+          # index level too, or the package page shows nothing.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -43,9 +50,15 @@ jobs:
             type=sha,prefix=,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-          # The auto-derived licenses label would be the repo license (MIT), but
-          # the *image* is AGPL because it bundles PyMuPDF — see LICENSE.md.
+          # Both overridden rather than auto-derived: the *image* license is AGPL
+          # because it bundles PyMuPDF (see LICENSE.md) — not the repo's MIT — and
+          # the description must match the Dockerfile LABEL. Applied to labels and
+          # annotations alike so config and index never disagree.
           labels: |
+            org.opencontainers.image.description=Removes PII from German invoices. FastAPI service with bundled web UI and REST API; all models baked in, runs fully offline.
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+          annotations: |
+            org.opencontainers.image.description=Removes PII from German invoices. FastAPI service with bundled web UI and REST API; all models baked in, runs fully offline.
             org.opencontainers.image.licenses=AGPL-3.0-or-later
 
       # amd64 only: paddlepaddle ships no linux-arm64 wheel (see Dockerfile).
@@ -58,5 +71,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
