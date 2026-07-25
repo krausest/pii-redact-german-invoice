@@ -54,8 +54,8 @@ COPY --from=frontend /build/dist /app/static
 RUN uv sync --frozen --no-default-groups
 
 # --- Bake every model into the image (offline runtime) ---
-# HF_HUB_OFFLINE=0 is set for this step only so GLiNER may download; at runtime the
-# code defaults it back to offline. Populates /app/.paddle_cache + /app/.gliner_cache.
+# HF_HUB_OFFLINE=0 is set for this step only so the models may download; the ENV
+# below forces offline at runtime. Populates /app/.paddle_cache + /app/.gliner_cache.
 # `--no-sync`: don't let `uv run` re-sync (which would re-add the dev group).
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 uv run --no-sync python warmup.py
 
@@ -64,7 +64,10 @@ RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
-ENV WEB_CONCURRENCY=1 REQUEST_TIMEOUT=120
+# Offline is enforced, not assumed: warmup.py baked every model above, so any
+# download attempt at runtime is a missed bake — make it fail loudly.
+ENV WEB_CONCURRENCY=1 REQUEST_TIMEOUT=120 \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
 
