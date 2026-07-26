@@ -1,0 +1,24 @@
+name: Slow tests
+
+on:
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # ubuntu-latest is amd64, so paddle OCR inference runs natively — no qemu
+      # (paddle inference is broken under qemu, see CLAUDE.md).
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run tests
+        run: uv run pytest
