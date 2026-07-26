@@ -1,4 +1,4 @@
-name: Slow tests
+name: Run tests
 
 on:
   push:
