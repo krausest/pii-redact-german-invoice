@@ -1,8 +1,10 @@
 # PII redaction for German invoices
 
-Blacks out personally identifiable information — names, addresses, dates of birth,
-IBAN/BIC, e-mail — on scanned German invoices. **Everything runs locally on CPU;
-no page ever leaves the machine.**
+Blacks out personally identifiable information on scanned German invoices — names,
+addresses, dates of birth, IBAN/BIC, e-mail, phone and account numbers — protecting
+the people the invoice is *about* (the recipient, the patient), not the issuing
+company's own details. **Everything runs locally on CPU; no page ever leaves the
+machine.**
 
 ![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
 ![Code: MIT](https://img.shields.io/badge/code-MIT-green)
@@ -291,7 +293,10 @@ as are malformed bodies and bad parameters. Errors are `{"detail": "…"}`.
 
 All knobs live in [`config.toml`](config.toml) (engine, redaction fill/padding,
 upload limits, worker count). `PII_ENGINE` and `PII_CONFIG` environment variables
-override the engine preset and the config-file path respectively.
+override the engine preset and the config-file path respectively. `PII_LOG_LEVEL=DEBUG`
+(API and CLI) logs every OCR line with its box, plus each classifier match with its
+score and the recognizer/context that produced it, followed by the redact verdict —
+useful for seeing exactly why a line was or wasn't redacted.
 
 Every key is optional — delete any of them and the default applies — but the file
 is validated on load and a bad one **fails at startup rather than on the first
@@ -338,23 +343,33 @@ classify), and `apply_boxes()` (fill):
    miss names it recognizes fine in isolation. Per-line text is
    coherent, so both NER and the regex/context rules work.
 3. **Classify** the line (this is where the engines differ, see below). The
-   shared deterministic rules — salutation, German street / PLZ+city, and the
-   spatial date-of-birth matcher ([`backend/rules.py`](backend/rules.py)) —
-   are applied uniformly first, then the model-based classifier.
+   shared deterministic rules — salutation, titled name (`Dr. Weber`), German
+   street / PLZ+city, and the spatial date-of-birth matcher
+   ([`backend/rules.py`](backend/rules.py)) — are applied uniformly first, then
+   the model-based classifier.
 4. **Draw** a filled black rectangle over the line's box (with a 2 px pad) if it is judged
    to contain PII.
 
 ### `presidio` classifier
 
-Redacts these entities: `PERSON`, `IBAN_CODE`, `BIC_CODE`, `DE_ADDRESS`, `EMAIL_ADDRESS`.
+Redacts these entities: `PERSON`, `IBAN_CODE`, `BIC_CODE`, `DE_ADDRESS`, `EMAIL_ADDRESS`,
+`KONTO`, `PHONE_NUMBER`, `CREDIT_CARD`.
 `LOCATION` is deliberately excluded — the NLP model fires it on the letterhead, and the
 recipient's street/city is already covered precisely by `DE_ADDRESS`. Custom recognizers
-on top of the built-in IBAN/e-mail ones:
+on top of the built-in IBAN/e-mail/credit-card ones:
 - **BIC/SWIFT** — `AAAABBCC[DDD]`, case-sensitive, low base score + `bic`/`swift` context
   so all-caps German words like `RECHNUNG` don't match.
-- **DE_ADDRESS** — a German street pattern and a
-  PLZ + city pattern. Case-sensitive so the lowercase city class really
-  means lowercase (keeps spec noise like `15118 MID` out).
+- **PHONE_NUMBER** — `python-phonenumbers`, restricted to the `DE` region only; the
+  default region list runs 8 regional matchers per line and lets foreign formats match
+  random digit columns. A dotted date (`09.07.2026`) parses as a valid DE number, so
+  matches shaped like a date are dropped — dates aren't PII except the birthdate, which
+  is handled spatially (see below).
+- **KONTO** — a German account number or bank code *with its label* (`Kto.`, `Konto-Nr.`,
+  `BLZ`, `Bankleitzahl` followed by digits), since lines are classified one at a time and
+  the label is always on the same line as the number.
+- **DE_ADDRESS** — a German street pattern (suffix attached, `Musterstrasse 23`, or its
+  own capitalized word, `Muster Straße 23`) and a PLZ + city pattern. Case-sensitive so
+  the lowercase city class really means lowercase (keeps spec noise like `15118 MID` out).
 
 ### `gliner` classifier
 
@@ -376,6 +391,11 @@ is unreliable on standalone lines, the shared deterministic street / PLZ+city re
   (`Herr Muster`, where NER tags only the single surname token, which the multi-word guard
   drops). A lone salutation carries no information, so over-redacting it is harmless and
   keeps the rule to a single regex (`SALUT`).
+- **Titled name.** An academic/medical title followed by a capitalized name
+  (`Dr. Weber`, `Prof. Dr. med. Hans Müller`) is redacted by a deterministic rule —
+  the NER model is unreliable around titles, missing the name after a doubled
+  `Dr. Dr.` and tagging only the single token after `Dr. Weber`, which the PERSON
+  multi-word guard then drops.
 - **Address block completeness (GLiNER).** GLiNER's `address` label dropped the standalone
   PLZ+city line in the recipient block, leaving it visible. The deterministic street /
   PLZ+city regexes (same as Presidio's) close that gap so the Adressfeld is fully covered.

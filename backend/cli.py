@@ -25,6 +25,8 @@ single home of the defaults for both callers.
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -119,6 +121,14 @@ def query_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # PII_LOG_LEVEL=DEBUG logs every OCR line, its box, each classifier match and
+    # the redact verdict. Bare messages: for an interactive CLI the debug stream
+    # *is* the output, so no timestamp/level prefix noise.
+    logging.basicConfig(
+        level=os.environ.get("PII_LOG_LEVEL", "INFO").upper(),
+        format="%(message)s",
+    )
+
     args = build_parser().parse_args(argv)
 
     input_files = collect_input_files(args.paths)

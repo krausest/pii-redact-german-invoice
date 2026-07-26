@@ -124,8 +124,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     # "uvicorn.*"/"gunicorn.*" loggers, and uvicorn's format carries no timestamp),
     # so our records would otherwise fall through to logging's WARNING-only last
     # resort handler. basicConfig is a no-op if the root logger is already set up.
+    # PII_LOG_LEVEL=DEBUG logs every OCR line and match while classifying.
     logging.basicConfig(
-        level=logging.INFO,
+        level=os.environ.get("PII_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s [pid %(process)d] %(message)s",
     )
 

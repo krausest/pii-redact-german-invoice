@@ -13,6 +13,7 @@ them to run.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw
@@ -22,6 +23,8 @@ from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
 from backend.rules import birthdate_indices, line_matches_static_rule
 from backend.unwarp import DocUnwarper
+
+logger = logging.getLogger(__name__)
 
 
 class RedactionPipeline:
@@ -63,12 +66,28 @@ class RedactionPipeline:
         for i, line in enumerate(lines):
             if not line.text.strip():
                 continue
-            redact = (
-                i in birth_idx
-                or line_matches_static_rule(line.text)
-                or self._classifier.is_pii(line.text)
+            # DEBUG: every OCR line with its pixel box, then any classifier
+            # matches (indented, logged by the classifier), then the verdict.
+            logger.debug(
+                "line @(%d,%d %dx%d conf=%s): %r",
+                line.left,
+                line.top,
+                line.width,
+                line.height,
+                line.conf,
+                line.text,
+            ) 
+            reason = (
+                "birthdate"
+                if i in birth_idx
+                else "static-rule"
+                if line_matches_static_rule(line.text)
+                else "classifier"
+                if self._classifier.is_pii(line.text)
+                else None
             )
-            if redact:
+            if reason is not None:
+                logger.debug("    -> REDACT (%s)", reason)
                 boxes.append(
                     Box(
                         line.left - pad,
