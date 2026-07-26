@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       # ubuntu-latest is amd64, so paddle OCR inference runs natively — no qemu
       # (paddle inference is broken under qemu, see CLAUDE.md).
