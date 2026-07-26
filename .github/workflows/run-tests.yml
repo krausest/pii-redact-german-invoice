@@ -13,7 +13,9 @@ jobs:
       # ubuntu-latest is amd64, so paddle OCR inference runs natively — no qemu
       # (paddle inference is broken under qemu, see CLAUDE.md).
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        # v7+ runs on node24; v6 is node20 (deprecated, removed from runners
+        # 2026-09-16). No floating v8/v9 major tag exists, so pin the release.
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.13"
 
