@@ -10,7 +10,18 @@ machine.**
 ![Code: MIT](https://img.shields.io/badge/code-MIT-green)
 ![Runs offline](https://img.shields.io/badge/inference-100%25%20local-informational)
 
-![The web UI: an uploaded German invoice with seven suggested redaction boxes highlighted over the sender line, the recipient address block, and the patient's name and date of birth, plus a toolbar to add, remove and download](docs/screenshot.jpeg)
+<table>
+<tr>
+<td width="50%">
+<img src="docs/screenshot.jpeg" alt="ui screenshot">
+<sub>The web UI: an uploaded German invoice with seven suggested redaction boxes highlighted over the sender line, the recipient address block, and the patient's name and date of birth, plus a toolbar to add, remove and download</sub>
+</td>
+<td width="50%">
+<img src="docs/redacted.jpeg" alt="redacted image">
+<sub>Final result of the redaction</sub>
+</td>
+</tr>
+</table>
 
 Upload a scan, review what was found, fix the boxes by hand, download the redacted
 file. The same pipeline is available as a batch **CLI** and a **REST API**.
