@@ -21,6 +21,17 @@ from backend.models import Line
 # information, so over-redacting it is harmless and needs just one regex.
 SALUT = re.compile(r"\b(?:Herrn?|Frau|Fräulein|Frl|Familie|Fam|Eheleute)\b")
 
+# Academic/medical title(s) followed by a capitalized name ("Dr. Weber",
+# "Prof. Dr. med. Hans Müller", "Dr. Dr. Daphne Schlegel-Lippert"). The NER
+# model is unreliable around titles — it misses the name entirely after a
+# doubled "Dr. Dr.", and for "Dr. Weber" tags only the single token the PERSON
+# guard drops — while a title is by itself strong evidence of a person.
+TITLE_NAME = re.compile(
+    r"\b(?:(?:Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil)\.\s*)+"  # title(s)
+    r"(?:[A-ZÄÖÜ]\.\s*)*"  # optional initials: "Dr. A. Meier"
+    r"[A-ZÄÖÜ][a-zäöüß]+"
+)
+
 # German street: "<Street>strasse 23".
 DE_STREET = re.compile(
     r"\b[A-ZÄÖÜ][a-zäöüß.\-]+(?:stra(?:ße|sse)|str\.?|weg|platz|gasse|allee|ring|damm)\s*\d+[a-zA-Z]?\b"
@@ -39,9 +50,14 @@ DATE_RE = re.compile(r"\b\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}\b")
 
 def line_matches_static_rule(text: str) -> bool:
     """True if a line is redactable by the per-line deterministic rules
-    (salutation or German street / ZIP+city). Birthdates need the whole page, so
-    they are handled separately by :func:`birthdate_indices`."""
-    return bool(SALUT.search(text) or DE_STREET.search(text) or DE_PLZ_CITY.search(text))
+    (salutation, titled name, or German street / ZIP+city). Birthdates need the
+    whole page, so they are handled separately by :func:`birthdate_indices`."""
+    return bool(
+        SALUT.search(text)
+        or TITLE_NAME.search(text)
+        or DE_STREET.search(text)
+        or DE_PLZ_CITY.search(text)
+    )
 
 
 def birthdate_indices(lines: list[Line]) -> set[int]:
