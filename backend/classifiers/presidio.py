@@ -138,10 +138,12 @@ def _redactable(results, line: str) -> bool:
     two capitalized tokens ("First Last") to be redacted — this drops the NLP
     model's single-token noise ("5.0016") and its false positives on German
     medical terms ("Infiltrationsanästhesie gro-", 2nd token lowercase)."""
+    debug = logger.isEnabledFor(logging.DEBUG)
     for r in results:
         if r.entity_type == "PHONE_NUMBER" and _DOTTED_DATE.fullmatch(
             line[r.start : r.end].strip()
         ):
+            logger.debug("      Ignoring PHONE_NUMER which is a date")
             continue
         if r.entity_type == "PERSON":
             caps = sum(
@@ -150,6 +152,7 @@ def _redactable(results, line: str) -> bool:
                 if tok[:1].isupper() and tok not in _PERSON_WHITELIST
             )
             if caps < 2:
+                if debug: logger.debug(f"      Ignoring PERSON which is has only {caps} caps")
                 continue
         return True
     return False

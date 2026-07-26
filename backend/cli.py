@@ -125,9 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     # the redact verdict. Bare messages: for an interactive CLI the debug stream
     # *is* the output, so no timestamp/level prefix noise.
     logging.basicConfig(
-        level=os.environ.get("PII_LOG_LEVEL", "INFO").upper(),
+        level=logging.INFO,
         format="%(message)s",
     )
+
+    logging.getLogger("backend").setLevel(os.environ.get("PII_LOG_LEVEL", "INFO").upper())
 
     args = build_parser().parse_args(argv)
 
