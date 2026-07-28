@@ -72,7 +72,7 @@
 
 <div class="editor" class:draw={tool === 'draw'}>
   <img src={`data:image/jpeg;base64,${page.image}`} alt="Document page" />
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
   <svg
     bind:this={svgEl}
     viewBox={`0 0 ${page.width} ${page.height}`}
@@ -85,7 +85,7 @@
     aria-label="Redaction box editor"
   >
     {#each page.boxes as box, i (i)}
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <rect
         x={box[0]}
         y={box[1]}
