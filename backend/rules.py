@@ -7,6 +7,11 @@ patterns uniformly is behavior-preserving for the Presidio path — its DE_ADDRE
 recognizer uses the same regexes at score 0.7/0.6 with threshold 0.4, so it
 already always fires on those matches; the GLiNER path relied on them explicitly
 because its zero-shot "address" label is unreliable.
+
+The sender-identity patterns (``ORG_LEGAL`` / ``CONTACT`` / ``IMPRINT``) are the
+one group that *adds* detections rather than restating what a classifier already
+finds: NER treats a clearing house or a bank as an ORGANIZATION, which is not a
+PII entity, so nothing ever flagged the letterhead or the footer imprint.
 """
 
 from __future__ import annotations
@@ -47,16 +52,63 @@ DE_PLZ_CITY = re.compile(r"\b\d{5}\s+[A-ZÄÖÜ][a-zäöüß]{2,}(?:[ \-][A-ZÄ�
 BIRTH_LABEL = re.compile(r"(?i)geburt|geboren")
 DATE_RE = re.compile(r"\b\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}\b")
 
+# --- sender identity ------------------------------------------------------- #
+# The three below identify the *sender* (practice, clearing house, bank) rather
+# than the patient. They are page-wide because the letterhead and the imprint sit
+# at opposite ends of the page and neither is reliably inside a region band.
+# Each is deliberately restricted to markers that cannot occur in a GOÄ
+# Leistungstext — see the negative cases in tests/test_rules.py.
+
+# Legal form. Unambiguous on an invoice; a bare noun like "Zentrum" or "Labor" is
+# not, so those live in ORG_MEDICAL below and are only used as a region anchor.
+ORG_LEGAL = re.compile(
+    r"\b(?:g?GmbH|mbH|UG|AG|KG|OHG|GbR|PartG(?:mbB)?|Ltd|Inc)\b|\be\.\s?[KV]\."
+)
+
+# Contact details: URL (with scheme, "www." or a bare host on a common TLD),
+# email, and a phone/fax label followed by enough digits to be a number.
+CONTACT = re.compile(
+    r"(?i)\bhttps?://\S+"
+    r"|\bwww\.[\w\-]+(?:\.[\w\-]+)+"
+    r"|\b[\w\-]{2,}(?:\.[\w\-]+)*\.(?:de|com|net|org|eu|at|ch)\b"
+    r"|[\w.\-+]+@[\w\-]+(?:\.[\w\-]+)+"
+    r"|\b(?:Tel(?:efon)?|Telefax|Fax|Mobil)\b\.?\s*:?\s*(?=[\d\s()/+\-]{6,})[\d(+]"
+)
+
+# Registry / banking identifiers — the footer imprint block.
+IMPRINT = re.compile(
+    r"(?i)\bHR[AB]\s*\d"
+    r"|\b(?:USt|Umsatzsteuer)[\-.\s]?Id"
+    r"|\bSteuer[\-\s]?(?:nummer|Nr)"
+    r"|\bIK[\-\s.]?(?:Nr\.?)?\s*:?\s*\d"
+    r"|\b(?:LANR|LAN\-Nr|BSNR|IBAN|BIC|BLZ)\b"
+    r"|\bBankverbindung\b|\bKonto(?:\-?Nr)?\b|\bPostfach\b"
+)
+
+# Loose organisation nouns: strong evidence of a sender *in the sender column*,
+# but too common in body text to redact page-wide ("Zentrum", "Labor", "Institut"
+# all show up in Leistungstexte). Exported for :mod:`backend.regions` only.
+ORG_MEDICAL = re.compile(
+    r"(?i)\b(?:MVZ|Gemeinschaftspraxis|Praxisgemeinschaft|Praxisklinik|Praxis"
+    r"|Klinik(?:um)?|Krankenhaus|Ärztehaus|Rechenzentrum|Zentrum|Institut|Labor"
+    r"|Berufsausübungsgemeinschaft)\b"
+    r"|\bBehandl\w*\s+durch\b"
+)
+
 
 def line_matches_static_rule(text: str) -> bool:
     """True if a line is redactable by the per-line deterministic rules
-    (salutation, titled name, or German street / ZIP+city). Birthdates need the
-    whole page, so they are handled separately by :func:`birthdate_indices`."""
+    (salutation, titled name, German street / ZIP+city, or sender identity:
+    legal form, contact details, registry/banking identifiers). Birthdates need
+    the whole page, so they are handled separately by :func:`birthdate_indices`."""
     return bool(
         SALUT.search(text)
         or TITLE_NAME.search(text)
         or DE_STREET.search(text)
         or DE_PLZ_CITY.search(text)
+        or ORG_LEGAL.search(text)
+        or CONTACT.search(text)
+        or IMPRINT.search(text)
     )
 
 

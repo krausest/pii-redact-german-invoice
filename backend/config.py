@@ -53,6 +53,23 @@ class EngineConfig(BaseModel):
         return self.ocr_backend or preset_ocr, self.classifier or preset_clf
 
 
+class RegionsConfig(BaseModel):
+    """Geometry of the whole-region redaction pass (:mod:`backend.regions`), as
+    fractions of the page. A zero fraction switches that region off, so there is
+    no per-region boolean; ``[redaction].redact_regions`` turns off all three."""
+
+    model_config = _STRICT
+
+    header_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.12
+    footer_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.10
+    # The sender column is looked for right of `column_x_frac` and above
+    # `column_y_frac`; `gap_factor` is the vertical gap (in line heights) that ends
+    # a block, which is what keeps the invoice-number table out of it.
+    column_x_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
+    column_y_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
+    gap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 1.5
+
+
 class RedactionConfig(BaseModel):
     model_config = _STRICT
 
@@ -66,6 +83,11 @@ class RedactionConfig(BaseModel):
     pdf_dpi: Annotated[int, Field(ge=36, le=1200)] = 200
     max_pages: Annotated[int, Field(ge=1)] = 30
     jpeg_quality: Annotated[int, Field(ge=1, le=100)] = 90
+    # Blacken the letterhead/footer bands and the sender column as well as the
+    # lines the rules and the classifier flag. Config only — unlike `unwarp` this
+    # is not a query parameter, so it is fixed per process like the engine.
+    redact_regions: bool = True
+    regions: RegionsConfig = Field(default_factory=RegionsConfig)
 
 
 class ApiConfig(BaseModel):

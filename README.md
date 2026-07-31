@@ -315,6 +315,42 @@ request**: an unknown key or section, a number out of range (`jpeg_quality = 500
 or an engine that doesn't exist all raise immediately, naming the offender. A
 mistyped key is a mistake, not a no-op.
 
+### Region redaction
+
+The sender of an invoice — the practice, the clearing house — identifies itself in
+places no per-line detector can reach: a letterhead is usually a **logo**, and OCR
+returns no line for a graphic. So `[redaction].redact_regions` (on by default)
+adds three boxes that are not tied to any OCR line:
+
+| Key (`[redaction.regions]`) | Default | Meaning |
+|---|---|---|
+| `header_frac` | `0.12` | height of the top band, as a fraction of the page |
+| `footer_frac` | `0.10` | height of the bottom band |
+| `column_x_frac` | `0.50` | the sender column is looked for right of this |
+| `column_y_frac` | `0.50` | …and only above this |
+| `gap_factor` | `1.5` | vertical gap, in line heights, that ends a sender block |
+
+The two **bands are filled edge-to-edge** — that is what covers the logo — but only
+when the text inside them *names a sender*: a company, a URL, a titled name, an
+address. Text alone is not enough. On a continuation page the item table can start
+at the very top of the sheet and the totals can sit in the bottom tenth; there is no
+sender in either band, so no strip is drawn and nothing is destroyed. A band
+stretches up to 1.5× its nominal height to finish a line that straddles its edge,
+rather than blacking out half of it.
+
+The **sender column** has no fixed extent, so it is found by anchor: a line in the
+upper right that looks like a sender (company/legal form, URL, e-mail, phone,
+`Behandlung durch`, a titled name, an address), grown over the lines vertically
+adjacent to it and stopped at the first gap wider than `gap_factor` line heights.
+That gap is what keeps the invoice-number/amount table below the practice block out
+of the redaction.
+
+Set a fraction to `0` to drop that one region; `redact_regions = false` drops all
+three. This is a **config-only** setting — unlike `unwarp` it is not a query
+parameter and not a CLI flag, so it is fixed per process like the engine. The boxes
+it produces are ordinary boxes: they appear in the JSON report and are editable
+(and deletable) in the web UI like any other.
+
 ### Engine presets
 
 A single pipeline (unwarp → OCR → per-line classify → draw a box) is configured
@@ -355,11 +391,16 @@ classify), and `apply_boxes()` (fill):
    coherent, so both NER and the regex/context rules work.
 3. **Classify** the line (this is where the engines differ, see below). The
    shared deterministic rules — salutation, titled name (`Dr. Weber`), German
-   street / PLZ+city, and the spatial date-of-birth matcher
+   street / PLZ+city, sender identity (legal form, URL/e-mail/phone, registry and
+   banking identifiers), and the spatial date-of-birth matcher
    ([`backend/rules.py`](backend/rules.py)) — are applied uniformly first, then
    the model-based classifier.
 4. **Draw** a filled black rectangle over the line's box (with a 2 px pad) if it is judged
    to contain PII.
+5. **Add the region boxes** — header band, footer band, sender column
+   ([`backend/regions.py`](backend/regions.py)) — the only boxes not derived from
+   an OCR line, and therefore the only ones that can cover a letterhead logo. See
+   [Region redaction](#region-redaction).
 
 ### `presidio` classifier
 
@@ -471,6 +512,7 @@ backend/            the whole Python package — pipeline, CLI and REST service
   options.py        pydantic validation for query options and the assemble body
   config.py         config.toml schema + engine preset resolution
   rules.py          deterministic German patterns (salutation, street, birthdate)
+  regions.py        header/footer bands and the sender column (not line-derived)
   ocr/ classifiers/ the two swappable axes behind an engine preset
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
 tests/              fast tests stub the models; `-m slow` runs the real ones
@@ -496,6 +538,12 @@ the built image.
 - **Detection is best-effort.** It is statistical NER plus hand-written rules, not a
   guarantee. Missed PII is possible on layouts unlike the ones it was tuned for.
   **Review every document before releasing it.** The web UI exists for exactly this.
+- **Region redaction is deliberately blind.** A band only fires when it holds
+  sender text, but once it does it covers *everything* inside it, logo and
+  legitimate content alike (`Seite 1 von 2`, a page number next to a bank line).
+  That is the price of covering a letterhead graphic, which no text-based rule can
+  reach. Tune `[redaction.regions]` or set `redact_regions = false` if it costs you
+  more than it buys.
 - **Redaction is destructive drawing, not text removal**, which is what makes it safe:
   output pages are rasterized images with filled rectangles, so there is no selectable
   text layer left underneath to recover. The trade-off is that redacted PDFs are images

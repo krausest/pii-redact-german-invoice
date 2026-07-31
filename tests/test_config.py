@@ -83,6 +83,9 @@ def test_api_values_parsed(tmp_path):
         ('[engine]\nname = "nope"\n', "name"),  # not a preset
         ('[engine]\nclassifier = "nope"\n', "classifier"),  # not a classifier
         ("[api]\nworkers = 0\n", "workers"),
+        ("[redaction.regions]\nheader_frac = 0.9\n", "header_frac"),  # over the 0.5 cap
+        ("[redaction.regions]\ngap_factor = 0\n", "gap_factor"),
+        ("[redaction.regions]\ncolumn_frac = 0.5\n", "column_frac"),  # typo
     ],
 )
 def test_bad_config_is_rejected_at_load(tmp_path, body, culprit):
@@ -94,6 +97,16 @@ def test_bad_config_is_rejected_at_load(tmp_path, body, culprit):
 def test_fill_must_be_three_channels(tmp_path):
     with pytest.raises(ValueError):
         load_config(_write(tmp_path, "[redaction]\nfill = [0, 0]\n"))
+
+
+def test_regions_section_is_independent_of_the_toggle(tmp_path):
+    # Geometry stays parseable with the pass switched off, so flipping the toggle
+    # back on does not need the fractions retyped.
+    body = "[redaction]\nredact_regions = false\n\n[redaction.regions]\nfooter_frac = 0.2\n"
+    cfg = load_config(_write(tmp_path, body))
+    assert cfg.redaction.redact_regions is False
+    assert cfg.redaction.regions.footer_frac == 0.2
+    assert cfg.redaction.regions.header_frac == 0.12  # default preserved
 
 
 def test_committed_config_toml_loads():

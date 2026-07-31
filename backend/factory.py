@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from backend.config import Config
 from backend.pipeline import RedactionPipeline
+from backend.regions import RegionParams
 
 
 def _build_ocr(ocr_backend: str):
@@ -55,6 +56,16 @@ def build_pipeline(config: Config) -> RedactionPipeline:
         fill=tuple(config.redaction.fill),
         padding=config.redaction.padding,
         unwarp_enabled=config.redaction.unwarp,
+        # `None` is how the pipeline is told to skip the region pass, so the
+        # toggle and its geometry collapse into one argument.
+        regions=(
+            RegionParams(
+                **config.redaction.regions.model_dump(),
+                padding=config.redaction.padding,
+            )
+            if config.redaction.redact_regions
+            else None
+        ),
     )
 
 

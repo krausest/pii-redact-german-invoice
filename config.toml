@@ -15,6 +15,17 @@ unwarp = true              # flatten the page before OCR (default for ?unwarp=)
 pdf_dpi = 200              # rasterization DPI for uploaded PDFs (default for ?pdf-dpi=)
 max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
+redact_regions = true      # also blacken the letterhead/footer bands and the sender column
+
+# Geometry of the region pass, as fractions of the page. The bands are filled
+# edge-to-edge (that is what covers a logo) but only when OCR found text in them,
+# so blank continuation pages stay clean. Set a fraction to 0 to drop that region.
+[redaction.regions]
+header_frac = 0.12         # top band height
+footer_frac = 0.10         # bottom band height
+column_x_frac = 0.50       # sender column starts this far across the page
+column_y_frac = 0.50       # ...and is only looked for above this line
+gap_factor = 1.5           # vertical gap, in line heights, that ends a sender block
 
 [api]
 max_upload_bytes = 31457280          # 30 MiB — covers PDF uploads + /api/assemble payloads
