@@ -66,6 +66,31 @@ def test_env_engine_overrides_file(tmp_path, monkeypatch):
     assert cfg.engine.resolve() == ("onnxruntime", "presidio")
 
 
+@pytest.mark.parametrize(
+    "value,expected",
+    [("false", False), ("0", False), ("off", False), ("true", True), ("1", True)],
+)
+def test_env_redact_regions_overrides_file(tmp_path, monkeypatch, value, expected):
+    path = _write(tmp_path, "[redaction]\nredact_regions = true\n")
+    monkeypatch.setenv("PII_REDACT_REGIONS", value)
+    assert load_config(path).redaction.redact_regions is expected
+
+
+def test_env_redact_regions_keeps_the_rest_of_the_section(tmp_path, monkeypatch):
+    path = _write(tmp_path, "[redaction]\npadding = 7\n")
+    monkeypatch.setenv("PII_REDACT_REGIONS", "false")
+    cfg = load_config(path)
+    assert cfg.redaction.redact_regions is False
+    assert cfg.redaction.padding == 7
+
+
+def test_env_redact_regions_rejects_a_non_boolean(tmp_path, monkeypatch):
+    monkeypatch.setenv("PII_REDACT_REGIONS", "maybe")
+    with pytest.raises(ValueError) as e:
+        load_config(tmp_path / "does_not_exist.toml")
+    assert "redact_regions" in str(e.value)
+
+
 def test_api_values_parsed(tmp_path):
     cfg = load_config(_write(tmp_path, "[api]\nmax_upload_bytes = 123\nworkers = 4\n"))
     assert cfg.api.max_upload_bytes == 123

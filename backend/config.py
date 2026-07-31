@@ -123,10 +123,15 @@ def _default_config_path() -> Path:
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     """Load config from TOML, filling any missing field with its default.
 
-    ``PII_ENGINE`` overrides ``[engine].name`` (handy for containers) and wins over
-    the file. Anything unusable — an unknown key, an out-of-range number, an engine
-    preset that doesn't exist — raises here, so a bad config fails at startup rather
-    than on the first request.
+    ``PII_ENGINE`` overrides ``[engine].name`` and ``PII_REDACT_REGIONS`` overrides
+    ``[redaction].redact_regions`` (both handy for containers); they win over the
+    file. Anything unusable — an unknown key, an out-of-range number, an engine
+    preset that doesn't exist, a value that is not a boolean — raises here, so a bad
+    config fails at startup rather than on the first request.
+
+    The env values are handed to pydantic as the strings they are rather than
+    parsed here, so ``PII_REDACT_REGIONS=yes|1|off`` all work and a typo gets the
+    same "fails at startup, naming the field" treatment as a bad TOML value.
     """
     cfg_path = Path(path) if path is not None else _default_config_path()
     data: dict = {}
@@ -136,5 +141,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
 
     if env_engine := os.environ.get("PII_ENGINE"):
         data["engine"] = {**data.get("engine", {}), "name": env_engine}
+
+    if env_regions := os.environ.get("PII_REDACT_REGIONS"):
+        data["redaction"] = {**data.get("redaction", {}), "redact_regions": env_regions}
 
     return Config.model_validate(data)

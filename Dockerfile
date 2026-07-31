@@ -72,6 +72,12 @@ USER appuser
 EXPOSE 8000
 # Offline is enforced, not assumed: warmup.py baked every model above, so any
 # download attempt at runtime is a missed bake — make it fail loudly.
+#
+# Two config keys are overridable per container without rebuilding or mounting a
+# config.toml: `-e PII_ENGINE=native|onnx` and `-e PII_REDACT_REGIONS=false` (the
+# letterhead/footer/sender-column pass). Both are left unset here so the baked
+# config.toml stays the single source of the defaults; an unparseable value fails
+# at startup rather than being ignored.
 ENV WEB_CONCURRENCY=1 REQUEST_TIMEOUT=120 \
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

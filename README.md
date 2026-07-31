@@ -186,6 +186,14 @@ docker run --rm -p 8000:8000 pii-redact
   ```
 - Tune workers with `-e WEB_CONCURRENCY=N` (default 1 — each worker loads the full
   model set into RAM; scale via container replicas, needs ~4 GB RAM each).
+- Two config keys are overridable per container, without rebuilding or mounting a
+  `config.toml`:
+  ```bash
+  docker run --rm -p 8000:8000 -e PII_ENGINE=native -e PII_REDACT_REGIONS=false pii-redact
+  ```
+  `PII_REDACT_REGIONS` accepts `true|false|1|0|yes|no|on|off`; anything else fails
+  at startup rather than being silently ignored. For any other key, mount a file
+  and point `PII_CONFIG` at it (`-v ./my.toml:/app/my.toml -e PII_CONFIG=/app/my.toml`).
 
 ### Server (API only)
 
@@ -303,8 +311,10 @@ as are malformed bodies and bad parameters. Errors are `{"detail": "…"}`.
 ## Configuration
 
 All knobs live in [`config.toml`](config.toml) (engine, redaction fill/padding,
-upload limits, worker count). `PII_ENGINE` and `PII_CONFIG` environment variables
-override the engine preset and the config-file path respectively. `PII_LOG_LEVEL=DEBUG`
+upload limits, worker count). Three environment variables override it, for
+containers where editing the file is awkward: `PII_CONFIG` (path to the file),
+`PII_ENGINE` (`[engine].name`) and `PII_REDACT_REGIONS`
+(`[redaction].redact_regions`). `PII_LOG_LEVEL=DEBUG`
 (API and CLI) logs every OCR line with its box, plus each classifier match with its
 score and the recognizer/context that produced it, followed by the redact verdict —
 useful for seeing exactly why a line was or wasn't redacted.
@@ -345,9 +355,10 @@ adjacent to it and stopped at the first gap wider than `gap_factor` line heights
 That gap is what keeps the invoice-number/amount table below the practice block out
 of the redaction.
 
-Set a fraction to `0` to drop that one region; `redact_regions = false` drops all
-three. This is a **config-only** setting — unlike `unwarp` it is not a query
-parameter and not a CLI flag, so it is fixed per process like the engine. The boxes
+Set a fraction to `0` to drop that one region; `redact_regions = false` (or
+`PII_REDACT_REGIONS=false` in the environment) drops all three. This is a
+**config-only** setting — unlike `unwarp` it is not a query parameter and not a CLI
+flag, so it is fixed per process like the engine. The boxes
 it produces are ordinary boxes: they appear in the JSON report and are editable
 (and deletable) in the web UI like any other.
 
