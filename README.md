@@ -334,19 +334,23 @@ adds three boxes that are not tied to any OCR line:
 
 | Key (`[redaction.regions]`) | Default | Meaning |
 |---|---|---|
-| `header_frac` | `0.12` | height of the top band, as a fraction of the page |
-| `footer_frac` | `0.10` | height of the bottom band |
+| `header_frac` | `0.12` | how far down the page letterhead lines are looked for |
+| `footer_frac` | `0.10` | how far up from the bottom imprint lines are looked for |
 | `column_x_frac` | `0.50` | the sender column is looked for right of this |
 | `column_y_frac` | `0.50` | …and only above this |
 | `gap_factor` | `1.5` | vertical gap, in line heights, that ends a sender block |
 
-The two **bands are filled edge-to-edge** — that is what covers the logo — but only
-when the text inside them *names a sender*: a company, a URL, a titled name, an
-address. Text alone is not enough. On a continuation page the item table can start
-at the very top of the sheet and the totals can sit in the bottom tenth; there is no
-sender in either band, so no strip is drawn and nothing is destroyed. A band
-stretches up to 1.5× its nominal height to finish a line that straddles its edge,
-rather than blacking out half of it.
+A band **spans the full page width** — that is what covers the logo, which sits
+beside or above the text and which OCR never reports — but it is only as tall as the
+text it found. The two fractions are a *search window*, not the band height:
+widening one finds more letterhead, it does not blacken more paper. (A cap at 1.5×
+the window bounds the height, since a single merged OCR box would otherwise set it.)
+
+A band is drawn only when the text inside it **names a sender**: a company, a URL, a
+titled name, an address. Text alone is not enough. On a continuation page the item
+table can start at the very top of the sheet and the totals can sit in the bottom
+tenth; there is no sender in either band, so no strip is drawn and nothing is
+destroyed.
 
 The **sender column** has no fixed extent, so it is found by anchor: a line in the
 upper right that looks like a sender (company/legal form, URL, e-mail, phone,
@@ -549,12 +553,13 @@ the built image.
 - **Detection is best-effort.** It is statistical NER plus hand-written rules, not a
   guarantee. Missed PII is possible on layouts unlike the ones it was tuned for.
   **Review every document before releasing it.** The web UI exists for exactly this.
-- **Region redaction is deliberately blind.** A band only fires when it holds
-  sender text, but once it does it covers *everything* inside it, logo and
-  legitimate content alike (`Seite 1 von 2`, a page number next to a bank line).
-  That is the price of covering a letterhead graphic, which no text-based rule can
-  reach. Tune `[redaction.regions]` or set `redact_regions = false` if it costs you
-  more than it buys.
+- **Region redaction is deliberately blind across the page width.** A band only
+  fires when it holds sender text, but once it does it covers everything on those
+  rows, logo and legitimate content alike (`Seite 1 von 2`, a page number sharing a
+  row with a bank line). That is the price of covering a letterhead graphic, which
+  no text-based rule can reach. Tune `[redaction.regions]` or set
+  `redact_regions = false` (or `PII_REDACT_REGIONS=false`) if it costs you more
+  than it buys.
 - **Redaction is destructive drawing, not text removal**, which is what makes it safe:
   output pages are rasterized images with filled rectangles, so there is no selectable
   text layer left underneath to recover. The trade-off is that redacted PDFs are images
