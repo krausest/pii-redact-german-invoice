@@ -4,8 +4,12 @@ column.
 Every other box in this codebase is derived from one OCR line, which means it can
 only ever cover text the OCR read. A letterhead is usually a *logo* — the strongest
 company identifier on the page and one that never appears in ``OCRBackend.lines``.
-So the two bands here are deliberately content-*blind*: they fill the strip
-edge-to-edge, covering the graphics along with the text.
+So the two bands here are deliberately content-*blind* horizontally: they fill the
+strip edge-to-edge across the full page width, covering the graphics beside and
+above the text along with the text itself. Their *height*, though, is the height of
+the text they found — ``header_frac`` says how far down to look, not how tall the
+strip is, so a two-line letterhead gets a two-line strip instead of a fixed slab of
+whitespace.
 
 Blind, but not unconditional. A band is emitted only when the text inside it names
 a sender — a company, a URL, a titled name, an address. That gate is what keeps the
@@ -34,10 +38,14 @@ from dataclasses import dataclass
 from backend.models import Box, Line
 from backend.rules import ORG_MEDICAL, TITLE_NAME, line_matches_static_rule
 
-# How far past its nominal edge a band may stretch to swallow a line that straddles
-# the boundary, as a multiple of the nominal band height. Without the extension a
-# line is sliced in half and stays readable; without the cap a body paragraph that
-# happens to start near the edge would drag the band down the page.
+# A band's height comes from its content, so the fraction it is looked for in is a
+# search window rather than the height itself: a header of two lines gets a
+# two-line strip, not a fixed 12% of the page (that would only blacken whitespace).
+# This is the ceiling on that, as a multiple of the window. It exists because
+# nothing else bounds the height — one line with `top < edge` sets it, and OCR does
+# occasionally return a single tall box for a merged block on a skewed photo. If
+# such a box also holds a sender anchor, the gate passes and the band would swallow
+# most of the page. Better to cut that box than to lose the invoice.
 _BAND_STRETCH = 1.5
 
 
@@ -47,6 +55,10 @@ class RegionParams:
 
     A zero fraction disables that region, which is why there is no separate
     per-region boolean: ``header_frac = 0.0`` means "no header band".
+
+    ``header_frac`` / ``footer_frac`` bound where a band's lines are *looked for*;
+    the band is then as tall as those lines (up to ``_BAND_STRETCH`` times the
+    window). Widening one finds more letterhead, it does not blacken more paper.
     """
 
     header_frac: float
@@ -100,14 +112,14 @@ def _header_band(lines: list[Line], width: int, height: int, p: RegionParams) ->
     if edge <= 0:
         return None
     # Membership is *overlap*, not centre: on a real letterhead the last line
-    # ("Rechenzentrum für Ärzte und Kliniken") starts just inside the nominal edge
-    # and ends outside it. On centre it would fall out of the band and be sliced
-    # in half by it, which is worse than either covering or skipping it.
+    # ("Rechenzentrum für Ärzte und Kliniken") starts just inside the window and
+    # ends outside it. On centre it would fall out of the band, and since the band
+    # reaches down to its lowest member the line would come out sliced in half and
+    # still readable.
     covered = [ln for ln in lines if ln.top < edge]
     if not _is_letterhead(covered):
         return None
-    limit = edge * _BAND_STRETCH
-    bottom = max(edge, *(min(ln.top + ln.height, limit) for ln in covered))
+    bottom = min(max(ln.top + ln.height for ln in covered), edge * _BAND_STRETCH)
     return Box(0, 0, width, round(bottom) + p.padding)
 
 
@@ -118,13 +130,10 @@ def _footer_band(lines: list[Line], width: int, height: int, p: RegionParams) ->
     covered = [ln for ln in lines if ln.top + ln.height > edge]
     if not _is_letterhead(covered):
         return None
-    limit = height - (height - edge) * _BAND_STRETCH
-    top = min(edge, *(max(ln.top, limit) for ln in covered))
+    top = max(min(ln.top for ln in covered), height - (height - edge) * _BAND_STRETCH)
     return Box(0, round(top) - p.padding, width, height)
 
-
-# -- sender column ----------------------------------------------------------- #
-def _sender_column(lines: list[Line], width: int, height: int, p: RegionParams) -> list[Box]:
+def _sender_column_old(lines: list[Line], width: int, height: int, p: RegionParams) -> list[Box]:
     """Bounding boxes of the anchored text blocks in the upper-right of the page.
 
     Candidates are cut off at the first table row (see :func:`_first_table_row`),
@@ -142,10 +151,13 @@ def _sender_column(lines: list[Line], width: int, height: int, p: RegionParams) 
         (ln for ln in lines if ln.left >= x_min and ln.top <= y_max),
         key=lambda ln: ln.top,
     )
+    print(f"{candidates=}")
     r = _first_table_row(candidates)
     candidates = candidates[: r]
+    print(f"candidates2 {candidates}")
 
     boxes: list[Box] = []
+    print(f"{ _vertical_blocks(candidates, p.gap_factor)=}")
     for block in _vertical_blocks(candidates, p.gap_factor):
         if not any(is_sender_anchor(ln.text) for ln in block):
             continue
