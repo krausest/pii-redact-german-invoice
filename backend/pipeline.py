@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw
 from backend.classifiers.base import Classifier
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
+from backend.regions import RegionParams, region_boxes
 from backend.rules import birthdate_indices, line_matches_static_rule
 from backend.unwarp import DocUnwarper
 
@@ -37,6 +38,7 @@ class RedactionPipeline:
         padding: int = 2,
         unwarp_enabled: bool = True,
         unwarper_factory: Callable[[], DocUnwarper] | None = None,
+        regions: RegionParams | None = None,
     ) -> None:
         self._ocr = ocr
         self._classifier = classifier
@@ -45,6 +47,10 @@ class RedactionPipeline:
         self._fill = fill
         self._padding = padding
         self._unwarp_enabled = unwarp_enabled
+        # Whole-region redaction is off unless geometry is supplied — `None` is
+        # both "no params" and "don't run it", so there is no second flag to
+        # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
+        self._regions = regions
 
     # -- primitives -------------------------------------------------------- #
     def unwarp(self, image: Image.Image) -> Image.Image:
@@ -58,7 +64,9 @@ class RedactionPipeline:
         return self._unwarper.unwarp(image.convert("RGB"))
 
     def compute_boxes(self, image: Image.Image) -> list[Box]:
-        """Boxes to redact, in the pixel space of ``image`` (no unwarp)."""
+        """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
+        flagged OCR line, plus — when ``regions`` was configured — the header /
+        footer / sender-column boxes, which are the only ones not tied to a line."""
         lines: list[Line] = self._ocr.lines(image)
         birth_idx = birthdate_indices(lines)
         pad = self._padding
@@ -96,6 +104,13 @@ class RedactionPipeline:
                         line.top + line.height + pad,
                     )
                 )
+        if self._regions is not None:
+            # Appended, never merged: these cover whole strips of the page,
+            # including the pixels OCR returned nothing for (a letterhead logo),
+            # and `apply_boxes` is happy to draw overlapping rectangles.
+            for box in region_boxes(lines, image.width, image.height, self._regions):
+                logger.debug("region -> REDACT %s", box.as_list())
+                boxes.append(box)
         return boxes
 
     def apply_boxes(

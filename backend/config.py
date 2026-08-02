@@ -53,6 +53,28 @@ class EngineConfig(BaseModel):
         return self.ocr_backend or preset_ocr, self.classifier or preset_clf
 
 
+class RegionsConfig(BaseModel):
+    """Geometry of the whole-region redaction pass (:mod:`backend.regions`), as
+    fractions of the page. A zero fraction switches that region off, so there is
+    no per-region boolean; ``[redaction].redact_regions`` turns off all three."""
+
+    model_config = _STRICT
+
+    header_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.12
+    footer_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.10
+    # The sender column is looked for right of `column_x_frac` and above
+    # `column_y_frac`; `gap_factor` is the vertical gap (in line heights) that ends
+    # a block, which is what keeps the invoice-number table out of it.
+    column_x_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
+    column_y_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
+    # Two lines join the same sender block only if they are BOTH near-touching and
+    # column-aligned, each in units of the smaller line's height. Neither test
+    # alone works across the samples: one page's payment table touches the block
+    # (only alignment cuts it), another's is perfectly aligned (only the gap does).
+    vgap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 0.5
+    align_factor: Annotated[float, Field(gt=0.0, le=2.0)] = 0.4
+
+
 class RedactionConfig(BaseModel):
     model_config = _STRICT
 
@@ -66,6 +88,11 @@ class RedactionConfig(BaseModel):
     pdf_dpi: Annotated[int, Field(ge=36, le=1200)] = 200
     max_pages: Annotated[int, Field(ge=1)] = 30
     jpeg_quality: Annotated[int, Field(ge=1, le=100)] = 90
+    # Blacken the letterhead/footer bands and the sender column as well as the
+    # lines the rules and the classifier flag. Config only — unlike `unwarp` this
+    # is not a query parameter, so it is fixed per process like the engine.
+    redact_regions: bool = True
+    regions: RegionsConfig = Field(default_factory=RegionsConfig)
 
 
 class ApiConfig(BaseModel):
@@ -90,6 +117,19 @@ class Config(BaseModel):
     api: ApiConfig = ApiConfig()
 
 
+# Env var -> the ``[section].key`` it overrides. These exist for containers, where
+# editing the baked config.toml means rebuilding; anything not listed here needs a
+# mounted file and ``PII_CONFIG``. Values are injected into the parsed TOML as the
+# raw strings they are and validated by pydantic like any other value, so
+# ``PII_UNWARP=yes|1|off`` all work and a typo fails at startup naming the field —
+# don't add hand-rolled parsing here.
+_ENV_OVERRIDES: dict[str, tuple[str, str]] = {
+    "PII_ENGINE": ("engine", "name"),
+    "PII_UNWARP": ("redaction", "unwarp"),
+    "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
+}
+
+
 def _default_config_path() -> Path:
     """``$PII_CONFIG`` if set, else ``config.toml`` in the repo root."""
     env = os.environ.get("PII_CONFIG")
@@ -101,10 +141,16 @@ def _default_config_path() -> Path:
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     """Load config from TOML, filling any missing field with its default.
 
-    ``PII_ENGINE`` overrides ``[engine].name`` (handy for containers) and wins over
-    the file. Anything unusable — an unknown key, an out-of-range number, an engine
-    preset that doesn't exist — raises here, so a bad config fails at startup rather
-    than on the first request.
+    The variables in :data:`_ENV_OVERRIDES` win over the file. Anything unusable —
+    an unknown key, an out-of-range number, an engine preset that doesn't exist, a
+    value that is not a boolean — raises here, so a bad config fails at startup
+    rather than on the first request.
+
+    Note what ``PII_UNWARP`` does and does not do. ``unwarp`` is *also* a query
+    parameter and a CLI flag, and the config value is their **default**, so
+    ``PII_UNWARP=false`` stops the unwarper running for callers that say nothing —
+    a request with ``?unwarp=true`` still gets one. ``PII_REDACT_REGIONS`` has no
+    wire name, so it is absolute.
     """
     cfg_path = Path(path) if path is not None else _default_config_path()
     data: dict = {}
@@ -112,7 +158,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         with cfg_path.open("rb") as fh:
             data = tomllib.load(fh)
 
-    if env_engine := os.environ.get("PII_ENGINE"):
-        data["engine"] = {**data.get("engine", {}), "name": env_engine}
+    for env_name, (section, key) in _ENV_OVERRIDES.items():
+        if value := os.environ.get(env_name):
+            data[section] = {**data.get(section, {}), key: value}
 
     return Config.model_validate(data)

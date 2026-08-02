@@ -6,6 +6,7 @@ from PIL import Image
 
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
+from backend.regions import RegionParams
 from tests.conftest import RecordingUnwarper, StubClassifier, StubOCR
 
 
@@ -33,6 +34,35 @@ def test_compute_boxes_flags_only_pii_lines():
     p = _pipeline(lines, ["Mustermann"], padding=2)
     boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
     assert boxes == [Box(3, 18, 67, 34)]  # only the second line, padded by 2
+
+
+def test_compute_boxes_appends_region_boxes():
+    # StubOCR ignores the image, so the page size the bands are measured against
+    # comes from the image argument alone.
+    lines = [Line("Muster GmbH", left=0, top=5, width=80, height=10)]
+    p = _pipeline(
+        lines,
+        [],
+        padding=0,
+        regions=RegionParams(
+            header_frac=0.2,
+            footer_frac=0.0,
+            column_x_frac=1.0,
+            column_y_frac=0.0,
+            vgap_factor=0.5,
+            align_factor=0.4,
+        ),
+    )
+    boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
+    # the line itself (ORG_LEGAL) plus the full-width header band over it — same
+    # height as the line, but spanning the page so a logo beside it is covered too.
+    assert boxes == [Box(0, 5, 80, 15), Box(0, 0, 100, 15)]
+
+
+def test_compute_boxes_skips_regions_by_default():
+    lines = [Line("Muster GmbH", left=0, top=5, width=80, height=10)]
+    p = _pipeline(lines, [], padding=0)
+    assert p.compute_boxes(Image.new("RGB", (100, 100))) == [Box(0, 5, 80, 15)]
 
 
 def test_compute_boxes_does_not_unwarp():

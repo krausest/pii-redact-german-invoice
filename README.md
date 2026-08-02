@@ -186,6 +186,15 @@ docker run --rm -p 8000:8000 pii-redact
   ```
 - Tune workers with `-e WEB_CONCURRENCY=N` (default 1 — each worker loads the full
   model set into RAM; scale via container replicas, needs ~4 GB RAM each).
+- Three config keys are overridable per container, without rebuilding or mounting a
+  `config.toml`:
+  ```bash
+  docker run --rm -p 8000:8000 \
+      -e PII_ENGINE=native -e PII_UNWARP=false -e PII_REDACT_REGIONS=false pii-redact
+  ```
+  The two booleans accept `true|false|1|0|yes|no|on|off`; anything else fails at
+  startup rather than being silently ignored. For any other key, mount a file and
+  point `PII_CONFIG` at it (`-v ./my.toml:/app/my.toml -e PII_CONFIG=/app/my.toml`).
 
 ### Server (API only)
 
@@ -303,8 +312,20 @@ as are malformed bodies and bad parameters. Errors are `{"detail": "…"}`.
 ## Configuration
 
 All knobs live in [`config.toml`](config.toml) (engine, redaction fill/padding,
-upload limits, worker count). `PII_ENGINE` and `PII_CONFIG` environment variables
-override the engine preset and the config-file path respectively. `PII_LOG_LEVEL=DEBUG`
+upload limits, worker count). Four environment variables override it, for
+containers where editing the file is awkward:
+
+| Variable | Overrides |
+|---|---|
+| `PII_CONFIG` | the path to the config file itself |
+| `PII_ENGINE` | `[engine].name` |
+| `PII_UNWARP` | `[redaction].unwarp` |
+| `PII_REDACT_REGIONS` | `[redaction].redact_regions` |
+
+`PII_UNWARP` and `PII_REDACT_REGIONS` differ in reach, because `unwarp` also has a
+wire name: `PII_UNWARP` sets the **default** for `?unwarp=` and `--unwarp`, so a
+request that names the parameter still wins, while `redact_regions` is neither a
+query parameter nor a flag and so the variable is absolute. `PII_LOG_LEVEL=DEBUG`
 (API and CLI) logs every OCR line with its box, plus each classifier match with its
 score and the recognizer/context that produced it, followed by the redact verdict —
 useful for seeing exactly why a line was or wasn't redacted.
@@ -314,6 +335,61 @@ is validated on load and a bad one **fails at startup rather than on the first
 request**: an unknown key or section, a number out of range (`jpeg_quality = 500`),
 or an engine that doesn't exist all raise immediately, naming the offender. A
 mistyped key is a mistake, not a no-op.
+
+### Region redaction
+
+The sender of an invoice — the practice, the clearing house — identifies itself in
+places no per-line detector can reach: a letterhead is usually a **logo**, and OCR
+returns no line for a graphic. So `[redaction].redact_regions` (on by default)
+adds three boxes that are not tied to any OCR line:
+
+| Key (`[redaction.regions]`) | Default | Meaning |
+|---|---|---|
+| `header_frac` | `0.12` | how far down the page letterhead lines are looked for |
+| `footer_frac` | `0.10` | how far up from the bottom imprint lines are looked for |
+| `column_x_frac` | `0.50` | the sender column is looked for right of this |
+| `column_y_frac` | `0.50` | …and its anchor must sit above this |
+| `vgap_factor` | `0.5` | vertical gap, in line heights, that still counts as touching |
+| `align_factor` | `0.4` | left-edge offset, in line heights, that still counts as aligned |
+
+A band **spans the full page width** — that is what covers the logo, which sits
+beside or above the text and which OCR never reports — but it is only as tall as the
+text it found. The two fractions are a *search window*, not the band height:
+widening one finds more letterhead, it does not blacken more paper. (A cap at 1.5×
+the window bounds the height, since a single merged OCR box would otherwise set it.)
+
+A band is drawn only when the text inside it **names a sender**: a company, a URL, a
+titled name, an address. Text alone is not enough. On a continuation page the item
+table can start at the very top of the sheet and the totals can sit in the bottom
+tenth; there is no sender in either band, so no strip is drawn and nothing is
+destroyed.
+
+The **sender column** has no fixed extent, so it is not given one. Every line that
+looks like a sender — company/legal form, URL, e-mail, phone, `Behandlung durch`, a
+titled name, an address — seeds a block, which then absorbs any line adjoining one
+already in it until nothing more does. Two lines adjoin when they are *both*
+near-touching (`vgap_factor`) and share a left edge (`align_factor`). Recognition
+and extent are separate: the anchor says *this is the sender*, the layout says
+*this is how far it goes*.
+
+Each block is a connected component, so it is the same set of lines whichever of
+its members you start from. That matters more than it sounds: anything walking the
+page in top-to-bottom order has to cope with the two columns of a letter
+interleaving, where a recipient-address line sorting between two sender lines
+splits the block and leaves a hole in the middle of it.
+
+Both halves of the merge test are needed, and the thresholds are measured rather
+than guessed. On one sample invoice the payment table *touches* the practice block
+and only the misalignment cuts it; on another the table is *exactly* aligned and
+only the gap does. Inside a real block the worst case measured is 0.41 and 0.14
+against thresholds of 0.5 and 0.4.
+
+Set a fraction to `0` to drop that one region; `redact_regions = false` (or
+`PII_REDACT_REGIONS=false` in the environment) drops all three. This is a
+**config-only** setting — unlike `unwarp` it is not a query parameter and not a CLI
+flag, so it is fixed per process like the engine. The boxes
+it produces are ordinary boxes: they appear in the JSON report and are editable
+(and deletable) in the web UI like any other.
 
 ### Engine presets
 
@@ -355,11 +431,16 @@ classify), and `apply_boxes()` (fill):
    coherent, so both NER and the regex/context rules work.
 3. **Classify** the line (this is where the engines differ, see below). The
    shared deterministic rules — salutation, titled name (`Dr. Weber`), German
-   street / PLZ+city, and the spatial date-of-birth matcher
+   street / PLZ+city, sender identity (legal form, URL/e-mail/phone, registry and
+   banking identifiers), and the spatial date-of-birth matcher
    ([`backend/rules.py`](backend/rules.py)) — are applied uniformly first, then
    the model-based classifier.
 4. **Draw** a filled black rectangle over the line's box (with a 2 px pad) if it is judged
    to contain PII.
+5. **Add the region boxes** — header band, footer band, sender column
+   ([`backend/regions.py`](backend/regions.py)) — the only boxes not derived from
+   an OCR line, and therefore the only ones that can cover a letterhead logo. See
+   [Region redaction](#region-redaction).
 
 ### `presidio` classifier
 
@@ -471,6 +552,7 @@ backend/            the whole Python package — pipeline, CLI and REST service
   options.py        pydantic validation for query options and the assemble body
   config.py         config.toml schema + engine preset resolution
   rules.py          deterministic German patterns (salutation, street, birthdate)
+  regions.py        header/footer bands and the sender column (not line-derived)
   ocr/ classifiers/ the two swappable axes behind an engine preset
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
 tests/              fast tests stub the models; `-m slow` runs the real ones
@@ -496,6 +578,13 @@ the built image.
 - **Detection is best-effort.** It is statistical NER plus hand-written rules, not a
   guarantee. Missed PII is possible on layouts unlike the ones it was tuned for.
   **Review every document before releasing it.** The web UI exists for exactly this.
+- **Region redaction is deliberately blind across the page width.** A band only
+  fires when it holds sender text, but once it does it covers everything on those
+  rows, logo and legitimate content alike (`Seite 1 von 2`, a page number sharing a
+  row with a bank line). That is the price of covering a letterhead graphic, which
+  no text-based rule can reach. Tune `[redaction.regions]` or set
+  `redact_regions = false` (or `PII_REDACT_REGIONS=false`) if it costs you more
+  than it buys.
 - **Redaction is destructive drawing, not text removal**, which is what makes it safe:
   output pages are rasterized images with filled rectangles, so there is no selectable
   text layer left underneath to recover. The trade-off is that redacted PDFs are images
