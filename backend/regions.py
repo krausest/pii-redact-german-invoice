@@ -18,14 +18,12 @@ the sheet and the totals can sit in the bottom tenth: no sender there, no strip,
 nothing is destroyed. The trade is stated plainly: a header that is *only* a logo,
 with no text at all, is skipped, because there is nothing to recognise it by.
 
-The sender column is the opposite problem — it has no fixed extent. It is found by
-anchor: a line in the right part of the page that looks like a sender (company,
-URL, phone, "Behandlung durch", a titled name, an address), then grown over the
-lines vertically adjacent to it, stopping at the first *table row*. Both stops
-matter: on the sample invoice the practice block ends 10 px above the payment table
-while its own lines sit 13 px apart, so the vertical gap alone cannot separate
-them — the structural difference (a stack of single cells vs. rows of two or three)
-can, and it survives a skewed scan where a pixel threshold would not.
+The sender column is the opposite problem — it has no fixed extent, so it is not
+given one. Every line that looks like a sender (company, URL, phone, "Behandlung
+durch", a titled name, an address) seeds a block, which then absorbs any line
+adjoining one already in it until nothing more does; two lines adjoin when they are
+both near-touching and left-aligned. Recognition and extent are thus separate: an
+anchor says *this is the sender*, the layout says *this is how far it goes*.
 
 All boxes are in the pixel space of the page the ``lines`` were read from — the
 same coordinate rule the rest of the pipeline follows.
@@ -65,7 +63,8 @@ class RegionParams:
     footer_frac: float
     column_x_frac: float
     column_y_frac: float
-    gap_factor: float
+    vgap_factor: float
+    align_factor: float
     padding: int = 0
 
 
@@ -133,83 +132,92 @@ def _footer_band(lines: list[Line], width: int, height: int, p: RegionParams) ->
     top = max(min(ln.top for ln in covered), height - (height - edge) * _BAND_STRETCH)
     return Box(0, round(top) - p.padding, width, height)
 
-def _sender_column_old(lines: list[Line], width: int, height: int, p: RegionParams) -> list[Box]:
-    """Bounding boxes of the anchored text blocks in the upper-right of the page.
+# -- sender column ----------------------------------------------------------- #
+def _sender_column(lines: list[Line], width: int, height: int, p: RegionParams) -> list[Box]:
+    """Bounding boxes of the sender blocks in the right-hand column.
 
-    Candidates are cut off at the first table row (see :func:`_first_table_row`),
-    then split into vertical blocks at any gap wider than ``gap_factor`` line
-    heights, and a block is kept only if one of its lines is a sender anchor. On a
-    typical Arztrechnung this keeps the "Behandlung durch: … www.praxis.de" block
-    and drops both the page-number line above it and the "Bitte bei Zahlung
-    angeben" table below.
+    Deliberately naive: start from every line that *looks* like a sender, and keep
+    absorbing lines that adjoin one already in the block until nothing more does.
+    Each block is the connected component of :func:`_adjacent` around its seed, so
+    recognition and extent stay separate — an anchor says *this is the sender*, the
+    layout says *how far it goes* — and a component is the same set whichever of its
+    members you start from.
+
+    That order-independence is the point. Anything that walks the page in
+    top-to-bottom order has to reckon with the two columns of a letter
+    interleaving, where a recipient-address line sorting between two sender lines
+    splits the block and leaves a hole in the middle of it. A component search never
+    sees an order, so ``column_x_frac`` and ``column_y_frac`` bound only where a
+    block may be *seeded*.
     """
     if p.column_x_frac >= 1.0 or p.column_y_frac <= 0.0:
         return []
     x_min = p.column_x_frac * width
     y_max = p.column_y_frac * height
-    candidates = sorted(
-        (ln for ln in lines if ln.left >= x_min and ln.top <= y_max),
-        key=lambda ln: ln.top,
-    )
-    print(f"{candidates=}")
-    r = _first_table_row(candidates)
-    candidates = candidates[: r]
-    print(f"candidates2 {candidates}")
 
     boxes: list[Box] = []
-    print(f"{ _vertical_blocks(candidates, p.gap_factor)=}")
-    for block in _vertical_blocks(candidates, p.gap_factor):
-        if not any(is_sender_anchor(ln.text) for ln in block):
+    taken: set[int] = set()
+    for seed, line in enumerate(lines):
+        if seed in taken or line.left < x_min or line.top > y_max:
             continue
+        if not is_sender_anchor(line.text):
+            continue
+        # `taken` is shared across seeds, so a block is built once no matter how
+        # many of its lines are anchors — the sample letterheads hold half a dozen.
+        block = _grow(seed, lines, p)
+        taken |= block
+        member = [lines[i] for i in block]
         boxes.append(
             Box(
-                min(ln.left for ln in block) - p.padding,
-                min(ln.top for ln in block) - p.padding,
-                max(ln.left + ln.width for ln in block) + p.padding,
-                max(ln.top + ln.height for ln in block) + p.padding,
+                min(ln.left for ln in member) - p.padding,
+                min(ln.top for ln in member) - p.padding,
+                max(ln.left + ln.width for ln in member) + p.padding,
+                max(ln.top + ln.height for ln in member) + p.padding,
             )
         )
     return boxes
 
 
-def _first_table_row(candidates: list[Line]) -> int:
-    """Index of the first line that is part of a multi-column row, or ``len`` if
-    there is none. Everything from there down is a table, not a letterhead.
+def _grow(seed: int, lines: list[Line], p: RegionParams) -> set[int]:
+    """The connected component of :func:`_adjacent` containing ``seed``.
 
-    This exists because the gap heuristic alone is not enough. On the sample
-    invoice the practice block ends 10 px above the "Bitte bei Zahlung angeben"
-    table while its own lines sit 13 px apart, so no ``gap_factor`` separates
-    them — but the table's rows have two or three cells side by side and the
-    letterhead is a single stack, and *that* difference survives a skewed scan.
-
-    Two lines are side by side when they overlap vertically and not horizontally.
-    Vertical overlap alone would fire on ordinary stacked lines, whose OCR boxes
-    routinely overlap by a pixel or two.
+    A frontier queue, so each member is expanded exactly once. The obvious
+    alternative — rescan every line against every member until a pass adds
+    nothing — computes the same set (both are the transitive closure of a
+    symmetric relation) but does it in ~3x the comparisons.
     """
-    for i, line in enumerate(candidates):
-        if any(
-            other is not line
-            and other.top < line.top + line.height
-            and line.top < other.top + other.height
-            and (
-                other.left >= line.left + line.width or line.left >= other.left + other.width
-            )
-            for other in candidates
-        ):
-            return i
-    return len(candidates)
+    block, frontier = {seed}, [seed]
+    while frontier:
+        j = frontier.pop()
+        for i, ln in enumerate(lines):
+            if i not in block and _adjacent(lines[j], ln, p):
+                block.add(i)
+                frontier.append(i)
+    return block
 
 
-def _vertical_blocks(lines: list[Line], gap_factor: float) -> list[list[Line]]:
-    """Split top-sorted lines wherever the vertical gap exceeds ``gap_factor``
-    times the preceding line's height. Lines that overlap vertically (two columns
-    on one row) yield a negative gap and always stay together."""
-    blocks: list[list[Line]] = []
-    bottom = 0.0
-    for line in lines:
-        if blocks and line.top - bottom <= gap_factor * blocks[-1][-1].height:
-            blocks[-1].append(line)
-        else:
-            blocks.append([line])
-        bottom = max(bottom, line.top + line.height)
-    return blocks
+def _adjacent(a: Line, b: Line, p: RegionParams) -> bool:
+    """Whether two lines belong to the same block: near-touching *and* sharing a
+    left edge, both in units of the smaller line's height so they scale with the
+    raster. Symmetric, which is what lets the block grow in both directions.
+
+    Neither test is sufficient alone. On one sample page the payment table touches
+    the sender block (gap 0.00) and only misalignment cuts it; on another the table
+    is exactly aligned (dx 0.00) and only the gap does. Inside a real block the
+    measured worst case is gap 0.41 and dx 0.14, against thresholds of 0.5 and 0.4.
+
+    A right-edge arm was measured and dropped: across the sample scans it changed
+    no box on any page, every real letterhead being left-aligned, while numeric
+    table columns *are* right-aligned to a pixel and would have been linked by it.
+
+    The gap is signed on purpose. OCR line boxes routinely overlap, and an
+    overlap — a negative gap — is the strongest evidence of one block there is; an
+    absolute value would turn it into a large positive number and split the block.
+
+    Alignment is tested first because it rejects nearly every pair on a real page
+    and costs one subtraction, where the gap needs a ``max`` and a ``min``.
+    """
+    h = min(a.height, b.height)
+    if abs(a.left - b.left) > p.align_factor * h:
+        return False
+    return max(a.top, b.top) - min(a.top + a.height, b.top + b.height) <= p.vgap_factor * h

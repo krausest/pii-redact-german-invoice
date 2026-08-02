@@ -49,12 +49,14 @@ def test_compute_boxes_appends_region_boxes():
             footer_frac=0.0,
             column_x_frac=1.0,
             column_y_frac=0.0,
-            gap_factor=1.5,
+            vgap_factor=0.5,
+            align_factor=0.4,
         ),
     )
     boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
-    # the line itself (ORG_LEGAL) plus the full-width header band over it.
-    assert boxes == [Box(0, 5, 80, 15), Box(0, 0, 100, 20)]
+    # the line itself (ORG_LEGAL) plus the full-width header band over it — same
+    # height as the line, but spanning the page so a logo beside it is covered too.
+    assert boxes == [Box(0, 5, 80, 15), Box(0, 0, 100, 15)]
 
 
 def test_compute_boxes_skips_regions_by_default():

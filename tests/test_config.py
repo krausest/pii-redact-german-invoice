@@ -66,29 +66,41 @@ def test_env_engine_overrides_file(tmp_path, monkeypatch):
     assert cfg.engine.resolve() == ("onnxruntime", "presidio")
 
 
+@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
 @pytest.mark.parametrize(
     "value,expected",
     [("false", False), ("0", False), ("off", False), ("true", True), ("1", True)],
 )
-def test_env_redact_regions_overrides_file(tmp_path, monkeypatch, value, expected):
-    path = _write(tmp_path, "[redaction]\nredact_regions = true\n")
-    monkeypatch.setenv("PII_REDACT_REGIONS", value)
-    assert load_config(path).redaction.redact_regions is expected
+def test_env_boolean_overrides_file(tmp_path, monkeypatch, env, value, expected):
+    field = env.removeprefix("PII_").lower()
+    path = _write(tmp_path, f"[redaction]\n{field} = {str(not expected).lower()}\n")
+    monkeypatch.setenv(env, value)
+    assert getattr(load_config(path).redaction, field) is expected
 
 
-def test_env_redact_regions_keeps_the_rest_of_the_section(tmp_path, monkeypatch):
+def test_env_override_keeps_the_rest_of_the_section(tmp_path, monkeypatch):
     path = _write(tmp_path, "[redaction]\npadding = 7\n")
+    monkeypatch.setenv("PII_UNWARP", "false")
     monkeypatch.setenv("PII_REDACT_REGIONS", "false")
     cfg = load_config(path)
+    assert cfg.redaction.unwarp is False
     assert cfg.redaction.redact_regions is False
     assert cfg.redaction.padding == 7
 
 
-def test_env_redact_regions_rejects_a_non_boolean(tmp_path, monkeypatch):
-    monkeypatch.setenv("PII_REDACT_REGIONS", "maybe")
+def test_unset_env_leaves_the_file_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("PII_UNWARP", raising=False)
+    path = _write(tmp_path, "[redaction]\nunwarp = false\n")
+    assert load_config(path).redaction.unwarp is False
+
+
+@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
+def test_env_rejects_a_non_boolean(tmp_path, monkeypatch, env):
+    monkeypatch.setenv(env, "maybe")
     with pytest.raises(ValueError) as e:
         load_config(tmp_path / "does_not_exist.toml")
-    assert "redact_regions" in str(e.value)
+    # the message names the config field, not the variable — same as a bad TOML value
+    assert env.removeprefix("PII_").lower() in str(e.value)
 
 
 def test_api_values_parsed(tmp_path):

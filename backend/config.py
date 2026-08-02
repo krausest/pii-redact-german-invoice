@@ -67,7 +67,12 @@ class RegionsConfig(BaseModel):
     # a block, which is what keeps the invoice-number table out of it.
     column_x_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
     column_y_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
-    gap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 1.5
+    # Two lines join the same sender block only if they are BOTH near-touching and
+    # column-aligned, each in units of the smaller line's height. Neither test
+    # alone works across the samples: one page's payment table touches the block
+    # (only alignment cuts it), another's is perfectly aligned (only the gap does).
+    vgap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 0.5
+    align_factor: Annotated[float, Field(gt=0.0, le=2.0)] = 0.4
 
 
 class RedactionConfig(BaseModel):
@@ -112,6 +117,19 @@ class Config(BaseModel):
     api: ApiConfig = ApiConfig()
 
 
+# Env var -> the ``[section].key`` it overrides. These exist for containers, where
+# editing the baked config.toml means rebuilding; anything not listed here needs a
+# mounted file and ``PII_CONFIG``. Values are injected into the parsed TOML as the
+# raw strings they are and validated by pydantic like any other value, so
+# ``PII_UNWARP=yes|1|off`` all work and a typo fails at startup naming the field —
+# don't add hand-rolled parsing here.
+_ENV_OVERRIDES: dict[str, tuple[str, str]] = {
+    "PII_ENGINE": ("engine", "name"),
+    "PII_UNWARP": ("redaction", "unwarp"),
+    "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
+}
+
+
 def _default_config_path() -> Path:
     """``$PII_CONFIG`` if set, else ``config.toml`` in the repo root."""
     env = os.environ.get("PII_CONFIG")
@@ -123,15 +141,16 @@ def _default_config_path() -> Path:
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     """Load config from TOML, filling any missing field with its default.
 
-    ``PII_ENGINE`` overrides ``[engine].name`` and ``PII_REDACT_REGIONS`` overrides
-    ``[redaction].redact_regions`` (both handy for containers); they win over the
-    file. Anything unusable — an unknown key, an out-of-range number, an engine
-    preset that doesn't exist, a value that is not a boolean — raises here, so a bad
-    config fails at startup rather than on the first request.
+    The variables in :data:`_ENV_OVERRIDES` win over the file. Anything unusable —
+    an unknown key, an out-of-range number, an engine preset that doesn't exist, a
+    value that is not a boolean — raises here, so a bad config fails at startup
+    rather than on the first request.
 
-    The env values are handed to pydantic as the strings they are rather than
-    parsed here, so ``PII_REDACT_REGIONS=yes|1|off`` all work and a typo gets the
-    same "fails at startup, naming the field" treatment as a bad TOML value.
+    Note what ``PII_UNWARP`` does and does not do. ``unwarp`` is *also* a query
+    parameter and a CLI flag, and the config value is their **default**, so
+    ``PII_UNWARP=false`` stops the unwarper running for callers that say nothing —
+    a request with ``?unwarp=true`` still gets one. ``PII_REDACT_REGIONS`` has no
+    wire name, so it is absolute.
     """
     cfg_path = Path(path) if path is not None else _default_config_path()
     data: dict = {}
@@ -139,10 +158,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         with cfg_path.open("rb") as fh:
             data = tomllib.load(fh)
 
-    if env_engine := os.environ.get("PII_ENGINE"):
-        data["engine"] = {**data.get("engine", {}), "name": env_engine}
-
-    if env_regions := os.environ.get("PII_REDACT_REGIONS"):
-        data["redaction"] = {**data.get("redaction", {}), "redact_regions": env_regions}
+    for env_name, (section, key) in _ENV_OVERRIDES.items():
+        if value := os.environ.get(env_name):
+            data[section] = {**data.get(section, {}), key: value}
 
     return Config.model_validate(data)

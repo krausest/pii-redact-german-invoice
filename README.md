@@ -186,14 +186,15 @@ docker run --rm -p 8000:8000 pii-redact
   ```
 - Tune workers with `-e WEB_CONCURRENCY=N` (default 1 — each worker loads the full
   model set into RAM; scale via container replicas, needs ~4 GB RAM each).
-- Two config keys are overridable per container, without rebuilding or mounting a
+- Three config keys are overridable per container, without rebuilding or mounting a
   `config.toml`:
   ```bash
-  docker run --rm -p 8000:8000 -e PII_ENGINE=native -e PII_REDACT_REGIONS=false pii-redact
+  docker run --rm -p 8000:8000 \
+      -e PII_ENGINE=native -e PII_UNWARP=false -e PII_REDACT_REGIONS=false pii-redact
   ```
-  `PII_REDACT_REGIONS` accepts `true|false|1|0|yes|no|on|off`; anything else fails
-  at startup rather than being silently ignored. For any other key, mount a file
-  and point `PII_CONFIG` at it (`-v ./my.toml:/app/my.toml -e PII_CONFIG=/app/my.toml`).
+  The two booleans accept `true|false|1|0|yes|no|on|off`; anything else fails at
+  startup rather than being silently ignored. For any other key, mount a file and
+  point `PII_CONFIG` at it (`-v ./my.toml:/app/my.toml -e PII_CONFIG=/app/my.toml`).
 
 ### Server (API only)
 
@@ -311,10 +312,20 @@ as are malformed bodies and bad parameters. Errors are `{"detail": "…"}`.
 ## Configuration
 
 All knobs live in [`config.toml`](config.toml) (engine, redaction fill/padding,
-upload limits, worker count). Three environment variables override it, for
-containers where editing the file is awkward: `PII_CONFIG` (path to the file),
-`PII_ENGINE` (`[engine].name`) and `PII_REDACT_REGIONS`
-(`[redaction].redact_regions`). `PII_LOG_LEVEL=DEBUG`
+upload limits, worker count). Four environment variables override it, for
+containers where editing the file is awkward:
+
+| Variable | Overrides |
+|---|---|
+| `PII_CONFIG` | the path to the config file itself |
+| `PII_ENGINE` | `[engine].name` |
+| `PII_UNWARP` | `[redaction].unwarp` |
+| `PII_REDACT_REGIONS` | `[redaction].redact_regions` |
+
+`PII_UNWARP` and `PII_REDACT_REGIONS` differ in reach, because `unwarp` also has a
+wire name: `PII_UNWARP` sets the **default** for `?unwarp=` and `--unwarp`, so a
+request that names the parameter still wins, while `redact_regions` is neither a
+query parameter nor a flag and so the variable is absolute. `PII_LOG_LEVEL=DEBUG`
 (API and CLI) logs every OCR line with its box, plus each classifier match with its
 score and the recognizer/context that produced it, followed by the redact verdict —
 useful for seeing exactly why a line was or wasn't redacted.
@@ -337,8 +348,9 @@ adds three boxes that are not tied to any OCR line:
 | `header_frac` | `0.12` | how far down the page letterhead lines are looked for |
 | `footer_frac` | `0.10` | how far up from the bottom imprint lines are looked for |
 | `column_x_frac` | `0.50` | the sender column is looked for right of this |
-| `column_y_frac` | `0.50` | …and only above this |
-| `gap_factor` | `1.5` | vertical gap, in line heights, that ends a sender block |
+| `column_y_frac` | `0.50` | …and its anchor must sit above this |
+| `vgap_factor` | `0.5` | vertical gap, in line heights, that still counts as touching |
+| `align_factor` | `0.4` | left-edge offset, in line heights, that still counts as aligned |
 
 A band **spans the full page width** — that is what covers the logo, which sits
 beside or above the text and which OCR never reports — but it is only as tall as the
@@ -352,12 +364,25 @@ table can start at the very top of the sheet and the totals can sit in the botto
 tenth; there is no sender in either band, so no strip is drawn and nothing is
 destroyed.
 
-The **sender column** has no fixed extent, so it is found by anchor: a line in the
-upper right that looks like a sender (company/legal form, URL, e-mail, phone,
-`Behandlung durch`, a titled name, an address), grown over the lines vertically
-adjacent to it and stopped at the first gap wider than `gap_factor` line heights.
-That gap is what keeps the invoice-number/amount table below the practice block out
-of the redaction.
+The **sender column** has no fixed extent, so it is not given one. Every line that
+looks like a sender — company/legal form, URL, e-mail, phone, `Behandlung durch`, a
+titled name, an address — seeds a block, which then absorbs any line adjoining one
+already in it until nothing more does. Two lines adjoin when they are *both*
+near-touching (`vgap_factor`) and share a left edge (`align_factor`). Recognition
+and extent are separate: the anchor says *this is the sender*, the layout says
+*this is how far it goes*.
+
+Each block is a connected component, so it is the same set of lines whichever of
+its members you start from. That matters more than it sounds: anything walking the
+page in top-to-bottom order has to cope with the two columns of a letter
+interleaving, where a recipient-address line sorting between two sender lines
+splits the block and leaves a hole in the middle of it.
+
+Both halves of the merge test are needed, and the thresholds are measured rather
+than guessed. On one sample invoice the payment table *touches* the practice block
+and only the misalignment cuts it; on another the table is *exactly* aligned and
+only the gap does. Inside a real block the worst case measured is 0.41 and 0.14
+against thresholds of 0.5 and 0.4.
 
 Set a fraction to `0` to drop that one region; `redact_regions = false` (or
 `PII_REDACT_REGIONS=false` in the environment) drops all three. This is a
