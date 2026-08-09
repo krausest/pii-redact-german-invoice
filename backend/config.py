@@ -77,7 +77,9 @@ class RegionsConfig(BaseModel):
     # column-aligned, each in units of the smaller line's height. Neither test
     # alone works across the samples: one page's payment table touches the block
     # (only alignment cuts it), another's is perfectly aligned (only the gap does).
-    vgap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 0.5
+    # The gap is set wide enough to bridge a blank line, not just a line spacing —
+    # letterheads put one between the address and the branch below it.
+    vgap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 1.2
     align_factor: Annotated[float, Field(gt=0.0, le=2.0)] = 0.4
     # The recipient address block is seeded left of `column_x_frac`, between
     # these two fractions of the page height (the DIN 5008 address-field area,
@@ -105,8 +107,10 @@ class RedactionConfig(BaseModel):
     # is not a query parameter, so it is fixed per process like the engine.
     redact_regions: bool = True
     regions: RegionsConfig = Field(default_factory=RegionsConfig)
-    # Blacken QR and DataMatrix codes (backend.codes). A Girocode carries IBAN, BIC
-    # and the account holder's name, so a page that still scans is not redacted.
+    # Blacken QR, DataMatrix and 1D barcodes (backend.codes). A Girocode carries IBAN,
+    # BIC and the account holder's name, a lab barcode the order number, so a page
+    # that still scans is not redacted. One toggle covers both passes deliberately:
+    # they differ in policy, not in what the reader wants turned on.
     # Config only, like `redact_regions`. One knob does not earn a sub-section the
     # way `[redaction.regions]`' six interacting fractions do; `code_margin_frac`
     # grows each box by that fraction of its own longer side, as headroom over a

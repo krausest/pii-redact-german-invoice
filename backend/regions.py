@@ -73,8 +73,9 @@ class RegionParams:
     ``_BAND_STRETCH`` times the window). Widening one finds more letterhead, it does
     not blacken more paper.
 
-    ``vgap_factor`` / ``align_factor`` therefore shape the bands as well as the
-    sender column: they are what joins a line to a block.
+    ``vgap_factor`` / ``align_factor`` therefore shape the bands as well as the two
+    columns: they are what joins a line to a block. The gap spans a blank line, so a
+    block reaches an aligned line one empty line past its last member.
 
     ``recipient_y_min_frac`` / ``recipient_y_max_frac`` bound where the recipient
     address block may be *seeded* (left of ``column_x_frac``, mirroring the
@@ -106,7 +107,13 @@ def is_sender_anchor(text: str) -> bool:
 
 def region_boxes(lines: list[Line], width: int, height: int, p: RegionParams) -> list[Box]:
     """The header/footer/sender-column/recipient-block boxes for a page of
-    ``width`` x ``height``."""
+    ``width`` x ``height``.
+
+    All four are the same search — :func:`_components` — pointed at four windows
+    with two anchor vocabularies. They differ only in what they do with the blocks
+    it finds: a band spans one strip across the full page width, a column emits one
+    bounding box per block.
+    """
     text_lines = [ln for ln in lines if ln.text.strip()]
     boxes: list[Box] = []
     for box in (
@@ -118,6 +125,51 @@ def region_boxes(lines: list[Line], width: int, height: int, p: RegionParams) ->
         if box is not None:
             boxes.append(box)
     return boxes
+
+
+# -- the shared search ------------------------------------------------------- #
+def _components(
+    lines: list[Line],
+    p: RegionParams,
+    in_window: Callable[[Line], bool],
+    is_anchor: Callable[[str], bool],
+) -> list[set[int]]:
+    """The blocks a region is made of: connected components of :func:`_adjacent`
+    seeded by every in-window line the region's vocabulary recognises.
+
+    This is the whole of "recognition and extent are separate", and all four
+    regions are built on it. An anchor says *this is a sender* (or *this is an
+    address*); the window says *only look here for one*; :func:`_adjacent` says how
+    far the block around it reaches — past the window if the layout goes there,
+    since a letterhead running below ``header_frac`` is still the letterhead.
+
+    ``taken`` is shared across seeds, so a block is built once no matter how many of
+    its lines are anchors; the sample letterheads hold half a dozen. That is sound
+    only because a component is order-free — the same set from whichever member you
+    start — which is also why nothing here sorts. A top-to-bottom walk would have to
+    cope with the two columns of a letter interleaving, where a recipient-address
+    line sorting between two sender lines splits the block and leaves a hole in it.
+    """
+    blocks: list[set[int]] = []
+    taken: set[int] = set()
+    for seed, line in enumerate(lines):
+        if seed in taken or not in_window(line) or not is_anchor(line.text):
+            continue
+        block = _grow(seed, lines, p)
+        taken |= block
+        blocks.append(block)
+    return blocks
+
+
+def _bbox(lines: list[Line], block: set[int], p: RegionParams) -> Box:
+    """The padded bounding box of one block."""
+    member = [lines[i] for i in block]
+    return Box(
+        min(ln.left for ln in member) - p.padding,
+        min(ln.top for ln in member) - p.padding,
+        max(ln.left + ln.width for ln in member) + p.padding,
+        max(ln.top + ln.height for ln in member) + p.padding,
+    )
 
 
 # -- bands ------------------------------------------------------------------- #
@@ -137,23 +189,22 @@ def _band_block(
     as often as not, and taking the topmost of *those* pulled the strip up over the
     table (a 1407px page: imprint at y=1383, strip from y=1254).
 
-    So the block is seeded by anchors only and extended by :func:`_adjacent`, the
-    same relation the sender column grows with — near-touching *and* left-aligned.
-    That is what tells the two apart on a real page: the imprint line runs from
-    x=129, the table cells above it start at x=219/288/744/870.
+    So the band takes the union of the blocks :func:`_components` finds — seeded by
+    anchors only, extended by :func:`_adjacent`, the same relation the two columns
+    grow with. That is what tells the band and the table apart on a real page: the
+    imprint line runs from x=129, the table cells above it start at
+    x=219/288/744/870.
 
     The trade is that a band line which is neither an anchor nor left-aligned with
     one is no longer covered — a centred "Vielen Dank für Ihren Besuch" above the
     imprint stays readable. It is not PII, and the alternative is blackening the
     item table.
     """
-    block: set[int] = set()
-    for seed, ln in enumerate(lines):
-        # `block` is shared across seeds, so a letterhead holding half a dozen
-        # anchors is still grown once — same reason as `taken` in _sender_column.
-        if seed not in block and in_window(ln) and is_sender_anchor(ln.text):
-            block |= _grow(seed, lines, p)
-    return [lines[i] for i in block]
+    return [
+        lines[i]
+        for block in _components(lines, p, in_window, is_sender_anchor)
+        for i in block
+    ]
 
 
 def _header_band(lines: list[Line], width: int, height: int, p: RegionParams) -> Box | None:
@@ -207,10 +258,9 @@ def _recipient_column(lines: list[Line], width: int, height: int, p: RegionParam
     The per-line rules already blacken the lines they recognize; this pass
     exists for the lines *between* them — a c/o line, a company recipient, a
     name line OCR mangled — which sit inside the block but match nothing on
-    their own. Same seed-then-:func:`_grow` shape as :func:`_sender_column`:
-    the window (below ``recipient_y_min_frac``, above ``recipient_y_max_frac``,
-    left of ``column_x_frac``) bounds only where a block may be seeded, and the
-    block reaches as far as :func:`_adjacent` carries it.
+    their own. The window (below ``recipient_y_min_frac``, above
+    ``recipient_y_max_frac``, left of ``column_x_frac``) bounds only where a block
+    may be seeded; the block reaches as far as :func:`_adjacent` carries it.
     """
     if p.recipient_y_max_frac <= p.recipient_y_min_frac:
         return []
@@ -218,26 +268,14 @@ def _recipient_column(lines: list[Line], width: int, height: int, p: RegionParam
     y_min = p.recipient_y_min_frac * height
     y_max = p.recipient_y_max_frac * height
 
-    boxes: list[Box] = []
-    taken: set[int] = set()
-    for seed, line in enumerate(lines):
-        if seed in taken or line.left >= x_max or not (y_min <= line.top <= y_max):
-            continue
-        if not is_recipient_anchor(line.text):
-            continue
-        # `taken` shared across seeds: street and ZIP+city are one block.
-        block = _grow(seed, lines, p)
-        taken |= block
-        member = [lines[i] for i in block]
-        boxes.append(
-            Box(
-                min(ln.left for ln in member) - p.padding,
-                min(ln.top for ln in member) - p.padding,
-                max(ln.left + ln.width for ln in member) + p.padding,
-                max(ln.top + ln.height for ln in member) + p.padding,
-            )
-        )
-    return boxes
+    def in_window(ln: Line) -> bool:
+        return ln.left < x_max and y_min <= ln.top <= y_max
+
+    # `taken` inside _components makes street and ZIP+city one block, not two.
+    return [
+        _bbox(lines, block, p)
+        for block in _components(lines, p, in_window, is_recipient_anchor)
+    ]
 
 
 # -- sender column ----------------------------------------------------------- #
@@ -245,45 +283,21 @@ def _sender_column(lines: list[Line], width: int, height: int, p: RegionParams) 
     """Bounding boxes of the sender blocks in the right-hand column.
 
     Deliberately naive: start from every line that *looks* like a sender, and keep
-    absorbing lines that adjoin one already in the block until nothing more does.
-    Each block is the connected component of :func:`_adjacent` around its seed, so
-    recognition and extent stay separate — an anchor says *this is the sender*, the
-    layout says *how far it goes* — and a component is the same set whichever of its
-    members you start from.
-
-    That order-independence is the point. Anything that walks the page in
-    top-to-bottom order has to reckon with the two columns of a letter
-    interleaving, where a recipient-address line sorting between two sender lines
-    splits the block and leaves a hole in the middle of it. A component search never
-    sees an order, so ``column_x_frac`` and ``column_y_frac`` bound only where a
-    block may be *seeded*.
+    absorbing lines that adjoin one already in the block until nothing more does —
+    see :func:`_components`, of which this is the plainest use. ``column_x_frac``
+    and ``column_y_frac`` bound only where a block may be *seeded*.
     """
     if p.column_x_frac >= 1.0 or p.column_y_frac <= 0.0:
         return []
     x_min = p.column_x_frac * width
     y_max = p.column_y_frac * height
 
-    boxes: list[Box] = []
-    taken: set[int] = set()
-    for seed, line in enumerate(lines):
-        if seed in taken or line.left < x_min or line.top > y_max:
-            continue
-        if not is_sender_anchor(line.text):
-            continue
-        # `taken` is shared across seeds, so a block is built once no matter how
-        # many of its lines are anchors — the sample letterheads hold half a dozen.
-        block = _grow(seed, lines, p)
-        taken |= block
-        member = [lines[i] for i in block]
-        boxes.append(
-            Box(
-                min(ln.left for ln in member) - p.padding,
-                min(ln.top for ln in member) - p.padding,
-                max(ln.left + ln.width for ln in member) + p.padding,
-                max(ln.top + ln.height for ln in member) + p.padding,
-            )
-        )
-    return boxes
+    def in_window(ln: Line) -> bool:
+        return ln.left >= x_min and ln.top <= y_max
+
+    return [
+        _bbox(lines, block, p) for block in _components(lines, p, in_window, is_sender_anchor)
+    ]
 
 
 def _grow(seed: int, lines: list[Line], p: RegionParams) -> set[int]:
@@ -311,12 +325,28 @@ def _adjacent(a: Line, b: Line, p: RegionParams) -> bool:
 
     Neither test is sufficient alone. On one sample page the payment table touches
     the sender block (gap 0.00) and only misalignment cuts it; on another the table
-    is exactly aligned (dx 0.00) and only the gap does. Inside a real block the
-    measured worst case is gap 0.41 and dx 0.14, against thresholds of 0.5 and 0.4.
+    is exactly aligned (dx 0.00) and only the gap does.
 
-    A right-edge arm was measured and dropped: across the sample scans it changed
-    no box on any page, every real letterhead being left-aligned, while numeric
-    table columns *are* right-aligned to a pixel and would have been linked by it.
+    ``vgap_factor`` is set by the widest gap *worth crossing*, not by the tightest
+    gap inside a block: a letterhead prints a blank line between its address and the
+    branch line below it (1.10 line heights on one sample), and at a spacing-sized
+    threshold the block stopped one line short of it. The ceiling is where blocks
+    begin chaining into invoice bodies, around 3.0 — one sample's block swallows the
+    diagnoses and the item table there. Nothing in between separates the wanted case
+    from the unwanted one: on the same corpus a `Rechnungs-Nr.` column joins the
+    sender block at 0.6, the first step above a spacing-sized gap. Blackening it is
+    accepted; it costs a reference, not a secret.
+
+    Alignment does no work in that range and is *not* tightened to compensate — it
+    was measured. German invoices are set flush left, dx is 0.00 on the great
+    majority of candidate pairs, and a two-tier rule (a tighter dx for the wider
+    gap) produced identical boxes on 47 of 48 sample pages. On the one page it
+    differed it was worse, splitting a recipient block in two.
+
+    A right-edge arm was measured and dropped, twice: it changed no box on the first
+    sample scans, every real letterhead being left-aligned, and on the larger corpus
+    it only pulled right-aligned label/value columns into the block for no gain —
+    numeric table columns *are* right-aligned to a pixel.
 
     The gap is signed on purpose. OCR line boxes routinely overlap, and an
     overlap — a negative gap — is the strongest evidence of one block there is; an

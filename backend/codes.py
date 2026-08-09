@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 # these.
 _FORMAT_NAMES = ("QRCode", "MicroQRCode", "DataMatrix")
 
+# Linear symbologies, read by a separate pass — see `_read_linear` for why it cannot
+# just be this tuple with three more names in it. These are what German medical
+# paperwork actually prints: a lab order or sample number, rotated 90 degrees up the
+# left edge. EAN/UPC/Codabar are deliberately absent — they price groceries, not
+# invoices, and every format costs its own read of the page.
+_LINEAR_FORMAT_NAMES = ("ITF", "Code128", "Code39")
+
 # When no symbol on the page decoded, retry once on a 2x enlargement before
 # trusting any of the located-but-undecoded geometry. A QR that is merely too
 # coarse for the decoder — a SEPA/Girocode at a couple of pixels per module — comes
@@ -65,9 +72,17 @@ _RETRY_BLIND_MAX_PIXELS = 2_000_000
 # overlap-merging leaves several partial boxes with the symbol's middle and
 # bottom-right showing. That is the bug this constant exists for. Fragments of one
 # symbol are fused when the gap between them is under this multiple of the larger
-# one's longer side: a finder pattern is 7 modules on a symbol of at most ~57 here,
-# so the two extreme ones sit roughly 7 finder-widths apart.
-_FRAGMENT_REACH = 8.0
+# one's longer side.
+#
+# The value is measured, not derived from the 7-modules-of-57 geometry: what
+# zxing-cpp actually reports on the fragment path is not a bare finder pattern but a
+# chunk about a third of the symbol, so the widest real gap across the degradation
+# corpus is 0.79 (two pieces 27 px apart, longer side 34). The 7-finder-widths
+# reading gave 8.0, and that is wide enough to reach *past a symbol* to the next one:
+# a page carrying a DataMatrix above a Girocode fused the two into one box spanning
+# the item table between them. Nothing above ~2 is needed and everything above ~5
+# can bridge two symbols on the same page.
+_FRAGMENT_REACH = 1.5
 
 # Two shape guards on every candidate, needed only because `return_errors=True`
 # also reports symbols that were *located but not decoded* (see `code_boxes`), and
@@ -111,18 +126,32 @@ def code_boxes(image: Image.Image, p: CodeParams) -> list[Box]:
     """
     reads = _read(image)
     if not any(decoded for decoded, _ in reads) and _worth_retrying(image, reads):
-        # Nothing verified. Before believing undecoded geometry, give the decoder a
-        # bigger picture to work from; exact corners beat reconstructed ones.
+        # Nothing verified. Give the decoder a bigger picture to work from — but take
+        # what comes back for its *geometry*, not for a decode: a symbol that will not
+        # checksum is still a symbol, and blackening it is the whole job.
+        #
+        # Unioned rather than substituted because neither pass is a superset of the
+        # other. An earlier version replaced `reads` only when the retry *decoded*
+        # something, which silently dropped the case this exists for: a dewarped phone
+        # photo whose Girocode zxing-cpp cannot even locate at 1x is located at 2x and
+        # still does not checksum, so the one pass that saw it was the one discarded.
         size = (image.width * _RETRY_UPSCALE, image.height * _RETRY_UPSCALE)
         retry = [(decoded, _scaled(rect, 1 / _RETRY_UPSCALE)) for decoded, rect in _read(image.resize(size))]
-        if retry and (not reads or any(decoded for decoded, _ in retry)):
-            logger.debug("no symbol decoded at 1x; using the %dx pass", _RETRY_UPSCALE)
-            reads = retry
+        if retry:
+            logger.debug("no symbol decoded at 1x; adding the %dx pass", _RETRY_UPSCALE)
+            reads += retry
 
     # Decoded corners are exact, so those boxes stand on their own. The rest are
     # fragments of something, and have to be reassembled before they mean anything.
     exact = [rect for decoded, rect in reads if decoded]
     fragments = [rect for decoded, rect in reads if not decoded]
+
+    # Linear barcodes are exact by construction — the pass only reports decoded ones —
+    # and are never fragments, so they join the set that vouches for itself. Added
+    # here rather than into `reads` on purpose: they must not count towards the
+    # "nothing decoded" test above, since a page can carry a readable barcode *and* an
+    # unreadable QR, and the QR is the one that needs the enlarged retry.
+    exact += _read_linear(image)
 
     if fragments:
         # Ask OpenCV for the outline before trying to rebuild one. It reads the three
@@ -187,11 +216,16 @@ def _read(image: Image.Image) -> list[tuple[bool, tuple[float, float, float, flo
     """Every located symbol as ``(decoded, enclosing rect)``, shape guards applied.
 
     ``return_errors=True`` is the setting that makes this pass worth having. Plain
-    decoding reports only symbols whose checksum verifies, and the Girocode on
-    ``Arztrechnung/Arztrechnung11.jpeg`` — a 60 px QR on a phone photo, labelled
-    "Zahlen mit Code" — does not verify: unredacted at exactly the resolution a real
-    upload has. With errors returned it is found. Detection, not decoding, is what
-    redaction needs; ``_MAX_ASPECT`` / ``_MIN_SIDE_PX`` pay for the looser gate.
+    decoding reports only symbols whose checksum verifies, and the ~60 px payment QR
+    on a phone-photographed invoice in the sample corpus does not verify: unredacted
+    at exactly the resolution a real upload has. With errors returned it is found.
+    Detection, not decoding, is what redaction needs; ``_MAX_ASPECT`` /
+    ``_MIN_SIDE_PX`` pay for the looser gate.
+
+    Note this is measured on the image *as passed in*, and `compute_boxes` runs after
+    unwarping. On that same page the dewarp resamples the symbol just past what the
+    finder-pattern search will locate at 1x — nothing here reports it, at either
+    error setting — which is why `code_boxes` cannot rely on a single read.
     (OpenCV's detect-without-decode QR detector was measured as an alternative and
     found nothing this misses, on 17 synthetic degradations or on the sample corpus,
     so it is not used.)
@@ -205,6 +239,36 @@ def _read(image: Image.Image) -> list[tuple[bool, tuple[float, float, float, flo
         if _plausible(rect):
             reads.append((barcode.error is None, rect))
     return reads
+
+
+def _read_linear(image: Image.Image) -> list[tuple[float, float, float, float]]:
+    """Decoded linear barcodes, as one enclosing rect each.
+
+    Two things here are the exact opposite of :func:`_read`, and both are deliberate.
+
+    **One call per format**, which is not something a clean fixture will show you.
+    On a generated page a merged format list finds everything, so folding these three
+    names into `_FORMAT_NAMES` looks like an obvious simplification and passes the
+    tests. On the real thing it silently stops working: the ITF up the left edge of a
+    12 MP phone photo in the sample corpus is found by ``formats=ITF`` and by nothing
+    else — paired with any other format, or left to the default all-formats scan, the
+    result is an empty list. Verify against a photographed page, not a synthetic one.
+
+    **Decoded only** — no ``return_errors``. The matrix pass can afford undecoded
+    geometry because a matrix code is square and `_MAX_ASPECT` vouches for the shape.
+    A linear barcode *is* the long thin shape that guard exists to reject, so shape
+    proves nothing here and the checksum has to instead. Which is also why these
+    rects skip `_plausible`: printed the ordinary way round a barcode is 8:1 and
+    would fail it outright, and the one in the corpus clears 3.0 by 1% only because
+    it happens to be rotated.
+    """
+    import zxingcpp
+
+    rects = []
+    for name in _LINEAR_FORMAT_NAMES:
+        fmt = getattr(zxingcpp.BarcodeFormat, name)
+        rects += [_quad_rect(barcode.position) for barcode in zxingcpp.read_barcodes(image, formats=fmt)]
+    return rects
 
 
 def _quad_rect(position: Any) -> tuple[float, float, float, float]:

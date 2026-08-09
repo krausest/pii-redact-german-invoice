@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from backend.config import RegionsConfig
 from backend.models import Box, Line
 from backend.regions import RegionParams, region_boxes  # noqa: F401
 
@@ -336,3 +337,61 @@ def test_recipient_street_and_city_are_one_block():
         _line("12345 Musterstadt", left=100, top=288),
     ]
     assert _boxes(lines, RECIPIENT) == [Box(100, 266, 200, 308)]
+
+
+# -- bridging a blank line ---------------------------------------------------- #
+# The shipped geometry, so these pin the default rather than a value invented here:
+# `vgap_factor` is what decides whether a block reaches past an empty line, and the
+# whole point of the setting is lost if the tests below run against their own number.
+SHIPPED = RegionParams(**RegionsConfig().model_dump(), padding=0)
+# 20px lines, so the shipped 1.2 line heights allow a 24px gap. A blank line between
+# two 20px lines is ~22px of white; ordinary line spacing is ~2px.
+BLANK_LINE, PARAGRAPH_BREAK = 242, 260
+
+
+def test_block_reaches_past_a_blank_line():
+    # A letterhead prints its branch a blank line under the address. "Standort ..."
+    # is no anchor of any kind, so growth across that gap is the only thing that can
+    # cover it — at a spacing-sized gap the block stopped one line short.
+    lines = [
+        _line("Praxis Dr. Muster", left=600, top=200),
+        _line("Standort Musterhoefe", left=600, top=BLANK_LINE, width=140),
+    ]
+    assert _boxes(lines, SHIPPED) == [Box(600, 200, 740, 262)]
+
+
+def test_block_stops_at_a_paragraph_break():
+    # Two blank lines is a different block, not a wider one. Without a ceiling here
+    # a sender block chains down into the diagnoses and the item table below it.
+    lines = [
+        _line("Praxis Dr. Muster", left=600, top=200),
+        _line("Standort Musterhoefe", left=600, top=PARAGRAPH_BREAK, width=140),
+    ]
+    assert _boxes(lines, SHIPPED) == [Box(600, 200, 700, 220)]
+
+
+def test_bridging_still_needs_the_alignment_half():
+    # The gap widened; the AND did not. A neighbouring column one blank line down
+    # is still a different block — that is what keeps a table out of a band.
+    lines = [
+        _line("Praxis Dr. Muster", left=600, top=200),
+        _line("Standort Musterhoefe", left=700, top=BLANK_LINE, width=140),
+    ]
+    assert _boxes(lines, SHIPPED) == [Box(600, 200, 700, 220)]
+
+
+def test_every_region_grows_through_the_same_relation():
+    # One search (`_components`) serves all four regions, so the blank line the
+    # sender column bridges is bridged in the recipient window too — the c/o line
+    # under an address field is the case this buys. Both blocks are on one page to
+    # show the two windows do not interfere.
+    lines = [
+        _line("Musterstrasse 23", left=100, top=200),
+        _line("c/o Muster Verwaltung", left=100, top=BLANK_LINE, width=160),
+        _line("Praxis Dr. Muster", left=600, top=200),
+        _line("Standort Musterhoefe", left=600, top=BLANK_LINE, width=140),
+    ]
+    assert _boxes(lines, SHIPPED) == [
+        Box(600, 200, 740, 262),  # sender column
+        Box(100, 200, 260, 262),  # recipient block
+    ]

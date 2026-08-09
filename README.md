@@ -188,11 +188,7 @@ docker run --rm -p 8000:8000 pii-redact
 - Multi-stage build: a Node stage builds the SPA; a `python:3.13-slim` stage runs
   the service. Only runtime deps are installed (`uv sync --no-default-groups` — no
   pytest, no notebook tooling).
-- **Engines**: the image ships **native + onnx**. The `gliner` engine is an
-  optional extra excluded from the image because it pulls `torch` + ~4.6 GB of CUDA
-  libraries that CPU inference never uses. To include it, add `--extra gliner` to the
-  two `uv sync` steps in the [Dockerfile](Dockerfile) (much larger image), or use it
-  locally with `uv sync --extra gliner`.
+- **Engines**: the image ships **native + onnx**, which is every engine there is.
 - A build-time warmup ([docker/warmup.py](docker/warmup.py)) bakes the Paddle
   (native + ONNX) and UVDoc/doc-orientation models into the image (the spaCy model is
   a pip package). Runtime is offline — verify by running with **no network** and
@@ -388,7 +384,7 @@ adds boxes that are not tied to any single OCR line:
 | `footer_frac` | `0.10` | how far up from the bottom imprint lines are looked for |
 | `column_x_frac` | `0.50` | the sender column is looked for right of this |
 | `column_y_frac` | `0.50` | …and its anchor must sit above this |
-| `vgap_factor` | `0.5` | vertical gap, in line heights, that still counts as touching |
+| `vgap_factor` | `1.2` | vertical gap, in line heights, that a block may bridge |
 | `align_factor` | `0.4` | left-edge offset, in line heights, that still counts as aligned |
 | `recipient_y_min_frac` | `0.05` | the recipient address block is seeded below this… |
 | `recipient_y_max_frac` | `0.45` | …and above this, left of `column_x_frac` (`max <= min` disables) |
@@ -412,6 +408,15 @@ already in it until nothing more does. Two lines adjoin when they are *both*
 near-touching (`vgap_factor`) and share a left edge (`align_factor`). Recognition
 and extent are separate: the anchor says *this is the sender*, the layout says
 *this is how far it goes*.
+
+The gap is wide enough to **bridge a blank line**, so a line one empty line below
+the block still joins it if it is aligned — a letterhead prints its branch or bank
+line that way, and at a spacing-sized gap the block ended one line short of it. The
+cost is paid in invoice metadata: a `Rechnungs-Nr.` or `Rechnungsdatum` column
+sitting a blank line under the letterhead is drawn into the block and blackened
+too. That is an information loss, not a leak, and no threshold separates the two —
+on the sample corpus the invoice number joins at a gap of 0.6 line heights and the
+branch line needs 1.1.
 
 Each block is a connected component, so it is the same set of lines whichever of
 its members you start from. That matters more than it sounds: anything walking the
@@ -442,25 +447,43 @@ flag, so it is fixed per process like the engine. The boxes
 it produces are ordinary boxes: they appear in the JSON report and are editable
 (and deletable) in the web UI like any other.
 
-### QR and DataMatrix redaction
+### Barcode redaction (QR, DataMatrix, 1D)
 
 A payment QR is the one piece of PII on an invoice that a reader does not have to
 read. An **EPC QR / Girocode** encodes the IBAN, the BIC and the account holder's
 *name*; a **Swiss QR-bill** adds the debtor's full address; a **DataMatrix** carries
-an E-Rezept token or a securPharm pack identity. A page whose text is blacked out
+an E-Rezept token or a securPharm pack identity; a **1D barcode** up the left edge of
+a lab invoice carries the order or sample number. A page whose text is blacked out
 but whose code still scans is not redacted — and no text rule can reach one, because
 a code is a graphic and OCR returns no line for it.
 
-So `[redaction].redact_codes` (on by default) detects QR, Micro QR and DataMatrix
-symbols in the page image and blackens their bounding boxes. Detection is tuned for
-**recall**: a symbol is covered once it is *located*, even when it does not decode.
+So `[redaction].redact_codes` (on by default) detects QR, Micro QR, DataMatrix, ITF,
+Code 128 and Code 39 symbols in the page image and blackens their bounding boxes.
+The matrix formats and the linear ones are found by two passes with **opposite**
+policies, for one reason — see the shape guards below.
+
+Matrix detection is tuned for **recall**: a symbol is covered once it is *located*,
+even when it does not decode.
 That matters at the resolution real uploads have — the Girocode on one sample photo
 is 60 px across and fails its checksum, which a decode-only reader would skip and
 leave in the clear. Paying for the looser gate are two shape guards, since a symbol
 that never decoded has nothing proving it real: a candidate is dropped if it is
 under 12 px or more than 3:1 out of square. That is what rejects the run of item-table
-rows one sample page reports as a 738×108 "DataMatrix". Across the sample corpus the
-pass finds four real codes and nothing else.
+rows one sample page reports as a 738×108 "DataMatrix".
+
+**Linear barcodes invert both halves of that**, because a 1D barcode *is* the long
+thin shape the aspect guard exists to reject — shape cannot vouch for it, so the
+checksum has to. The linear pass therefore reports only symbols that actually
+**decode**, and in exchange its boxes skip the shape guards entirely. It also issues
+one read per format: asked for together, or left to a default all-formats scan,
+zxing-cpp returns nothing for the rotated ITF on a photographed sample page that it
+finds immediately when ITF is requested alone. (A clean generated page does *not*
+reproduce that, which makes merging the two format lists a tempting and silent
+regression.)
+
+Across the sample corpus the two passes together find five real codes and nothing
+else — the linear formats produce no false positive on any page, in either
+orientation, before or after dewarping.
 
 | Key (`[redaction]`) | Default | Meaning |
 |---|---|---|
@@ -481,6 +504,16 @@ detector** is asked for the outline, which it derives from the finder patterns
 without ever decoding; and only if that finds nothing are the pieces themselves
 grouped and squared up, extending from their top-left anchor toward the symbol.
 
+The 2× re-read is taken for its **geometry, not for a decode**, and is added to the
+first pass rather than replacing it — neither is a superset of the other. Dewarping
+resamples a symbol just enough that a payment QR on one sample photo is not located
+at 1× at all, is located at 2×, and checksums at neither; requiring the enlarged pass
+to decode before believing it left that code in the clear on a page that was
+otherwise fully redacted. Grouping is likewise deliberately short-reaching: pieces
+fuse across a gap of at most 1.5× their own size, measured off a corpus where the
+widest real gap between two pieces of one symbol is 0.79×. Reaching further lets one
+symbol swallow the next, and the item table between them.
+
 Note this is driven by how coarse the *code* is, not the page: a 15 mm Girocode is
 only 118 px at the default 200 dpi and fragments on a full-resolution A4 scan. It is
 also not a clean threshold — 12 mm decodes, 15 mm does not and 20 mm does again,
@@ -500,14 +533,15 @@ along two independent axes, selected by an **engine preset** in `config.toml`:
 |---|---|---|
 | `native` *(default)* | PaddleOCR (native) | Presidio (spaCy NER + custom regex recognizers) |
 | `onnx` | PaddleOCR (ONNX Runtime, multi-core) | Presidio — *the same classifier as `native`* |
-| `gliner` | PaddleOCR (native) | GLiNER (zero-shot NER) |
 
-`native` and `onnx` differ **only** in the OCR inference backend: same detection
-and recognition models, same Presidio classifier, same results. `native` is the
-baseline; GLiNER is a close second; `onnx` is the fastest (~3.3× faster OCR at
-identical accuracy).
-Advanced users can override either axis (`engine.ocr_backend` / `engine.classifier`)
-to unlock combinations the presets don't name.
+The two presets differ **only** in the OCR inference backend: same detection and
+recognition models, same Presidio classifier, same results. `native` is the
+baseline; `onnx` is the fastest (~3.3× faster OCR at identical accuracy).
+Either axis can be overridden explicitly (`engine.ocr_backend` /
+`engine.classifier`) instead of naming a preset. Presidio is currently the only
+classifier — a zero-shot NER engine (GLiNER) was tried and dropped, since it was
+worse on this corpus and pulled `torch` plus ~4.6 GB of CUDA libraries CPU
+inference never uses.
 
 **`engine.det_box_thresh`** (default `0.5`, below PaddleOCR's own `0.6`) is the
 minimum detector score for a text box. It is a *mean* over the box, so a shape,
@@ -550,11 +584,11 @@ classify), and `apply_boxes()` (fill):
    ([`backend/regions.py`](backend/regions.py)) — not derived from an OCR line, and
    therefore able to cover a letterhead logo. See
    [Region redaction](#region-redaction).
-6. **Add the matrix-code boxes** — QR, Micro QR, DataMatrix
+6. **Add the barcode boxes** — QR, Micro QR, DataMatrix, ITF, Code 128, Code 39
    ([`backend/codes.py`](backend/codes.py)) — the only pass that reads the page
    *pixels* rather than the OCR lines, because a payment QR is machine-readable PII
    that no text rule can see. See
-   [QR and DataMatrix redaction](#qr-and-datamatrix-redaction).
+   [Barcode redaction](#barcode-redaction-qr-datamatrix-1d).
 
 ### `presidio` classifier
 
@@ -592,13 +626,6 @@ on top of the built-in IBAN/e-mail/credit-card ones:
   narrow address column prints them flush and OCR returns `12345Musterstadt` as one token.
   The city pattern is *imported* from `backend/rules.py` rather than restated, since the
   two are meant to agree.
-
-### `gliner` classifier
-
-Each line is passed to GLiNER against the PII label set; a match redacts it. `person`
-must be multi-word (drops single-token noise). Because GLiNER's zero-shot `address` label
-is unreliable on standalone lines, the shared deterministic street / PLZ+city regexes
-(applied to every engine) close that gap (see special cases).
 
 ### Special cases handled
 
@@ -659,9 +686,11 @@ is unreliable on standalone lines, the shared deterministic street / PLZ+city re
   half of them — while a lowercase hit is the ordinary German word a surname collides
   with (`Klein` the person vs `klein gedruckt`), which is why this isn't a plain
   case-insensitive match.
-- **Address block completeness (GLiNER).** GLiNER's `address` label dropped the standalone
-  PLZ+city line in the recipient block, leaving it visible. The deterministic street /
-  PLZ+city regexes (same as Presidio's) close that gap so the Adressfeld is fully covered.
+- **Address block completeness.** The street / PLZ+city regexes run on every line before
+  the classifier, so the Adressfeld's coverage is a property of those patterns rather than
+  of the model. A model-only path leaves the standalone PLZ+city line of a recipient block
+  visible — a zero-shot `address` label dropped it outright, and Presidio finds it only
+  because its DE_ADDRESS recognizer is these same regexes.
 - **The item table.** An invoice's body is a table of fee numbers, service texts and
   amounts; the PII sits *above* it (recipient, patient block) or *below* it (imprint,
   bank details). So the classifier — the one detector with no anchor of its own — does
@@ -695,8 +724,6 @@ is unreliable on standalone lines, the shared deterministic street / PLZ+city re
   photos before OCR.
 - **Presidio** (`presidio-analyzer`) — PII analysis, driven by
   a **spaCy `de_core_news_lg`** German NLP model plus custom recognizers.
-- **GLiNER** (`gliner`, model `urchade/gliner_multi_pii-v1`) — zero-shot NER; each line is
-  scored against a fixed label set (`person`, `address`, `email`, `iban`, `bic`).
 - **PyMuPDF** (`pymupdf`) — renders PDF pages to images at 200 dpi.
 - **Pillow** — draws the redaction rectangles.
 
@@ -705,8 +732,7 @@ is unreliable on standalone lines, the shared deterministic street / PLZ+city re
 | Model | Stored in | Used by |
 |---|---|---|
 | PaddleOCR + UVDoc weights (see table below) | `.paddle_cache/official_models/` (project, git-ignored) | every engine |
-| `de_core_news_lg` (spaCy German) | `.venv/lib/python3.13/site-packages/de_core_news_lg/` (a pip package, **not** a cache) | `native` / `onnx` engines |
-| `urchade/gliner_multi_pii-v1` (GLiNER) | `.gliner_cache/` (project, git-ignored) | `gliner` engine only |
+| `de_core_news_lg` (spaCy German) | `.venv/lib/python3.13/site-packages/de_core_news_lg/` (a pip package, **not** a cache) | every engine |
 
 The Paddle weights (~180 MB) live in **`.paddle_cache/`**; the code sets
 `PADDLE_PDX_CACHE_HOME` there automatically. On first run Paddle downloads them; if you
@@ -742,7 +768,7 @@ backend/            the whole Python package — pipeline, CLI and REST service
   config.py         config.toml schema + engine preset resolution
   rules.py          deterministic German patterns (salutation, street, birthdate)
   regions.py        header/footer bands and the sender column (not line-derived)
-  codes.py          QR / DataMatrix boxes — the only source that reads pixels
+  codes.py          barcode boxes (QR/DataMatrix/1D) — the only pixel-reading source
   ocr/ classifiers/ the two swappable axes behind an engine preset
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
 tests/              fast tests stub the models; `-m slow` runs the real ones
@@ -757,7 +783,39 @@ uv sync --group dev           # + pytest, httpx
 
 uv run pytest -m 'not slow'   # fast: no ML models load (validation, rules, composition)
 uv run pytest -m slow         # end-to-end on example/GOÄ_Rechnung1.pdf (loads real models)
+uv run pytest --regression    # + the OCR-replay snapshots (loads the classifier only)
 ```
+
+### Regression testing on frozen OCR
+
+OCR is the slow half of the pipeline and not the half that changes when a rule is
+tuned, so it is run **once** per sample into a `<stem>_ocr.txt` and everything
+downstream — rules, labeled values, item table, name memory, classifier, region
+bands — is replayed against that text alone. A corpus replays in seconds, and the
+snapshot beside it (`<stem>_ocr.expected.txt`) holds **one asserted verdict per OCR
+line**, both `REDACT` and `keep`, so over-redaction is caught as readily as a miss.
+
+```bash
+uv run python -m backend.replay dump example/GOÄ_Rechnung1.png --out-dir tests/regression
+uv run python -m backend.replay check tests/regression            # exit 1 on a diff
+uv run python -m backend.replay check tests/regression --update   # rewrite the snapshots
+uv run python -m backend.replay check <dir> --ignore-text         # after scrubbing PII
+```
+
+A verdict is *effective*: a line counts as redacted when any box covers ≥90% of it
+(a band drawn over a line the per-line pass kept still redacts it) and as kept at
+≤10%; the gap between is reported as `PARTIAL` and matches neither expectation.
+Snapshots are generated, and a dump goes stale if OCR starts reading the page
+differently — re-run `dump` after changing `det_box_thresh` or the unwarp step.
+
+A dump is a document's full text, and the snapshot beside it repeats every line,
+so both hold whatever the original did. A real invoice is made committable by
+**scrubbing** the dump — every real name, address and identifier replaced by a
+placeholder of the same shape, keeping the layout the geometry passes are tuned
+on. `--ignore-text` checks that edit: it compares geometry, verdicts and regions
+while letting the text differ, so it answers whether the placeholder still
+redacts where the real value did. Then `--update` rewrites the snapshot from the
+scrubbed text — without that second step the snapshot still carries the original.
 
 Adding or removing a dependency? Update [`LICENSE.md`](LICENSE.md) in the same
 change — it is the third-party license inventory, and it determines the license of
@@ -775,12 +833,14 @@ the built image.
   no text-based rule can reach. Tune `[redaction.regions]` or set
   `redact_regions = false` (or `PII_REDACT_REGIONS=false`) if it costs you more
   than it buys.
-- **Code detection is tuned for recall, so it can over-cover.** A candidate only has
-  to be *located*, not decoded, which is what catches a Girocode too coarse to scan;
-  the size and squareness guards are all that stand between that and a dense block of
-  table rules. If a page loses a square graphic it should have kept, set
-  `redact_codes = false` (or `PII_REDACT_CODES=false`). Note also that only QR, Micro
-  QR and DataMatrix are covered — 1D barcodes and PDF417 are not.
+- **Matrix-code detection is tuned for recall, so it can over-cover.** A candidate
+  only has to be *located*, not decoded, which is what catches a Girocode too coarse
+  to scan; the size and squareness guards are all that stand between that and a dense
+  block of table rules. If a page loses a square graphic it should have kept, set
+  `redact_codes = false` (or `PII_REDACT_CODES=false`). The linear pass has the
+  opposite failure mode — it requires a decode, so a barcode too damaged or too
+  coarse to read is **not** covered. Note also that PDF417, Aztec and MaxiCode are
+  not looked for at all.
 - **Redaction is destructive drawing, not text removal**, which is what makes it safe:
   output pages are rasterized images with filled rectangles, so there is no selectable
   text layer left underneath to recover. The trade-off is that redacted PDFs are images
