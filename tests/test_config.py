@@ -23,8 +23,8 @@ def test_missing_file_yields_defaults(tmp_path):
 
 
 def test_partial_file_fills_defaults(tmp_path):
-    cfg = load_config(_write(tmp_path, '[engine]\nname = "gliner"\n'))
-    assert cfg.engine.name == "gliner"
+    cfg = load_config(_write(tmp_path, '[engine]\nname = "onnx"\n'))
+    assert cfg.engine.name == "onnx"
     assert cfg.redaction.padding == 2  # default preserved
 
 
@@ -33,7 +33,6 @@ def test_partial_file_fills_defaults(tmp_path):
     [
         ("native", ("paddle", "presidio")),
         ("onnx", ("onnxruntime", "presidio")),
-        ("gliner", ("paddle", "gliner")),
     ],
 )
 def test_preset_resolution(name, expected):
@@ -50,12 +49,12 @@ def test_det_box_thresh_default_is_below_paddles_own(tmp_path):
     assert cfg.engine.det_box_thresh == 0.35
 
 
-def test_explicit_override_unlocks_fourth_combo():
+def test_explicit_override_beats_the_preset():
     from backend.config import EngineConfig
 
-    assert EngineConfig(name="gliner", ocr_backend="onnxruntime").resolve() == (
-        "onnxruntime",
-        "gliner",
+    assert EngineConfig(name="onnx", ocr_backend="paddle").resolve() == (
+        "paddle",
+        "presidio",
     )
 
 

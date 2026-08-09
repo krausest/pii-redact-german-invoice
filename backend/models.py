@@ -9,10 +9,10 @@ from dataclasses import dataclass
 class Line:
     """One OCR text line with its axis-aligned pixel box.
 
-    Unifies the two shapes the old scripts used (Presidio's dict of parallel
-    lists and gliner's list of dicts) so every OCR backend and classifier speaks
-    the same language. ``conf`` is the recognition confidence on Presidio's
-    0-100 scale (``None`` when a backend does not expose it)."""
+    One shape for every OCR backend and classifier, rather than each speaking the
+    dict-of-parallel-lists or list-of-dicts its own library returns. ``conf`` is
+    the recognition confidence on a 0-100 scale (``None`` when a backend does not
+    expose it)."""
 
     text: str
     left: int

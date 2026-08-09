@@ -6,10 +6,10 @@ still yields a usable config — but an *unknown* key is an error, on the same
 principle as a typo'd query parameter: silently ignoring it looks like it worked.
 
 The ``[engine]`` section is expressed as a friendly preset name (``native`` |
-``onnx`` | ``gliner``) that resolves to a concrete (OCR backend, classifier) pair;
-advanced users can override either axis explicitly to unlock combinations the
-presets don't name. ``native`` and ``onnx`` differ only in the OCR inference
-engine — both classify with Presidio.
+``onnx``) that resolves to a concrete (OCR backend, classifier) pair; either axis
+can be overridden explicitly. The two presets differ only in the OCR inference
+engine — Presidio is the only classifier, so the pair is really "which OCR" plus
+a slot kept open for a second classifier and published by ``/health``.
 
 The models are frozen, so they are safe to share across threads and workers.
 """
@@ -23,15 +23,14 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-EnginePreset = Literal["native", "onnx", "gliner"]
+EnginePreset = Literal["native", "onnx"]
 OCRBackend = Literal["paddle", "onnxruntime"]
-ClassifierName = Literal["presidio", "gliner"]
+ClassifierName = Literal["presidio"]
 
 # preset name -> (ocr_backend, classifier)
 ENGINE_PRESETS: dict[str, tuple[OCRBackend, ClassifierName]] = {
     "native": ("paddle", "presidio"),
     "onnx": ("onnxruntime", "presidio"),
-    "gliner": ("paddle", "gliner"),
 }
 
 # Frozen (immutable, hashable) and strict about unknown keys.

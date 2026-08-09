@@ -73,9 +73,9 @@ class RedactionPipeline:
 
     def read_lines(self, image: Image.Image) -> list[Line]:
         """The OCR lines of ``image`` — the text ``compute_boxes`` classifies.
-        Exposed for the ground-truth harness, which needs the recognized text
-        alongside the boxes; pass the result back via ``lines=`` to avoid a
-        second OCR pass."""
+        Exposed for :mod:`backend.replay`, which freezes that text to a file and
+        replays every later stage against it; pass lines back via ``lines=`` to
+        skip a second OCR pass."""
         return self._ocr.lines(image)
 
     def compute_boxes(

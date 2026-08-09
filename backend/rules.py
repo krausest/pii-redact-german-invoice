@@ -1,12 +1,14 @@
 """Deterministic redaction rules the NER/NLP stack misses.
 
-These regexes and the spatial birthdate matcher are shared by every classifier:
-they are applied uniformly in :func:`backend.pipeline.RedactionPipeline.compute_boxes`
-*before* the model-based classifier runs. Applying the German street / ZIP+city
-patterns uniformly is behavior-preserving for the Presidio path — its DE_ADDRESS
-recognizer uses the same regexes at score 0.7/0.6 with threshold 0.4, so it
-already always fires on those matches; the GLiNER path relied on them explicitly
-because its zero-shot "address" label is unreliable.
+These regexes and the spatial birthdate matcher are applied uniformly in
+:func:`backend.pipeline.RedactionPipeline.compute_boxes` *before* the model-based
+classifier runs, so a box exists whether or not the model saw anything. Running
+the German street / ZIP+city patterns here is behavior-preserving for Presidio —
+its DE_ADDRESS recognizer uses the same regexes at score 0.7/0.6 against a 0.4
+threshold, so it already always fires on those matches — but it is what makes the
+address block's coverage a property of *these* patterns rather than of whichever
+model is plugged in: a zero-shot "address" label drops the standalone ZIP+city
+line of a recipient block, and that would leave it visible.
 
 The sender-identity patterns (``ORG_LEGAL`` / ``CONTACT`` / ``IMPRINT``) are the
 one group that *adds* detections rather than restating what a classifier already

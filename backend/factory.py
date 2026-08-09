@@ -26,33 +26,24 @@ def _build_classifier(classifier: str, score_threshold: float):
         from backend.classifiers.presidio import PresidioClassifier
 
         return PresidioClassifier(score_threshold=score_threshold)
-    if classifier == "gliner":
-        try:
-            from backend.classifiers.gliner import GlinerClassifier
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(
-                "The 'gliner' engine requires the optional 'gliner' dependency "
-                "(it pulls torch). Install it with:  uv sync --extra gliner"
-            ) from e
-
-        return GlinerClassifier()
     raise ValueError(f"unknown classifier {classifier!r}")
 
 
 def build_classifier(config: Config) -> Classifier:
-    """The classifier on its own, without the OCR backend beside it.
+    """The classifier half of the engine, without the OCR backend beside it.
 
-    :mod:`backend.replay` is why this is public: replaying frozen OCR is exactly
-    the case where the OCR model load must *not* happen, and the engine pair still
-    has to be resolved from config so the snapshots record which classifier ran."""
+    :mod:`backend.replay` needs exactly this: it feeds the pipeline frozen OCR
+    lines, so building the OCR backend would only cost model loads nothing calls.
+    Going through here rather than importing the class keeps one place resolving
+    a classifier *name*."""
     _, classifier_name = config.engine.resolve()
     return _build_classifier(classifier_name, config.redaction.score_threshold)
 
 
 def build_pipeline(config: Config) -> RedactionPipeline:
-    ocr_backend, classifier_name = config.engine.resolve()
+    ocr_backend, _ = config.engine.resolve()
     ocr = _build_ocr(ocr_backend, config.engine.det_box_thresh)
-    classifier = _build_classifier(classifier_name, config.redaction.score_threshold)
+    classifier = build_classifier(config)
 
     def unwarper_factory():
         from backend.unwarp import DocUnwarper

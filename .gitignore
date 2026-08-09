@@ -17,7 +17,6 @@ TODO.md
 
 # Model caches (downloaded weights, ~180 MB+)
 .paddle_cache/
-.gliner_cache/
 
 # Redaction outputs
 output/
@@ -28,6 +27,7 @@ output/
 tests/Arztrechnungen/
 Arztrechnung/
 Arztrechnung2/
+tests/Arztrechnungen/
 
 # Frontend build + deps
 frontend/node_modules/
