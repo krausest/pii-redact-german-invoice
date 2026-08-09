@@ -23,6 +23,7 @@ def test_defaults_come_from_config():
     assert opts.pdf_dpi == 150
     assert opts.jpeg_quality == 80
     assert opts.json_output is False
+    assert opts.debug is False
 
     assert assemble({}, config).dpi == 150
     assert assemble({}, config).format == "pdf"
@@ -57,6 +58,15 @@ def test_hyphenated_wire_names():
 def test_redact_rejects(raw):
     with pytest.raises(ValueError):
         redact(raw)
+
+
+def test_debug_needs_json_output():
+    # There is nowhere to put a trace in a file response, so the combination is
+    # an error rather than a silently ignored option.
+    with pytest.raises(ValueError, match="debug=true requires json-output=true"):
+        redact({"debug": "true"})
+    assert redact({"debug": "true", "json-output": "true"}).debug is True
+    assert redact({"debug": "false"}).debug is False  # false alone is fine
 
 
 @pytest.mark.parametrize(

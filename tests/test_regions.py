@@ -91,6 +91,57 @@ def test_footer_band_height_is_capped():
     assert _boxes([_line("HRB 1234", top=700, height=250)]) == [Box(0, 850, PAGE_W, PAGE_H)]
 
 
+# -- a band spans its sender block, not the whole window --------------------- #
+# The window is where a band's anchors are *looked for*. Its height comes from the
+# block they seed, because the bottom tenth of a full page holds the last rows of
+# the item table as often as it holds an imprint.
+FOOTER_H = 1407  # a real page, whose bottom tenth starts at y=1266
+IMPRINT = _line("Rm GmbH-Sder Musterca HRB0000-Musterer", left=129, top=1383, width=839, height=24)
+
+
+def test_footer_band_stops_above_the_item_table():
+    # The reported page's geometry, verbatim (the imprint text pseudonymized):
+    # four table cells dip past the window edge and
+    # the imprint sits below them. Taking the topmost line in the window blackened
+    # the table row — including the "4715" fee number. The cells start at
+    # x=219/288/744/870 against the imprint's x=129, so they are not in its block.
+    lines = [
+        _line("4715", left=219, top=1339, width=42, height=19),
+        _line("Pilzkultur, einfach, je Naehrmedium", left=288, top=1337, width=384, height=22),
+        _line("1,150 1", left=744, top=1338, width=67, height=21),
+        _line("6,70", left=870, top=1339, width=40, height=22),
+        IMPRINT,
+    ]
+    assert _boxes(lines, height=FOOTER_H) == [Box(0, 1383, PAGE_W, FOOTER_H)]
+
+
+def test_footer_band_covers_a_non_anchor_line_of_its_block():
+    # The imprint runs to two lines and only the lower one carries an anchor of its
+    # own. The upper is left-aligned and touching, so the block — and the band —
+    # reaches it: growth, not "is this line an anchor", decides the extent.
+    lines = [_line("Amtsgericht Musterstadt", left=129, top=1355, width=839, height=24), IMPRINT]
+    assert _boxes(lines, height=FOOTER_H) == [Box(0, 1355, PAGE_W, FOOTER_H)]
+
+
+def test_footer_band_leaves_a_misaligned_non_anchor_line_alone():
+    # The stated trade: a centred line above the imprint is neither an anchor nor in
+    # the imprint's block, so it stays readable. It is not PII — and the rule that
+    # would cover it is the one that blackens the item table.
+    lines = [_line("Vielen Dank fuer Ihren Besuch", left=400, top=1355, width=200, height=24), IMPRINT]
+    assert _boxes(lines, height=FOOTER_H) == [Box(0, 1383, PAGE_W, FOOTER_H)]
+
+
+def test_header_band_stops_above_the_item_table():
+    # The mirror case. The table's first row pokes into the top tenth from below;
+    # the letterhead above it must not be stretched down over the row.
+    lines = [
+        _line("Muster GmbH", left=60, top=20, width=300),
+        _line("Beh.-Dat.", left=219, top=90, width=42, height=19),
+        _line("Geb.Nr. Beschreibung Faktor EUR", left=288, top=90, width=384, height=19),
+    ]
+    assert _boxes(lines) == [Box(0, 0, PAGE_W, 40)]
+
+
 def test_zero_fraction_disables_a_band():
     p = replace(BANDS, header_frac=0.0)
     lines = [_line("Muster GmbH", top=20), _line("HRB 1234", top=950)]
@@ -187,7 +238,7 @@ def test_block_without_an_anchor_is_left_alone():
     # A bare phone number matches no anchor rule; the per-line pass has already
     # blacked it, so the region pass adds nothing by covering it again.
     lines = [
-        _line("04131 2637-510", left=600, top=200),
+        _line("01234 0000-000", left=600, top=200),
         _line("Musterhausen", left=600, top=222),
     ]
     assert _boxes(lines, COLUMN) == []
@@ -233,3 +284,55 @@ def test_padding_expands_the_sender_box_only():
     p = replace(COLUMN, padding=3)
     lines = [_line("Praxis Dr. Muster", left=600, top=200)]
     assert _boxes(lines, p) == [Box(597, 197, 703, 223)]
+
+
+# -- recipient block ---------------------------------------------------------- #
+# The sender column's machinery pointed at the other window: seeded on street /
+# ZIP+city lines left of column_x_frac, between the two recipient fractions.
+RECIPIENT = replace(COLUMN, recipient_y_min_frac=0.05, recipient_y_max_frac=0.45)
+
+
+def test_recipient_block_covers_the_lines_between_its_anchors():
+    # "Herrn", the name and the c/o line match nothing per-line (NER drops the
+    # single token); the street and ZIP+city anchors grow the block over them.
+    lines = [
+        _line("Herrn", left=100, top=200, width=60),
+        _line("Mustermann", left=100, top=222),
+        _line("c/o WG Beispiel", left=100, top=244, width=120),
+        _line("Musterstrasse 23", left=100, top=266),
+        _line("12345 Musterstadt", left=100, top=288),
+    ]
+    assert _boxes(lines, RECIPIENT) == [Box(100, 200, 220, 308)]
+
+
+def test_recipient_pass_disabled_by_default_params():
+    lines = [_line("Musterstrasse 23", left=100, top=266)]
+    assert _boxes(lines, COLUMN) == []  # empty window = off
+
+
+def test_recipient_seed_must_be_left_of_the_sender_column():
+    # A street line in the right half is the sender's — the sender column owns it.
+    assert _boxes([_line("Musterstrasse 23", left=600, top=600)], RECIPIENT) == []
+
+
+def test_recipient_seed_must_be_inside_the_vertical_window():
+    # A street inside the footer imprint (bottom of the page) is not seeded here.
+    assert _boxes([_line("Musterstrasse 23", left=100, top=900)], RECIPIENT) == []
+
+
+def test_recipient_salutation_alone_does_not_seed():
+    # A greeting over a left-aligned paragraph must not pull the body text in;
+    # only street / ZIP+city seed, and the greeting line is per-line redacted.
+    lines = [
+        _line("Sehr geehrter Herr Mustermann,", left=100, top=300, width=250),
+        _line("vielen Dank fuer Ihren Besuch in unserer", left=100, top=322, width=300),
+    ]
+    assert _boxes(lines, RECIPIENT) == []
+
+
+def test_recipient_street_and_city_are_one_block():
+    lines = [
+        _line("Musterstrasse 23", left=100, top=266),
+        _line("12345 Musterstadt", left=100, top=288),
+    ]
+    assert _boxes(lines, RECIPIENT) == [Box(100, 266, 200, 308)]

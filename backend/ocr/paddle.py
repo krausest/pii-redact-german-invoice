@@ -41,6 +41,7 @@ class PaddleOCRBackend:
         lang: str = "german",
         engine: str = "paddle",
         cpu_threads: int = 10,
+        det_box_thresh: float = 0.5,
     ) -> None:
         from paddleocr import PaddleOCR
 
@@ -49,6 +50,16 @@ class PaddleOCRBackend:
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
+            # Below PaddleOCR's own 0.6, and the reason is a shape, not a
+            # contrast: the threshold applies to the *mean* detector score over
+            # the box, so one line of 6pt type running the full width of the
+            # page averages lower than the 11pt table above it even though its
+            # ink is just as dark. The imprint footer of a photographed A4 page
+            # measured 0.5..0.6 and so was not detected *at all* — no box, no
+            # text, and therefore no footer band either, since the band needs a
+            # sender anchor to exist. 0.5 finds those three lines and nothing
+            # else: on the sample pages it changes no other box.
+            text_det_box_thresh=det_box_thresh,
         )
         if engine == "onnxruntime":
             kwargs.update(engine="onnxruntime", cpu_threads=cpu_threads)

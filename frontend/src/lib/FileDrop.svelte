@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './icons/Icon.svelte'
-  import { ACCEPT_ATTR, pickUpload } from './upload'
+  import { t } from './i18n.svelte'
+  import { ACCEPT_ATTR, pickUpload, type UploadError } from './upload'
 
   let {
     onselect,
@@ -15,11 +16,24 @@
     variant?: 'panel' | 'inline'
   } = $props()
 
+  const m = $derived(t())
+
   let dragging = $state(false)
   let inputEl: HTMLInputElement | undefined
 
+  const ERROR_MESSAGES: Record<UploadError, () => string> = {
+    'unsupported-type': () => m.errors.unsupportedType,
+    'too-large': () => m.errors.tooLarge,
+  }
+
   function pick(file: File | undefined | null) {
-    pickUpload(file, { disabled, onSelect: onselect, onError: onerror })
+    // The validator reports a reason; the sentence is picked here, so the parent
+    // keeps receiving a ready-to-render message.
+    pickUpload(file, {
+      disabled,
+      onSelect: onselect,
+      onError: (err) => onerror?.(ERROR_MESSAGES[err]()),
+    })
   }
 
   function onDrop(e: DragEvent) {
@@ -48,7 +62,7 @@
   role="button"
   tabindex="0"
   aria-disabled={disabled}
-  title={variant === 'inline' ? 'Upload a new file — click or drop' : undefined}
+  title={variant === 'inline' ? m.filedrop.inlineTitle : undefined}
   onclick={() => !disabled && inputEl?.click()}
   onkeydown={(e) => {
     if ((e.key === 'Enter' || e.key === ' ') && !disabled) {
@@ -65,13 +79,14 @@
     <span class="icon-wrap">
       <Icon name="upload" size={40} />
     </span>
-    <p><strong>Drag &amp; drop</strong> a PNG, JPEG, or PDF here</p>
-    <p class="hint">or click to choose a file</p>
+    <!-- Three parts, so each locale can put the emphasis where its grammar wants it. -->
+    <p>{m.filedrop.dropBefore}<strong>{m.filedrop.dropStrong}</strong>{m.filedrop.dropAfter}</p>
+    <p class="hint">{m.filedrop.orClick}</p>
   {:else}
     <span class="icon-wrap">
       <Icon name="upload" size={18} />
     </span>
-    New upload
+    {m.filedrop.newUpload}
   {/if}
 </div>
 

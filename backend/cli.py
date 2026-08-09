@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from backend.config import load_config
 from backend.factory import build_pipeline
@@ -100,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="quality of every JPEG produced, 1-100 (default: redaction.jpeg_quality)",
     )
+    opts.add_argument(
+        "--debug",
+        action="store_true",
+        default=None,
+        help="include the per-line detection trace in the report (needs --json-output)",
+    )
     return parser
 
 
@@ -156,7 +162,12 @@ def main(argv: list[str] | None = None) -> int:
                 redaction = run_redaction(pipeline, f.read_bytes(), opts, config)
             else:
                 with Image.open(f) as src:
-                    redaction = run_redaction(pipeline, src, opts, config)
+                    # A phone photo stores its pixels sideways and an EXIF tag saying
+                    # so; PIL applies neither. Straighten at the boundary so the raster
+                    # is the only truth from here on — OCR sees an upright page, and
+                    # the output (JPEG, written without EXIF) needs no tag to display
+                    # the way the input did.
+                    redaction = run_redaction(pipeline, ImageOps.exif_transpose(src), opts, config)
             # The same bytes POST /api/redact would return, so the extension is the
             # one that belongs to the media type service chose — never re-derived.
             media_type, body = produce_output(redaction, opts)

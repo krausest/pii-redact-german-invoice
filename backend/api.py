@@ -36,7 +36,7 @@ import anyio
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from backend.config import Config, load_config
 from backend.factory import build_pipeline, resolve_engine
@@ -64,6 +64,7 @@ PDF bytes, not multipart — and pass options as query parameters:
 | `json-output` | bool | `false` | return the JSON report, which embeds the file, instead of the bare file |
 | `pdf-dpi` | int | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `jpeg-quality` | 1-100 | `redaction.jpeg_quality` | quality of every JPEG produced |
+| `debug` | bool | `false` | add the per-line detection trace to the report; requires `json-output=true` |
 
 By default you get the file back, the same kind you sent: a PDF for a PDF, a JPEG
 for any image. With `json-output=true` you get
@@ -73,6 +74,12 @@ is **not** redacted (it is the page for review), and `redacted` is the finished
 document: the very bytes this endpoint would have returned without `json-output`,
 `application/pdf` for PDF input and `image/jpeg` for an image. Ask for the report
 when you need to know *what* was found; the file alone does not say.
+
+With `debug=true` the report carries one more key, `debug`: the detection trace as
+plain text — every OCR line with its pixel box, each classifier match and the
+verdict that produced (or did not produce) a box. It is what diagnoses a wrong
+box without the file. `debug=true` alone is a `400`: the file response carries no
+metadata, so there would be nowhere to put it.
 """
 
 ASSEMBLE_DESCRIPTION = """
@@ -189,7 +196,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise ApiError(400, "request body is not a valid image")
         if fmt not in MEDIA_TYPE_BY_FORMAT:
             raise ApiError(415, f"unsupported image format: {fmt}")
-        return image.convert("RGB")
+        # Apply the EXIF orientation before anything else sees the page: a phone
+        # photo stores its pixels sideways, and neither PIL nor our JPEG output
+        # carries the tag. Straightening here keeps the raster the only truth, so
+        # the boxes in the report are in the coordinate space of an upright page.
+        return ImageOps.exif_transpose(image).convert("RGB")
 
     def _options(cls, request: Request, config: Config):
         try:

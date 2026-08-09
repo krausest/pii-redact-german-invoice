@@ -13,19 +13,24 @@ them to run.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw
 
 from backend.classifiers.base import Classifier
+from backend.codes import CodeParams, code_boxes
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
 from backend.regions import RegionParams, region_boxes
-from backend.rules import birthdate_indices, line_matches_static_rule
+from backend.rules import (
+    harvest_names,
+    item_table_indices,
+    labeled_value_indices,
+    line_matches_static_rule,
+    mentions_name,
+)
+from backend.trace import Trace
 from backend.unwarp import DocUnwarper
-
-logger = logging.getLogger(__name__)
 
 
 class RedactionPipeline:
@@ -39,6 +44,7 @@ class RedactionPipeline:
         unwarp_enabled: bool = True,
         unwarper_factory: Callable[[], DocUnwarper] | None = None,
         regions: RegionParams | None = None,
+        codes: CodeParams | None = None,
     ) -> None:
         self._ocr = ocr
         self._classifier = classifier
@@ -51,6 +57,8 @@ class RedactionPipeline:
         # both "no params" and "don't run it", so there is no second flag to
         # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
         self._regions = regions
+        # Same convention for the QR/DataMatrix pass, from `redaction.redact_codes`.
+        self._codes = codes
 
     # -- primitives -------------------------------------------------------- #
     def unwarp(self, image: Image.Image) -> Image.Image:
@@ -63,20 +71,59 @@ class RedactionPipeline:
             self._unwarper = self._unwarper_factory()
         return self._unwarper.unwarp(image.convert("RGB"))
 
-    def compute_boxes(self, image: Image.Image) -> list[Box]:
+    def read_lines(self, image: Image.Image) -> list[Line]:
+        """The OCR lines of ``image`` — the text ``compute_boxes`` classifies.
+        Exposed for the ground-truth harness, which needs the recognized text
+        alongside the boxes; pass the result back via ``lines=`` to avoid a
+        second OCR pass."""
+        return self._ocr.lines(image)
+
+    def compute_boxes(
+        self,
+        image: Image.Image,
+        lines: list[Line] | None = None,
+        known_names: set[str] | None = None,
+        trace: Trace | None = None,
+    ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
-        flagged OCR line, plus — when ``regions`` was configured — the header /
-        footer / sender-column boxes, which are the only ones not tied to a line."""
-        lines: list[Line] = self._ocr.lines(image)
-        birth_idx = birthdate_indices(lines)
+        flagged OCR line, plus — when configured — the header / footer /
+        sender-column boxes and the QR / DataMatrix boxes, which are the ones not
+        tied to a line.
+
+        ``lines`` skips the OCR call when the caller already holds
+        :meth:`read_lines` output for this exact ``image``.
+
+        ``known_names`` is the name-memory accumulator: names harvested from this
+        page are added *to the passed set*, so a caller looping over a document's
+        pages shares one set and a surname labeled on page 1 is redacted bare on
+        page 2. The carry is forward-only — a name first seen on page 2 does not
+        re-redact page 1 — which suffices because the labeled occurrence leads.
+        ``None`` keeps the memory page-local.
+
+        ``trace`` collects the per-line commentary — why each box exists — for a
+        caller that was asked for it (``?debug=true``). Omitting it still logs
+        everything at DEBUG; a :class:`Trace` that collects nothing is the same
+        code path, not a second one."""
+        if lines is None:
+            lines = self._ocr.lines(image)
+        trace = trace or Trace()
+        labeled_idx = labeled_value_indices(lines)
+        # The item table: the deterministic rules and the name memory run there
+        # as everywhere else, the classifier does not (see item_table_indices).
+        table_idx = item_table_indices(lines)
+        if table_idx:
+            trace.add("item table: classifier off for %d line(s)", len(table_idx))
+        names = known_names if known_names is not None else set()
+        for line in lines:
+            names |= harvest_names(line.text)
         pad = self._padding
         boxes: list[Box] = []
         for i, line in enumerate(lines):
             if not line.text.strip():
                 continue
-            # DEBUG: every OCR line with its pixel box, then any classifier
-            # matches (indented, logged by the classifier), then the verdict.
-            logger.debug(
+            # Every OCR line with its pixel box, then any classifier matches
+            # (indented, added by the classifier), then the verdict.
+            trace.add(
                 "line @(%d,%d %dx%d conf=%s): %r",
                 line.left,
                 line.top,
@@ -84,18 +131,23 @@ class RedactionPipeline:
                 line.height,
                 line.conf,
                 line.text,
-            ) 
+            )
             reason = (
-                "birthdate"
-                if i in birth_idx
+                "labeled-value"
+                if i in labeled_idx
                 else "static-rule"
                 if line_matches_static_rule(line.text)
+                else "name-memory"
+                if mentions_name(line.text, names)
                 else "classifier"
-                if self._classifier.is_pii(line.text)
+                if i not in table_idx and self._classifier.is_pii(line.text, trace)
                 else None
             )
+            if reason is None and i in table_idx:
+                # Why no classifier verdict was reported for this line.
+                trace.add("    -> keep (item table)")
             if reason is not None:
-                logger.debug("    -> REDACT (%s)", reason)
+                trace.add("    -> REDACT (%s)", reason)
                 boxes.append(
                     Box(
                         line.left - pad,
@@ -109,7 +161,13 @@ class RedactionPipeline:
             # including the pixels OCR returned nothing for (a letterhead logo),
             # and `apply_boxes` is happy to draw overlapping rectangles.
             for box in region_boxes(lines, image.width, image.height, self._regions):
-                logger.debug("region -> REDACT %s", box.as_list())
+                trace.add("region -> REDACT %s", box.as_list())
+                boxes.append(box)
+        if self._codes is not None:
+            # The only source that reads pixels rather than `lines`: a QR code is a
+            # graphic, so OCR never reports it, yet it is PII in the clear.
+            for box in code_boxes(image, self._codes):
+                trace.add("code -> REDACT %s", box.as_list())
                 boxes.append(box)
         return boxes
 

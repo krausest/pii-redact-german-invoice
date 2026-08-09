@@ -119,6 +119,22 @@ def test_bad_value_is_a_usage_error_reported_like_the_api(run_cli, tmp_path, cap
     assert not list(tmp_path.glob("*_redacted*"))  # nothing processed
 
 
+def test_debug_without_json_output_is_a_usage_error(run_cli, tmp_path, capsys):
+    # The same rule and the same wording as the endpoint's 400 — the flags *are*
+    # the query parameters, including what they refuse.
+    write_png(tmp_path)
+    assert run_cli(["--debug", str(tmp_path)]) == 2
+    assert "debug=true requires json-output=true" in capsys.readouterr().err
+    assert not list(tmp_path.glob("*_redacted*"))
+
+
+def test_debug_writes_the_trace_into_the_report(run_cli, tmp_path):
+    write_png(tmp_path)
+    assert run_cli(["--debug", "--json-output", str(tmp_path)]) == 0
+    report = json.loads((tmp_path / "page_redacted.json").read_text())
+    assert report["debug"] == "fake pipeline: 1 box(es)"
+
+
 def test_unknown_flag_is_rejected_by_argparse(run_cli, tmp_path):
     write_png(tmp_path)
     with pytest.raises(SystemExit):

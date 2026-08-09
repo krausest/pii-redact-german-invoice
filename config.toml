@@ -6,6 +6,11 @@ name = "onnx"          # native | onnx | gliner
 # Advanced: override either axis to unlock combinations the presets don't name.
 # ocr_backend = "paddle"   # paddle | onnxruntime
 # classifier = "presidio"  # presidio | gliner
+# Minimum mean detector score for a text box; PaddleOCR's own default is 0.6.
+# Because it is a mean over the box, a full-width line of small type dilutes it —
+# an imprint footer scored just under 0.6 and was not detected at all. Raise it if
+# background texture is being read as text.
+det_box_thresh = 0.5
 
 [redaction]
 fill = [0, 0, 0]           # black
@@ -16,22 +21,39 @@ pdf_dpi = 200              # rasterization DPI for uploaded PDFs (default for ?p
 max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
 redact_regions = true      # also blacken the letterhead/footer bands and the sender column
+redact_codes = true        # also blacken QR codes and DataMatrix codes
+# A payment QR (Girocode/EPC) holds IBAN, BIC and the account holder's name in plain
+# text, so leaving one readable undoes the redaction — anyone can scan the page. The
+# detected box already lands on the symbol edge (within ~1% of its width, even
+# blurred or downscaled); the margin below is headroom on top of that, which also
+# takes in the quiet zone. It costs blank paper, since a code sits in whitespace.
+code_margin_frac = 0.08    # grow each box by this fraction of its longer side
 
 # Geometry of the region pass, as fractions of the page. A band spans the full page
-# width (that is what covers a logo) but is only as tall as the text it found, and
-# is drawn only when that text names a sender — so a continuation page whose table
-# starts at the top edge keeps its table. The two fractions below say how far in
-# from the edge to look, not how tall the band is: widening one finds more
-# letterhead, it does not blacken more paper. Set a fraction to 0 to drop it.
+# width (that is what covers a logo) but is only as tall as the sender block it
+# found, and is drawn only when the text in the window names a sender — so a
+# continuation page whose table starts at the top edge keeps its table, and so does
+# a full page whose last table rows reach into the footer window. The two fractions
+# below say how far in from the edge to look for that sender, not how tall the band
+# is: widening one finds more letterhead, it does not blacken more paper. Set a
+# fraction to 0 to drop it.
 [redaction.regions]
 header_frac = 0.12         # look for letterhead lines this far down the page
 footer_frac = 0.10         # look for imprint lines this far up from the bottom
 column_x_frac = 0.50       # sender column starts this far across the page
 column_y_frac = 0.50       # ...and is only seeded above this line
 # Two lines join the same sender block only if BOTH hold, in units of the smaller
-# line's height: near-touching vertically, and sharing a left edge.
+# line's height: near-touching vertically, and sharing a left edge. This is what
+# sizes the bands as well — it is what separates an imprint line from the table row
+# above it.
 vgap_factor = 0.5          # vertical gap that still counts as touching
 align_factor = 0.4         # left-edge offset that still counts as aligned
+# The recipient address block: seeded on street / ZIP+city lines left of
+# column_x_frac inside this vertical window, then grown like the sender column —
+# covering the c/o and name lines between them that no per-line rule catches.
+# Set max <= min to disable.
+recipient_y_min_frac = 0.05
+recipient_y_max_frac = 0.45
 
 [api]
 max_upload_bytes = 31457280          # 30 MiB — covers PDF uploads + /api/assemble payloads

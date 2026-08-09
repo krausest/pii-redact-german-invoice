@@ -33,6 +33,7 @@ from backend.models import Box
 from backend.options import AssembleOptions, RedactOptions
 from backend.pdf import assemble_pdf, encode_jpeg, rasterize_pdf
 from backend.pipeline import RedactionPipeline
+from backend.trace import Trace
 
 # The image media types we accept on input. Output images are always JPEG.
 FORMAT_BY_MEDIA_TYPE = {"image/png": "PNG", "image/jpeg": "JPEG"}
@@ -76,10 +77,15 @@ class Redaction:
     PDF for a PDF, else a JPEG). Callers determine it when they read the input —
     from a content type, from a file suffix — and would otherwise each have to
     hand it back down to the renderer, where it could disagree with the pages.
+
+    ``debug`` is the detection trace when ``?debug=true`` asked for one, and
+    travels the same way and for the same reason: it is produced while the pages
+    are, and only the report knows what to do with it.
     """
 
     pages: list[PageResult]
     is_pdf: bool
+    debug: str | None = None
 
 
 def run_redaction(
@@ -106,19 +112,27 @@ def run_redaction(
     )
 
     results: list[PageResult] = []
+    # Name memory is per document: a surname the rules label on page 1 is
+    # redacted bare on every following page (see compute_boxes).
+    known_names: set[str] = set()
+    # One trace per document, for the same reason: read as one narrative, with
+    # the pages marked off inside it rather than split across N of them.
+    trace = Trace(collect=opts.debug)
     for index, page in enumerate(pages):
+        if len(pages) > 1:
+            trace.add("=== page %d ===", index)
         if opts.unwarp:
             image = pipeline.unwarp(page)
         else:
             # convert() copies even when the mode already matches, and a page is
             # ~12 MB at 200 dpi — only pay for it when there is a conversion to do.
             image = page if page.mode == "RGB" else page.convert("RGB")
-        boxes = pipeline.compute_boxes(image)
+        boxes = pipeline.compute_boxes(image, known_names=known_names, trace=trace)
         # apply_boxes fills in place, so redact a copy — `image` is the clean page
         # the boxes refer to, and callers may want both.
         redacted = pipeline.apply_boxes(image.copy(), boxes)
         results.append(PageResult(index=index, image=image, boxes=boxes, redacted=redacted))
-    return Redaction(pages=results, is_pdf=is_pdf)
+    return Redaction(pages=results, is_pdf=is_pdf, debug=trace.collected)
 
 
 def assemble(
@@ -167,8 +181,11 @@ def build_report(redaction: Redaction, opts: RedactOptions) -> dict[str, Any]:
 
     The report does not name the engine: that is fixed per process, so
     ``GET /health`` is where to read it.
+
+    ``debug`` appears only when it was asked for, so an ordinary report is
+    exactly what it always was.
     """
-    return {
+    report: dict[str, Any] = {
         "unwarped": opts.unwarp,
         "pages": [
             {
@@ -182,6 +199,9 @@ def build_report(redaction: Redaction, opts: RedactOptions) -> dict[str, Any]:
         ],
         "redacted": _artifact(*render_document(redaction, opts)),
     }
+    if redaction.debug is not None:
+        report["debug"] = redaction.debug
+    return report
 
 
 def produce_output(redaction: Redaction, opts: RedactOptions) -> tuple[str, bytes]:

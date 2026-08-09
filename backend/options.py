@@ -89,14 +89,25 @@ class RedactOptions(_QueryModel):
     json_output: bool = False
     pdf_dpi: Dpi
     jpeg_quality: Quality
+    # Not config-backed: nothing sensible would turn the trace on for every
+    # request, so this one really is a class default, like `json_output`.
+    debug: bool = False
 
     @classmethod
     def from_query(cls, raw: Mapping[str, Any], config: Config) -> RedactOptions:
         red = config.redaction
-        return cls._validate(
+        opts = cls._validate(
             {"unwarp": red.unwarp, "pdf-dpi": red.pdf_dpi, "jpeg-quality": red.jpeg_quality},
             raw,
         )
+        # The file response carries no metadata at all — by design — so there is
+        # nowhere to put a trace, and accepting the combination would make the
+        # option a silent no-op. Checked here rather than in a `model_validator`
+        # because this string *is* the 400 detail, and pydantic would wrap it as
+        # "body: Value error, ...".
+        if opts.debug and not opts.json_output:
+            raise ValueError("debug=true requires json-output=true")
+        return opts
 
 
 class AssembleOptions(_QueryModel):

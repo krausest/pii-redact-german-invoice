@@ -11,6 +11,8 @@ import os
 import warnings
 from pathlib import Path
 
+from backend.trace import Trace
+
 # Run fully offline against the local cache — set before any HF import.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -47,11 +49,15 @@ class GlinerClassifier:
         self._model = GLiNER.from_pretrained(GLINER_MODEL).to(_best_device())
         self._threshold = threshold
 
-    def is_pii(self, text: str) -> bool:
+    def is_pii(self, text: str, trace: Trace) -> bool:
         for ent in self._model.predict_entities(text, PII_LABELS, threshold=self._threshold):
+            # Only the keys this method already relies on: the score is not in
+            # the trace because nothing here has ever read it.
+            trace.add("    match %s %r", ent["label"], ent["text"])
             # A person must be multi-word (mirrors the Presidio PERSON guard,
             # which drops single-token NER noise like "5.0016").
             if ent["label"] == "person" and " " not in ent["text"].strip():
+                trace.add("      Ignoring single-word person")
                 continue
             return True
         return False

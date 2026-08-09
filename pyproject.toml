@@ -9,6 +9,11 @@ dependencies = [
     "fastapi>=0.115.0",
     "gunicorn>=23.0.0",
     "onnxruntime>=1.19.0",
+    # backend.codes uses cv2's QR detector for the outline of a code too coarse to
+    # decode. paddleocr pulls it in anyway (paddlex pins ==4.10.0.84); declared
+    # because we import it directly. Must be the *contrib* build —
+    # QRCodeDetectorAruco is not in the base package.
+    "opencv-contrib-python>=4.10",
     "paddleocr>=3.7.0",
     "paddlepaddle>=3.3.1",
     "pillow>=12.3.0",
@@ -18,6 +23,10 @@ dependencies = [
     "pydantic>=2.9.0",
     "pymupdf>=1.28.0",
     "uvicorn[standard]>=0.34.0",
+    # QR + DataMatrix detection (backend.codes), and the encoder tests/test_codes.py
+    # builds its fixtures with. Apache-2.0 and a self-contained abi3 wheel, unlike
+    # pylibdmtx (LGPL libdmtx + an apt line in the Dockerfile).
+    "zxing-cpp>=3.1.0",
 ]
 
 [project.optional-dependencies]

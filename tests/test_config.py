@@ -42,6 +42,14 @@ def test_preset_resolution(name, expected):
     assert EngineConfig(name=name).resolve() == expected
 
 
+def test_det_box_thresh_default_is_below_paddles_own(tmp_path):
+    # Pinned: PaddleOCR defaults to 0.6, at which a full-width imprint footer in
+    # small type is not detected at all. Raising this back silently loses it.
+    assert Config().engine.det_box_thresh == 0.5
+    cfg = load_config(_write(tmp_path, "[engine]\ndet_box_thresh = 0.35\n"))
+    assert cfg.engine.det_box_thresh == 0.35
+
+
 def test_explicit_override_unlocks_fourth_combo():
     from backend.config import EngineConfig
 
@@ -66,7 +74,7 @@ def test_env_engine_overrides_file(tmp_path, monkeypatch):
     assert cfg.engine.resolve() == ("onnxruntime", "presidio")
 
 
-@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
+@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS", "PII_REDACT_CODES"])
 @pytest.mark.parametrize(
     "value,expected",
     [("false", False), ("0", False), ("off", False), ("true", True), ("1", True)],
@@ -94,7 +102,7 @@ def test_unset_env_leaves_the_file_alone(tmp_path, monkeypatch):
     assert load_config(path).redaction.unwarp is False
 
 
-@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
+@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS", "PII_REDACT_CODES"])
 def test_env_rejects_a_non_boolean(tmp_path, monkeypatch, env):
     monkeypatch.setenv(env, "maybe")
     with pytest.raises(ValueError) as e:
@@ -119,6 +127,7 @@ def test_api_values_parsed(tmp_path):
         ("[redaction]\npdf_dpi = 5\n", "pdf_dpi"),
         ('[engine]\nname = "nope"\n', "name"),  # not a preset
         ('[engine]\nclassifier = "nope"\n', "classifier"),  # not a classifier
+        ("[engine]\ndet_box_thresh = 1.5\n", "det_box_thresh"),  # not a probability
         ("[api]\nworkers = 0\n", "workers"),
         ("[redaction.regions]\nheader_frac = 0.9\n", "header_frac"),  # over the 0.5 cap
         ("[redaction.regions]\ngap_factor = 0\n", "gap_factor"),
@@ -144,6 +153,30 @@ def test_regions_section_is_independent_of_the_toggle(tmp_path):
     assert cfg.redaction.redact_regions is False
     assert cfg.redaction.regions.footer_frac == 0.2
     assert cfg.redaction.regions.header_frac == 0.12  # default preserved
+
+
+def test_recipient_window_defaults_and_override(tmp_path):
+    cfg = load_config(_write(tmp_path, ""))
+    assert cfg.redaction.regions.recipient_y_min_frac == 0.05
+    assert cfg.redaction.regions.recipient_y_max_frac == 0.45
+    # An empty window (max <= min) is the documented off switch and must parse.
+    body = "[redaction.regions]\nrecipient_y_max_frac = 0.0\n"
+    assert load_config(_write(tmp_path, body)).redaction.regions.recipient_y_max_frac == 0.0
+
+
+def test_code_margin_is_independent_of_the_toggle(tmp_path):
+    # Same bargain as the regions geometry above: the margin survives the pass
+    # being switched off.
+    body = "[redaction]\nredact_codes = false\ncode_margin_frac = 0.2\n"
+    cfg = load_config(_write(tmp_path, body))
+    assert cfg.redaction.redact_codes is False
+    assert cfg.redaction.code_margin_frac == 0.2
+
+
+def test_code_margin_frac_is_bounded(tmp_path):
+    with pytest.raises(ValueError) as e:
+        load_config(_write(tmp_path, "[redaction]\ncode_margin_frac = 0.9\n"))
+    assert "code_margin_frac" in str(e.value)
 
 
 def test_committed_config_toml_loads():

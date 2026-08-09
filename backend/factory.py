@@ -8,15 +8,16 @@ and the CLI builds one per run.
 
 from __future__ import annotations
 
+from backend.codes import CodeParams
 from backend.config import Config
 from backend.pipeline import RedactionPipeline
 from backend.regions import RegionParams
 
 
-def _build_ocr(ocr_backend: str):
+def _build_ocr(ocr_backend: str, det_box_thresh: float):
     from backend.ocr.paddle import PaddleOCRBackend
 
-    return PaddleOCRBackend(engine=ocr_backend)
+    return PaddleOCRBackend(engine=ocr_backend, det_box_thresh=det_box_thresh)
 
 
 def _build_classifier(classifier: str, score_threshold: float):
@@ -39,7 +40,7 @@ def _build_classifier(classifier: str, score_threshold: float):
 
 def build_pipeline(config: Config) -> RedactionPipeline:
     ocr_backend, classifier_name = config.engine.resolve()
-    ocr = _build_ocr(ocr_backend)
+    ocr = _build_ocr(ocr_backend, config.engine.det_box_thresh)
     classifier = _build_classifier(classifier_name, config.redaction.score_threshold)
 
     def unwarper_factory():
@@ -64,6 +65,15 @@ def build_pipeline(config: Config) -> RedactionPipeline:
                 padding=config.redaction.padding,
             )
             if config.redaction.redact_regions
+            else None
+        ),
+        # Same `None`-means-off convention as `regions`.
+        codes=(
+            CodeParams(
+                margin_frac=config.redaction.code_margin_frac,
+                padding=config.redaction.padding,
+            )
+            if config.redaction.redact_codes
             else None
         ),
     )

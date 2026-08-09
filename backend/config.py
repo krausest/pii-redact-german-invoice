@@ -45,6 +45,12 @@ class EngineConfig(BaseModel):
     # Explicit overrides; when None the preset named by ``name`` supplies them.
     ocr_backend: OCRBackend | None = None
     classifier: ClassifierName | None = None
+    # Minimum mean detector score for a text box (PaddleOCR's own default is 0.6).
+    # It is a *mean* over the box, so a long line of thin small type dilutes it:
+    # a full-width imprint footer scored just under 0.6 and was not detected at
+    # all — not too faint to read (its contrast matches the item table's), just
+    # too thin over too wide a box. See `backend/ocr/paddle.py`.
+    det_box_thresh: Annotated[float, Field(gt=0.0, le=1.0)] = 0.5
 
     def resolve(self) -> tuple[str, str]:
         """The concrete ``(ocr_backend, classifier)`` pair, applying any explicit
@@ -73,6 +79,12 @@ class RegionsConfig(BaseModel):
     # (only alignment cuts it), another's is perfectly aligned (only the gap does).
     vgap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 0.5
     align_factor: Annotated[float, Field(gt=0.0, le=2.0)] = 0.4
+    # The recipient address block is seeded left of `column_x_frac`, between
+    # these two fractions of the page height (the DIN 5008 address-field area,
+    # with slack for photographed pages). An empty window (max <= min) disables
+    # the pass — the same "geometry is the toggle" convention as the bands.
+    recipient_y_min_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.05
+    recipient_y_max_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.45
 
 
 class RedactionConfig(BaseModel):
@@ -93,6 +105,14 @@ class RedactionConfig(BaseModel):
     # is not a query parameter, so it is fixed per process like the engine.
     redact_regions: bool = True
     regions: RegionsConfig = Field(default_factory=RegionsConfig)
+    # Blacken QR and DataMatrix codes (backend.codes). A Girocode carries IBAN, BIC
+    # and the account holder's name, so a page that still scans is not redacted.
+    # Config only, like `redact_regions`. One knob does not earn a sub-section the
+    # way `[redaction.regions]`' six interacting fractions do; `code_margin_frac`
+    # grows each box by that fraction of its own longer side, as headroom over a
+    # detection that already lands on the symbol edge.
+    redact_codes: bool = True
+    code_margin_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.08
 
 
 class ApiConfig(BaseModel):
@@ -127,6 +147,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "PII_ENGINE": ("engine", "name"),
     "PII_UNWARP": ("redaction", "unwarp"),
     "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
+    "PII_REDACT_CODES": ("redaction", "redact_codes"),
 }
 
 

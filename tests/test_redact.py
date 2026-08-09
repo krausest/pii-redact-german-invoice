@@ -249,6 +249,36 @@ def test_page_images_in_the_report_are_not_redacted(png_bytes):
     assert "apply_boxes" in fake.calls  # the redacted copy was still produced
 
 
+# -- the debug trace --------------------------------------------------------- #
+def test_report_carries_the_trace_only_when_asked(png_bytes):
+    client, _ = build_client()
+    with client:
+        plain = client.post(f"{URL}?json-output=true", content=png_bytes, headers=PNG)
+        traced = client.post(f"{URL}?json-output=true&debug=true", content=png_bytes, headers=PNG)
+    # Absent, not empty: an ordinary report is exactly what it always was.
+    assert "debug" not in plain.json()
+    # FakePipeline stands in for detection, so this pins the plumbing, not the
+    # commentary — that is tests/test_pipeline.py's job.
+    assert traced.json()["debug"] == "fake pipeline: 1 box(es)"
+
+
+def test_debug_without_json_output_is_rejected(png_bytes):
+    client, _ = build_client()
+    with client:
+        r = client.post(f"{URL}?debug=true", content=png_bytes, headers=PNG)
+    assert r.status_code == 400
+    assert r.json()["detail"] == "debug=true requires json-output=true"
+
+
+def test_trace_marks_page_boundaries():
+    client, _ = build_client()
+    with client:
+        r = client.post(f"{URL}?json-output=true&debug=true", content=pdf_bytes(3), headers=PDF)
+    assert ["=== page 0 ===", "=== page 1 ===", "=== page 2 ==="] == [
+        ln for ln in r.json()["debug"].splitlines() if ln.startswith("===")
+    ]
+
+
 # -- option parsing ---------------------------------------------------------- #
 def test_typo_in_a_parameter_name_is_rejected(png_bytes):
     client, _ = build_client()

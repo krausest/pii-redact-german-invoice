@@ -12,6 +12,7 @@ at the time of writing; re-check on upgrade.
 | fastapi | MIT |
 | gunicorn | MIT |
 | onnxruntime | MIT |
+| opencv-contrib-python (also transitive: paddleocr/paddlex) | Apache-2.0 |
 | paddleocr | Apache-2.0 |
 | paddlepaddle | Apache-2.0 |
 | pillow | MIT-CMU |
@@ -19,6 +20,7 @@ at the time of writing; re-check on upgrade.
 | **pymupdf** | **GNU AGPL-3.0-or-later**, dual-licensed — a commercial license is available from Artifex Software |
 | requests (transitive: paddleocr/paddlex, presidio-analyzer/spacy) | Apache-2.0 |
 | uvicorn[standard] (incl. httptools, websockets, watchfiles, uvloop, python-dotenv) | BSD-3-Clause |
+| zxing-cpp | Apache-2.0 |
 
 ## Python — `dev` dependency group (**not** installed in the Docker image)
 

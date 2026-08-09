@@ -1,7 +1,9 @@
 <script lang="ts">
   import Icon from './icons/Icon.svelte'
   import FileDrop from './FileDrop.svelte'
-  import type { Tool } from './types'
+  import Settings from './Settings.svelte'
+  import { t } from './i18n.svelte'
+  import type { Dpi, Tool } from './types'
 
   let {
     tool = $bindable(),
@@ -11,7 +13,12 @@
     canDelete = false,
     busy = false,
     rendering = false,
-    downloadLabel = 'Download',
+    downloadLabel,
+    dpi,
+    unwarp,
+    dpiDisabled = false,
+    onDpiChange,
+    onUnwarpChange,
     onDelete,
     onDownload,
     onSelectFile,
@@ -24,22 +31,30 @@
     canDelete?: boolean
     busy?: boolean
     rendering?: boolean
-    downloadLabel?: string
+    /** Required, not defaulted — a default would bake English into the component. */
+    downloadLabel: string
+    dpi: Dpi
+    unwarp: boolean
+    dpiDisabled?: boolean
+    onDpiChange: (dpi: Dpi) => void
+    onUnwarpChange: (unwarp: boolean) => void
     onDelete: () => void
     onDownload: () => void
     onSelectFile: (file: File) => void
     onFileError?: (message: string) => void
   } = $props()
+
+  const m = $derived(t())
 </script>
 
 <div class="toolbar">
-  <div class="group" role="group" aria-label="Tools">
+  <div class="group" role="group" aria-label={m.toolbar.tools}>
     <button
       class:active={tool === 'select'}
       onclick={() => (tool = 'select')}
       disabled={busy}
-      title="Select"
-      aria-label="Select"
+      title={m.toolbar.select}
+      aria-label={m.toolbar.select}
     >
       <Icon name="pointer" size={18} />
     </button>
@@ -47,27 +62,37 @@
       class:active={tool === 'draw'}
       onclick={() => (tool = 'draw')}
       disabled={busy}
-      title="Draw box"
-      aria-label="Draw box"
+      title={m.toolbar.drawBox}
+      aria-label={m.toolbar.drawBox}
     >
       <Icon name="draw-box" size={18} />
     </button>
-    <button onclick={onDelete} disabled={!canDelete || busy} title="Delete" aria-label="Delete selected box">
+    <button onclick={onDelete} disabled={!canDelete || busy} title={m.toolbar.delete} aria-label={m.toolbar.deleteSelected}>
       <Icon name="trash" size={18} />
     </button>
   </div>
 
   {#if total > 1}
-    <div class="pagenav" role="group" aria-label="Page navigation">
-      <button onclick={() => ongoto(current - 1)} disabled={current <= 0 || busy} title="Previous page" aria-label="Previous page">
+    <div class="pagenav" role="group" aria-label={m.toolbar.pageNavigation}>
+      <button onclick={() => ongoto(current - 1)} disabled={current <= 0 || busy} title={m.toolbar.previousPage} aria-label={m.toolbar.previousPage}>
         <Icon name="chevron-left" size={16} />
       </button>
       <span>{current + 1} / {total}</span>
-      <button onclick={() => ongoto(current + 1)} disabled={current >= total - 1 || busy} title="Next page" aria-label="Next page">
+      <button onclick={() => ongoto(current + 1)} disabled={current >= total - 1 || busy} title={m.toolbar.nextPage} aria-label={m.toolbar.nextPage}>
         <Icon name="chevron-right" size={16} />
       </button>
     </div>
   {/if}
+
+  <Settings
+    variant="inline"
+    {dpi}
+    {unwarp}
+    {dpiDisabled}
+    {onDpiChange}
+    {onUnwarpChange}
+    disabled={busy}
+  />
 
   <div class="spacer"></div>
 
@@ -79,7 +104,7 @@
     {:else}
       <Icon name="download" size={16} />
     {/if}
-    {rendering ? 'Rendering…' : 'Download'}
+    {rendering ? m.toolbar.rendering : m.toolbar.download}
   </button>
 </div>
 

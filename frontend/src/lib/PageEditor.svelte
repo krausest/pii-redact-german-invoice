@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte'
   import type { Box, Page, Tool } from './types'
 
   let {
@@ -12,6 +13,8 @@
     selected: number | null
     onadd: (box: Box) => void
   } = $props()
+
+  const m = $derived(t())
 
   let svgEl: SVGSVGElement | undefined
   let draft = $state<Box | null>(null)
@@ -71,7 +74,7 @@
 </script>
 
 <div class="editor" class:draw={tool === 'draw'}>
-  <img src={`data:image/jpeg;base64,${page.image}`} alt="Document page" />
+  <img src={`data:image/jpeg;base64,${page.image}`} alt={m.editor.pageAlt} />
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
   <svg
     bind:this={svgEl}
@@ -82,7 +85,7 @@
     onpointerup={onPointerUp}
     onclick={() => tool === 'select' && (selected = null)}
     role="application"
-    aria-label="Redaction box editor"
+    aria-label={m.editor.canvas}
   >
     {#each page.boxes as box, i (i)}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

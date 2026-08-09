@@ -33,14 +33,14 @@ class ConcurrencyProbe(FakePipeline):
         self._hold = hold
         self._lock = threading.Lock()
 
-    def compute_boxes(self, image):
+    def compute_boxes(self, image, lines=None, known_names=None, trace=None):
         with self._lock:
             self._live += 1
             self.peak = max(self.peak, self._live)
         time.sleep(self._hold)  # stand in for OCR + classify
         with self._lock:
             self._live -= 1
-        return super().compute_boxes(image)
+        return super().compute_boxes(image, trace=trace)
 
 
 def _peak_concurrency(max_concurrent: int, requests: int) -> int:

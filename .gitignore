@@ -5,6 +5,15 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.claude/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+CLAUDE.md
+Docker-create.md
+Download.zip
+TODO.md
 
 # Model caches (downloaded weights, ~180 MB+)
 .paddle_cache/
@@ -14,9 +23,16 @@ __pycache__/
 output/
 *_redacted.*
 
+# Private sample corpus + its ground-truth annotations (both hold real PII).
+# The committed, synthetic annotation lives in tests/ground_truth/ instead.
+Arztrechnung/
+Arztrechnung2/
+
 # Frontend build + deps
 frontend/node_modules/
 frontend/dist/
 
 # OS / editor cruft
 .DS_Store
+
+secret/

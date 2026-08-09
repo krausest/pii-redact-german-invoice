@@ -40,8 +40,9 @@ class StubClassifier:
     def __init__(self, pii_substrings: list[str] | None = None):
         self._subs = pii_substrings or []
 
-    def is_pii(self, text: str) -> bool:
-        return any(s in text for s in self._subs)
+    def is_pii(self, text: str, trace) -> bool:
+        trace.add("    stub match" if (hit := any(s in text for s in self._subs)) else "    no match")
+        return hit
 
 
 class RecordingUnwarper:
@@ -68,8 +69,10 @@ class FakePipeline:
         self.calls.append("unwarp")
         return Image.new("RGB", image.size, (10, 20, 30))
 
-    def compute_boxes(self, image):  # noqa: ARG002
+    def compute_boxes(self, image, lines=None, known_names=None, trace=None):  # noqa: ARG002
         self.calls.append("compute_boxes")
+        if trace is not None:
+            trace.add("fake pipeline: %d box(es)", len(self.boxes))
         return list(self.boxes)
 
     def apply_boxes(self, image, boxes, fill=None):  # noqa: ARG002

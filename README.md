@@ -72,6 +72,22 @@ screenshot instead, jump to [Web UI](#web-ui).
 
 The Svelte SPA in [`frontend/`](frontend/) calls the REST API. Run it two ways.
 
+> [!NOTE]
+> The SPA picks the rasterization DPI (150/200/300) and unwarping in its own UI and
+> sends both on every request, so `[redaction].pdf_dpi` / `[redaction].unwarp` (and
+> `PII_UNWARP`) do **not** steer browser requests — they remain the defaults for the
+> CLI and for API calls that omit the parameters. Changing either setting after a
+> document is loaded re-runs detection, asking first if boxes were edited by hand.
+
+> [!TIP]
+> **Debug log.** The footer's *Debug log* button re-runs detection on the loaded
+> document with [`debug=true`](#post-apiredact--find-the-pii-and-black-it-out) and
+> shows the trace — why every box was suggested, and what was considered and
+> dropped — with Copy and Download. It leaves the pages and your edited boxes
+> untouched, so it costs one extra analysis and nothing else. This is what to
+> attach to a bug report about a wrong box when the document itself cannot be
+> shared.
+
 **Development** (hot reload; two processes, two ports):
 
 ```bash
@@ -148,6 +164,7 @@ uv run pii-redact --json-output example/   # -> <name>_redacted.json, the API's 
 | `--json-output` | off | write the JSON report to `<name>_redacted.json` *instead of* the document — the report embeds it as `redacted` |
 | `--pdf-dpi N` | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `--jpeg-quality N` | `redaction.jpeg_quality` | quality of every JPEG produced |
+| `--debug` | off | add the detection trace to the report as `debug` (needs `--json-output`) |
 
 A flag you leave off is not sent, so its value comes from `config.toml` — the
 single home of every default, for the CLI as for the service. Values are checked
@@ -226,6 +243,7 @@ Body: the **raw file** — PNG, JPEG or PDF bytes, not multipart.
 | `json-output` | `true` \| `false` | `false` | return the JSON report, which embeds the file, instead of the bare file |
 | `pdf-dpi` | integer | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
+| `debug` | `true` \| `false` | `false` | add the detection trace to the report; **requires `json-output=true`** |
 
 **By default the file comes back, the same kind you sent:**
 
@@ -259,8 +277,9 @@ need to know *what* was found.
 
 - **`pages[].boxes` are always in the pixel space of `pages[].image`** — the image
   in the same entry, at its stated `width`/`height`. Never the uploaded file's
-  coordinates: if `unwarp=true` the geometry changed, and a PDF page was rasterized
-  at `pdf-dpi`. This is the one coordinate rule in the API.
+  coordinates: if `unwarp=true` the geometry changed, a PDF page was rasterized
+  at `pdf-dpi`, and an uploaded image carrying an EXIF orientation tag was rotated
+  upright on the way in. This is the one coordinate rule in the API.
 - **`pages[].image` is NOT redacted.** It is the page the boxes describe, for review
   and editing — show it only to someone allowed to see the original.
 - **`redacted` is the finished document**, always present: exactly the bytes the
@@ -269,6 +288,24 @@ need to know *what* was found.
   result; you never re-run the models just to fetch the file.
 - The report does not name the engine — it is fixed per process, so `GET /health`
   is where to read it.
+
+**`debug=true` — why each box exists.** The report gains one more key, `debug`:
+the detection trace as plain text, the same stream `PII_LOG_LEVEL=DEBUG` writes to
+the log.
+
+```
+line @(244,889 525x47 conf=99.40): 'Musterstr. 13'
+    match PERSON 0.85 'Musterstr. 13' [SpacyRecognizer]
+    match DE_ADDRESS 0.70 'Musterstr. 13' [PatternRecognizer/de_street]
+      Ignoring PERSON with only 1 name token(s)
+    -> REDACT (static-rule)
+```
+
+Every OCR line with its pixel box, each classifier match under it, and the verdict
+— which arm fired (`static-rule`, `labeled-value`, `name-memory`, `classifier`) or
+why none did. It is how a wrong box is diagnosed without sending the document
+anywhere; pages are marked off with `=== page N ===`. `debug=true` on its own is a
+`400`: the file response carries no metadata, so there would be nowhere to put it.
 
 ### `POST /api/assemble` — turn (edited) boxes into a document
 
@@ -312,7 +349,7 @@ as are malformed bodies and bad parameters. Errors are `{"detail": "…"}`.
 ## Configuration
 
 All knobs live in [`config.toml`](config.toml) (engine, redaction fill/padding,
-upload limits, worker count). Four environment variables override it, for
+upload limits, worker count). Five environment variables override it, for
 containers where editing the file is awkward:
 
 | Variable | Overrides |
@@ -321,11 +358,13 @@ containers where editing the file is awkward:
 | `PII_ENGINE` | `[engine].name` |
 | `PII_UNWARP` | `[redaction].unwarp` |
 | `PII_REDACT_REGIONS` | `[redaction].redact_regions` |
+| `PII_REDACT_CODES` | `[redaction].redact_codes` |
 
-`PII_UNWARP` and `PII_REDACT_REGIONS` differ in reach, because `unwarp` also has a
+`PII_UNWARP` differs in reach from the other two, because `unwarp` also has a
 wire name: `PII_UNWARP` sets the **default** for `?unwarp=` and `--unwarp`, so a
-request that names the parameter still wins, while `redact_regions` is neither a
-query parameter nor a flag and so the variable is absolute. `PII_LOG_LEVEL=DEBUG`
+request that names the parameter still wins, while `redact_regions` and
+`redact_codes` are neither query parameters nor flags and so those variables are
+absolute. `PII_LOG_LEVEL=DEBUG`
 (API and CLI) logs every OCR line with its box, plus each classifier match with its
 score and the recognizer/context that produced it, followed by the redact verdict —
 useful for seeing exactly why a line was or wasn't redacted.
@@ -341,7 +380,7 @@ mistyped key is a mistake, not a no-op.
 The sender of an invoice — the practice, the clearing house — identifies itself in
 places no per-line detector can reach: a letterhead is usually a **logo**, and OCR
 returns no line for a graphic. So `[redaction].redact_regions` (on by default)
-adds three boxes that are not tied to any OCR line:
+adds boxes that are not tied to any single OCR line:
 
 | Key (`[redaction.regions]`) | Default | Meaning |
 |---|---|---|
@@ -351,6 +390,8 @@ adds three boxes that are not tied to any OCR line:
 | `column_y_frac` | `0.50` | …and its anchor must sit above this |
 | `vgap_factor` | `0.5` | vertical gap, in line heights, that still counts as touching |
 | `align_factor` | `0.4` | left-edge offset, in line heights, that still counts as aligned |
+| `recipient_y_min_frac` | `0.05` | the recipient address block is seeded below this… |
+| `recipient_y_max_frac` | `0.45` | …and above this, left of `column_x_frac` (`max <= min` disables) |
 
 A band **spans the full page width** — that is what covers the logo, which sits
 beside or above the text and which OCR never reports — but it is only as tall as the
@@ -384,12 +425,71 @@ and only the misalignment cuts it; on another the table is *exactly* aligned and
 only the gap does. Inside a real block the worst case measured is 0.41 and 0.14
 against thresholds of 0.5 and 0.4.
 
+The **recipient address block** is the same machinery pointed at the other window:
+a street or ZIP+city line left of `column_x_frac`, inside the
+`recipient_y_min_frac`–`recipient_y_max_frac` window, seeds a block that grows the
+same way. The per-line rules already blacken the lines they recognize; this box
+covers the lines *between* them — a c/o line, a company recipient, a name line OCR
+garbled — which match nothing on their own. Only street and ZIP+city seed it (a
+salutation also occurs over left-aligned body text, where growth would swallow the
+paragraph); every deliverable address contains both, and the block reaches the
+name and salutation lines above them.
+
 Set a fraction to `0` to drop that one region; `redact_regions = false` (or
-`PII_REDACT_REGIONS=false` in the environment) drops all three. This is a
+`PII_REDACT_REGIONS=false` in the environment) drops all of them. This is a
 **config-only** setting — unlike `unwarp` it is not a query parameter and not a CLI
 flag, so it is fixed per process like the engine. The boxes
 it produces are ordinary boxes: they appear in the JSON report and are editable
 (and deletable) in the web UI like any other.
+
+### QR and DataMatrix redaction
+
+A payment QR is the one piece of PII on an invoice that a reader does not have to
+read. An **EPC QR / Girocode** encodes the IBAN, the BIC and the account holder's
+*name*; a **Swiss QR-bill** adds the debtor's full address; a **DataMatrix** carries
+an E-Rezept token or a securPharm pack identity. A page whose text is blacked out
+but whose code still scans is not redacted — and no text rule can reach one, because
+a code is a graphic and OCR returns no line for it.
+
+So `[redaction].redact_codes` (on by default) detects QR, Micro QR and DataMatrix
+symbols in the page image and blackens their bounding boxes. Detection is tuned for
+**recall**: a symbol is covered once it is *located*, even when it does not decode.
+That matters at the resolution real uploads have — the Girocode on one sample photo
+is 60 px across and fails its checksum, which a decode-only reader would skip and
+leave in the clear. Paying for the looser gate are two shape guards, since a symbol
+that never decoded has nothing proving it real: a candidate is dropped if it is
+under 12 px or more than 3:1 out of square. That is what rejects the run of item-table
+rows one sample page reports as a 738×108 "DataMatrix". Across the sample corpus the
+pass finds four real codes and nothing else.
+
+| Key (`[redaction]`) | Default | Meaning |
+|---|---|---|
+| `redact_codes` | `true` | run the pass at all |
+| `code_margin_frac` | `0.08` | grow each box by this fraction of its longer side |
+
+The margin is headroom, not a correction: a *decoded* box already lands on the
+symbol's edge to within about 1% of its width, even blurred or downscaled. It is
+spent on the code's quiet zone, which the format requires to be blank paper.
+
+**When a code is too coarse to decode**, though, what comes back is not one box per
+symbol but one per *finder pattern* — a QR's three concentric corner squares each
+read as a Micro QR. They do not touch each other, so taken at face value they leave
+partial boxes pinned to the code's top-left corner with the rest of it showing. Three
+things prevent that, in order: the page is re-read once at 2×, which is often enough
+to turn the pieces back into a single exact read; failing that **OpenCV's QR
+detector** is asked for the outline, which it derives from the finder patterns
+without ever decoding; and only if that finds nothing are the pieces themselves
+grouped and squared up, extending from their top-left anchor toward the symbol.
+
+Note this is driven by how coarse the *code* is, not the page: a 15 mm Girocode is
+only 118 px at the default 200 dpi and fragments on a full-resolution A4 scan. It is
+also not a clean threshold — 12 mm decodes, 15 mm does not and 20 mm does again,
+because it depends on how the module grid lands on the pixel grid. Coverage costs
+little: the box comes out about 1.2× the symbol, which is roughly its quiet zone.
+
+Like region redaction this is **config-only** — not a query parameter, not a CLI
+flag — and its boxes are ordinary boxes in the report and the web UI. Turn it off
+with `redact_codes = false` or `PII_REDACT_CODES=false`.
 
 ### Engine presets
 
@@ -408,6 +508,15 @@ baseline; GLiNER is a close second; `onnx` is the fastest (~3.3× faster OCR at
 identical accuracy).
 Advanced users can override either axis (`engine.ocr_backend` / `engine.classifier`)
 to unlock combinations the presets don't name.
+
+**`engine.det_box_thresh`** (default `0.5`, below PaddleOCR's own `0.6`) is the
+minimum detector score for a text box. It is a *mean* over the box, so a shape,
+not faintness, is what pushes a line under it: one line of 6 pt type running the
+full width of the page averages lower than the 11 pt table above it even where
+its ink is just as dark. A photographed A4 invoice's imprint footer measured
+0.5–0.6 and so was not detected **at all** — no box, no text, and hence no footer
+band either, since the band needs a sender anchor to exist. Raise it if
+background texture on a page is being read as text.
 
 ## How it works
 
@@ -438,9 +547,14 @@ classify), and `apply_boxes()` (fill):
 4. **Draw** a filled black rectangle over the line's box (with a 2 px pad) if it is judged
    to contain PII.
 5. **Add the region boxes** — header band, footer band, sender column
-   ([`backend/regions.py`](backend/regions.py)) — the only boxes not derived from
-   an OCR line, and therefore the only ones that can cover a letterhead logo. See
+   ([`backend/regions.py`](backend/regions.py)) — not derived from an OCR line, and
+   therefore able to cover a letterhead logo. See
    [Region redaction](#region-redaction).
+6. **Add the matrix-code boxes** — QR, Micro QR, DataMatrix
+   ([`backend/codes.py`](backend/codes.py)) — the only pass that reads the page
+   *pixels* rather than the OCR lines, because a payment QR is machine-readable PII
+   that no text rule can see. See
+   [QR and DataMatrix redaction](#qr-and-datamatrix-redaction).
 
 ### `presidio` classifier
 
@@ -453,15 +567,31 @@ on top of the built-in IBAN/e-mail/credit-card ones:
   so all-caps German words like `RECHNUNG` don't match.
 - **PHONE_NUMBER** — `python-phonenumbers`, restricted to the `DE` region only; the
   default region list runs 8 regional matchers per line and lets foreign formats match
-  random digit columns. A dotted date (`09.07.2026`) parses as a valid DE number, so
-  matches shaped like a date are dropped — dates aren't PII except the birthdate, which
-  is handled spatially (see below).
+  random digit columns. Two shapes are dropped: a dotted date (`09.07.2026`, optionally
+  swallowed together with the code column beside it, `12.12.15 51-61`) — dates aren't PII
+  except the birthdate, which is handled spatially (see below) — and an **undelimited
+  digit run** (`2106315267`), which is a lab or order number; a real number here is
+  written with a separator (`0231 000000- 000`) or carries a `Tel`/`Fax` label, and a
+  labeled one is already caught deterministically before the classifier runs.
 - **KONTO** — a German account number or bank code *with its label* (`Kto.`, `Konto-Nr.`,
   `BLZ`, `Bankleitzahl` followed by digits), since lines are classified one at a time and
   the label is always on the same line as the number.
 - **DE_ADDRESS** — a German street pattern (suffix attached, `Musterstrasse 23`, or its
-  own capitalized word, `Muster Straße 23`) and a PLZ + city pattern. Case-sensitive so
-  the lowercase city class really means lowercase (keeps spec noise like `15118 MID` out).
+  own capitalized word, `Muster Straße 23`) and a PLZ + city pattern. Both accept the
+  all-caps form a letterhead prints. For the street, the *suffix* is case-insensitive and
+  the name part may be all caps (`MUSTERSTR.23`, house number glued on), with the
+  leading capital still required. A city is either capitalized (`Musterstadt`, `Ulm`) or
+  **all caps with at least four letters** (`MUSTERSTADT`) — four is what separates a real
+  city from the short all-caps noise a Leistungstext is full of (`15118 MID`), at the
+  price of `ULM`/`HOF`/`AUE` written that way. The postcode must also **start a token**:
+  a Heilmittel position number ends in five digits and is followed by its Leistungstext
+  (`44/20101 Massage`, `49/21520 Naturmoor`), which is the ZIP+city shape exactly — down
+  to `20101` being a real Hamburg postcode, so only the token boundary can tell them
+  apart. A hyphen is still admitted after a letter (`D-12345 Musterhausen`) and refused
+  after a digit (`44-20101`). The space between postcode and city is **optional** — a
+  narrow address column prints them flush and OCR returns `12345Musterstadt` as one token.
+  The city pattern is *imported* from `backend/rules.py` rather than restated, since the
+  two are meant to agree.
 
 ### `gliner` classifier
 
@@ -472,12 +602,35 @@ is unreliable on standalone lines, the shared deterministic street / PLZ+city re
 
 ### Special cases handled
 
-- **Date of birth (two columns).** The label (`Geburtstag` / `Geburtsdatum` / `geboren`)
-  and the date sit in *different columns*, so they are separate OCR lines. A same-line rule
-  can't see the label, so birth dates are matched **spatially**: a date line is redacted if
-  its vertical center shares a row with a birth-label line (or if label + date happen to be
-  merged on one line). Only full birth words count — the bare abbreviation `geb.` also means
-  *Gebühren* (the `Geb.Nr.` fee column) and would wrongly redact treatment dates.
+- **Name in the next column.** A patient block often prints `Patient:` (or `Versicherte`,
+  `Name`, `Person`, `Mitglied`, …) alone in one cell with the name beside it — two
+  separate OCR lines, so no same-line rule can pair them, and a bare `Wolf,Uwe` gives the
+  NER model nothing to hold on to. The same spatial matcher used for birth dates carries
+  a **name** row: a label standing alone in its cell makes a two-token name (`Max
+  Mustermann`, `MUSTER, ANDREA`, `Wolf,Uwe`) on its row a value. The label must be the
+  *whole* cell — an unanchored `Patient` would turn a Leistungstext sentence into a label
+  and blacken whatever capitalized pair happened to share its row.
+- **Date of birth (three layouts).** The label and the date are usually separate OCR
+  lines, so a same-line rule can't see the label; birth dates are matched **spatially**
+  instead, in whichever of three arrangements the document uses:
+  1. *Beside* — the date's vertical center shares a row with a birth-label line
+     (`Geburtstag`, `Geburtsdatum`, `geboren`, and the abbreviations `Geb.Dat.` /
+     `Geb.-Dat.` / `GebDat`). The bare `geb.` is still **not** a label on its own: it also
+     means *Gebühren* (the `Geb.Nr.` fee column) and would redact treatment dates.
+     `Geb.Dat.` is safe because *Gebührendatum* is not a word on an invoice.
+  2. *Below* — `Geburtsdatum` alone in a cell at the top of a column, the dates running
+     down beneath it, so nothing shares a row with any of them. The header claims a line
+     whose horizontal *center* falls in its own x-range (a header is wider than its
+     dates, so overlap would reach into neighbouring columns), and the walk stops at the
+     first non-date or a vertical gap over 3× the median line height — a header may never
+     claim the rest of the page.
+  3. *Merged* — label and date in one line, marked by the abbreviation (`geb. 30.09.1954`)
+     or by the **`*` birth mark** (`*21.01.1975`, `* 21.01.1975`), which on German
+     paperwork reads *geboren*. The date must follow the star directly, so a footnote
+     marker introducing a sentence (`* Leistungen ab 01.01.2024`) doesn't match.
+
+  Any of the three also makes the names on that line *name evidence*, since a name beside
+  a birthdate is there because of it.
 - **Salutation (Anrede).** Any line containing a salutation word (`Herr(n)`, `Frau`,
   `Familie`, …) is redacted — lone (the `Herrn` line above the address) or with a name
   (`Herr Muster`, where NER tags only the single surname token, which the multi-word guard
@@ -488,12 +641,48 @@ is unreliable on standalone lines, the shared deterministic street / PLZ+city re
   the NER model is unreliable around titles, missing the name after a doubled
   `Dr. Dr.` and tagging only the single token after `Dr. Weber`, which the PERSON
   multi-word guard then drops.
+- **Surname, forename and birthdate on one unlabeled line.** `Muster,Andrea 05.03.11`
+  — how a patient table row is written — is invisible to everything else: NER returns
+  only the forename (the surname falls outside the `PERSON` span, leaving a single
+  token the guard drops), and the date has no `geb.`/`Geburtsdatum` to pair with, so
+  the spatial birthdate matcher can't reach it either. A deterministic rule matches the
+  pair — `Surname,Forename` immediately followed by a date — which redacts the whole
+  line, name and date together, and feeds the surname to the name memory. Both halves
+  are required: a Leistungstext can hold two comma-joined capitalized nouns
+  (`Mikroskopie,Kultur`), and a bare date in an item row is a treatment date.
+- **Name memory across casings.** Surnames harvested from deterministic person evidence
+  are redacted on bare recurrence elsewhere in the document. The match is whole-word
+  (that, not letter case, is what keeps `Allgemeine` from matching a Dr. Allgemein) and
+  **case-insensitive with one condition: the occurrence must start with a capital**. One
+  document prints the same person as `Andrea Muster` in the address block and
+  `MUSTER, ANDREA` in the patient row, so a memory holding a single casing would miss
+  half of them — while a lowercase hit is the ordinary German word a surname collides
+  with (`Klein` the person vs `klein gedruckt`), which is why this isn't a plain
+  case-insensitive match.
 - **Address block completeness (GLiNER).** GLiNER's `address` label dropped the standalone
   PLZ+city line in the recipient block, leaving it visible. The deterministic street /
   PLZ+city regexes (same as Presidio's) close that gap so the Adressfeld is fully covered.
-- **PERSON false positives.** A `PERSON` needs **≥2 capitalized tokens** ("First Last") to be
-  redacted — this drops the NLP model's single-token noise (`5.0016`) and its false hits on
-  German medical terms.
+- **The item table.** An invoice's body is a table of fee numbers, service texts and
+  amounts; the PII sits *above* it (recipient, patient block) or *below* it (imprint,
+  bank details). So the classifier — the one detector with no anchor of its own — does
+  not run on table lines at all. The band is found geometrically: lines holding a German
+  amount merge into rows, rows cluster by vertical gap, and a cluster of ≥2 rows spans
+  the table (so a lone `Zahlbetrag` in a footer gates nothing, and a stray amount above
+  the recipient block can't stretch the band over it). Every deterministic rule and the
+  name memory keep working inside the table — only an *unlabeled, never-before-seen*
+  name in an item row is given up.
+- **PERSON false positives.** A `PERSON` needs **≥2 proper-noun tokens** ("First Last") to be
+  redacted. Capitalization alone is not evidence in German — every noun is capitalized, so a
+  two-word Leistungstext (`Orientierende Testuntersuchg.`) is shaped just like a name to the
+  NER model, while spaCy's tagger calls `Orientierende` a NOUN. The coarse tag (`pos_`) is
+  what's read, not the NER tag: `Cleed` (of the culture medium `Cleed Agar`) is `tag_=NE`
+  but `pos_=ADV`. The rule also still drops single-token noise (`5.0016`).
+  **Across a comma the bar is only capitalization**, because `Surname,Forename` is how a
+  patient row is written and NER returns just one half of it — while the surnames it omits
+  (`Bauer`, `Jäger`, `Wolf`) are ordinary German words the tagger calls nouns. That is safe
+  because something on the line must still have been recognized as a `PERSON`, and the
+  Leistungstexte this guard exists to reject (`Mikroskopie,Kultur`, `Summe,Betrag`,
+  `Ferritin,CRP`) produce no `PERSON` entity at all — so there is no span to extend.
 - **Service dates vs. birth dates.** Treatment/invoice dates (`18.02.2026`, `Rechnungsdatum
   09.07.2026`) are never in a birth-label row, so they stay visible — no over-redaction.
 
@@ -553,6 +742,7 @@ backend/            the whole Python package — pipeline, CLI and REST service
   config.py         config.toml schema + engine preset resolution
   rules.py          deterministic German patterns (salutation, street, birthdate)
   regions.py        header/footer bands and the sender column (not line-derived)
+  codes.py          QR / DataMatrix boxes — the only source that reads pixels
   ocr/ classifiers/ the two swappable axes behind an engine preset
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
 tests/              fast tests stub the models; `-m slow` runs the real ones
@@ -585,6 +775,12 @@ the built image.
   no text-based rule can reach. Tune `[redaction.regions]` or set
   `redact_regions = false` (or `PII_REDACT_REGIONS=false`) if it costs you more
   than it buys.
+- **Code detection is tuned for recall, so it can over-cover.** A candidate only has
+  to be *located*, not decoded, which is what catches a Girocode too coarse to scan;
+  the size and squareness guards are all that stand between that and a dense block of
+  table rules. If a page loses a square graphic it should have kept, set
+  `redact_codes = false` (or `PII_REDACT_CODES=false`). Note also that only QR, Micro
+  QR and DataMatrix are covered — 1D barcodes and PDF417 are not.
 - **Redaction is destructive drawing, not text removal**, which is what makes it safe:
   output pages are rasterized images with filled rectangles, so there is no selectable
   text layer left underneath to recover. The trade-off is that redacted PDFs are images
