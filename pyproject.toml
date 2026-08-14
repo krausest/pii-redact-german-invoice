@@ -58,6 +58,7 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "slow: end-to-end tests that load real ML models (deselect with -m 'not slow')",
+    "regression: OCR-replay snapshots; opt in with --regression (loads the classifier)",
 ]
 
 [tool.uv.sources]

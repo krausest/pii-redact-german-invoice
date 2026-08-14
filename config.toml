@@ -16,12 +16,12 @@ det_box_thresh = 0.5
 fill = [0, 0, 0]           # black
 padding = 2                # pixels added around each OCR line box
 score_threshold = 0.4      # Presidio minimum entity score
-unwarp = true              # flatten the page before OCR (default for ?unwarp=)
+unwarp = false              # flatten the page before OCR (default for ?unwarp=)
 pdf_dpi = 200              # rasterization DPI for uploaded PDFs (default for ?pdf-dpi=)
 max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
 redact_regions = true      # also blacken the letterhead/footer bands and the sender column
-redact_codes = true        # also blacken QR codes and DataMatrix codes
+redact_codes = true        # also blacken QR / DataMatrix / 1D barcodes
 # A payment QR (Girocode/EPC) holds IBAN, BIC and the account holder's name in plain
 # text, so leaving one readable undoes the redaction — anyone can scan the page. The
 # detected box already lands on the symbol edge (within ~1% of its width, even
@@ -45,8 +45,9 @@ column_y_frac = 0.50       # ...and is only seeded above this line
 # Two lines join the same sender block only if BOTH hold, in units of the smaller
 # line's height: near-touching vertically, and sharing a left edge. This is what
 # sizes the bands as well — it is what separates an imprint line from the table row
-# above it.
-vgap_factor = 0.5          # vertical gap that still counts as touching
+# above it. The gap spans a blank line, so an aligned line one empty line below the
+# block still joins it; past ~3 blocks start chaining into the item table.
+vgap_factor = 1.2          # vertical gap a block may bridge
 align_factor = 0.4         # left-edge offset that still counts as aligned
 # The recipient address block: seeded on street / ZIP+city lines left of
 # column_x_frac inside this vertical window, then grown like the sender column —

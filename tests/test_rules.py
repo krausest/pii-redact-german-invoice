@@ -25,6 +25,7 @@ from backend.rules import (
     labeled_value_indices,
     line_matches_static_rule,
     mentions_name,
+    static_rule_match,
 )
 
 # One OCR line off a sample invoice, verbatim: the patient's name and birthdate
@@ -209,9 +210,24 @@ def test_contact_matches_urls_mail_and_phone():
     assert CONTACT.search("www.dr-mueller-huber-muster.de")
     assert CONTACT.search("https://praxis-muster.de/kontakt")
     assert CONTACT.search("info@praxis-muster.de")
+    assert CONTACT.search("praxis-muster.de")  # bare host, no scheme and no www.
     assert CONTACT.search("Telefon: 01234 123456")
     assert CONTACT.search("Fax 01234/12 34 57")
     assert not CONTACT.search("Faktor 2,30")
+
+
+def test_bare_host_is_not_a_german_abbreviation():
+    # German glues abbreviations with the same dot, and OCR keeps them glued to
+    # the next word: the token then ends in something that reads as a TLD. A
+    # hostname with no scheme, no "www." and no "@" in front of it is told apart
+    # by being lower case and by the TLD ending the token.
+    for text in (
+        "Vollständige Untersuchung (Haut oder Stütz-Bew.org.oder Brust oder",
+        "Untersuchung der Stütz-Bew.org.",
+        "Beratung einschl.der Auslagen",
+        "Leistung zzgl.der Sachkosten",
+    ):
+        assert not CONTACT.search(text), text
 
 
 def test_imprint_matches_registry_and_bank_identifiers():
@@ -237,6 +253,14 @@ def test_sender_rules_leave_leistungstext_alone():
         "Beratung, auch mittels Fernsprecher (inkl. Ausstellung",
     ):
         assert not line_matches_static_rule(text), text
+
+
+def test_static_rule_match_names_the_rule_and_quotes_the_match():
+    # What the trace prints under a line: which pattern fired, and on what.
+    assert static_rule_match("Herrn") == ("SALUT", "Herrn")
+    assert static_rule_match("Musterstrasse 23") == ("DE_STREET", "Musterstrasse 23")
+    assert static_rule_match("Internet: praxis-muster.de") == ("CONTACT", "praxis-muster.de")
+    assert static_rule_match("Behandlung Zahn") is None
 
 
 def _line(text, top=0, height=10):
@@ -409,6 +433,99 @@ def test_person_label_needs_a_name_shaped_value():
     assert labeled_value_indices(lines) == set()
 
 
+def test_person_label_cell_takes_a_modifier():
+    # "Behandelte Person:" — a third of the sample invoices label the patient with
+    # a participle in front of the noun, and the name beside it is then invisible
+    # to everything else on the page.
+    for label in ("Behandelte Person:", "Versicherte Person", "Zahlungspflichtige Person:"):
+        lines = [
+            _line(label, top=100),
+            Line(text="Max Mustermann", left=200, top=101, width=100, height=10),
+        ]
+        assert labeled_value_indices(lines) == {1}, label
+
+
+def test_a_modifier_must_inflect_like_an_adjective():
+    # The -e/-er/-es/-en/-em ending is the whole guard: without it any cell ending
+    # in the label noun would be a label and blacken its row.
+    for label in ("Beratung Person", "Leistung Name", "Behandlung der Person"):
+        lines = [
+            _line(label, top=100),
+            Line(text="Gonokokken Kultur", left=200, top=101, width=100, height=10),
+        ]
+        assert labeled_value_indices(lines) == set(), label
+
+
+def test_label_cell_itself_is_never_a_value():
+    # "Versicherte Person" is two name-shaped tokens, so the label cell matches the
+    # value pattern as well. It is still a caption, not PII.
+    assert labeled_value_indices([_line("Versicherte Person", top=100)]) == set()
+
+
+def test_person_value_survives_a_decapitalized_half():
+    # OCR reads the capital I of "Ioanna" as a lowercase l. The label beside the
+    # cell is what makes believing the other half safe.
+    lines = [
+        _line("Behandelte Person:", top=100),
+        Line(text="loanna Mustermann", left=200, top=101, width=100, height=10),
+    ]
+    assert labeled_value_indices(lines) == {1}
+    # ...but two ordinary words are not a name, however close the label is.
+    lines[1] = Line(text="eingehende beratung", left=200, top=101, width=100, height=10)
+    assert labeled_value_indices(lines) == set()
+
+
+def test_person_label_heads_the_column_below_it():
+    # The other geometry: the label is a column header and the name runs beneath
+    # it rather than beside it.
+    lines = [
+        _line("Patient:", top=100),
+        _line("loanna Mustermann", top=115),
+        _line("Rechnungsbetrag", top=300),  # too far below to be claimed
+    ]
+    assert labeled_value_indices(lines) == {1}
+
+
+def test_the_persons_details_run_on_below_the_name():
+    # A patient block prints the name beside the label and the birthdate under the
+    # name — that date carries no birth label of its own, so the column walk from
+    # the value cell is the only thing that sees it.
+    lines = [
+        _line("Behandelte Person:", top=100),
+        Line(text="loanna Mustermann", left=200, top=101, width=100, height=10),
+        Line(text="01.01.1990", left=200, top=115, width=100, height=10),
+        Line(text="A123456789", left=200, top=129, width=100, height=10),
+        Line(text="Rechnung", left=200, top=143, width=100, height=10),  # not a detail
+    ]
+    assert labeled_value_indices(lines) == {1, 2, 3}
+
+
+def test_the_detail_column_does_not_eat_a_treatment_period():
+    # A bare date pattern matches *inside* this line, which is why the detail
+    # vocabulary is anchored to the whole cell.
+    lines = [
+        _line("Behandelte Person:", top=100),
+        Line(text="Max Mustermann", left=200, top=101, width=100, height=10),
+        Line(
+            text="Behandlungszeitraum vom 15.04.2026 bis 28.04.2026",
+            left=200, top=115, width=100, height=10,
+        ),
+    ]
+    assert labeled_value_indices(lines) == {1}
+
+
+def test_the_detail_column_stops_at_the_item_table():
+    # A Leistungstext is two capitalized words, i.e. the shape of a name, so
+    # nothing in the geometry could tell the walk where the invoice body starts.
+    lines = [
+        _line("Behandelte Person:", top=100),
+        Line(text="Max Mustermann", left=200, top=101, width=100, height=10),
+        Line(text="Eingehende Untersuchung", left=200, top=115, width=100, height=10),
+    ]
+    assert labeled_value_indices(lines) == {1, 2}  # without a table it is claimed
+    assert labeled_value_indices(lines, table={2}) == {1}
+
+
 def test_invoice_number_is_not_a_labeled_identifier():
     # The invoice number is the reference a redacted document is shared for.
     assert labeled_value_indices([_line("Rechnungs-Nr. 2026-0724-001")]) == set()
@@ -576,6 +693,15 @@ def test_redactable_drops_single_token_person():
 def test_redactable_keeps_multi_token_person():
     line = "Max Mustermann"
     toks = _tokens(("Max", "PROPN"), ("Mustermann", "PROPN"))
+    assert _redactable([_person_result(0, len(line))], line, toks)
+
+
+def test_redactable_keeps_a_person_ocr_decapitalized():
+    # "Ioanna Mustermann" read with the capital I as a lowercase l. The tagger
+    # still calls both tokens proper nouns, and it is the better witness than the
+    # pixel that got lost — the tags here are the ones de_core_news_lg produces.
+    line = "loanna Mustermann"
+    toks = _tokens(("loanna", "PROPN"), ("Mustermann", "PROPN"))
     assert _redactable([_person_result(0, len(line))], line, toks)
 
 

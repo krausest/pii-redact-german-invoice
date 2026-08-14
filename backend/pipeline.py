@@ -26,8 +26,8 @@ from backend.rules import (
     harvest_names,
     item_table_indices,
     labeled_value_indices,
-    line_matches_static_rule,
     mentions_name,
+    static_rule_match,
 )
 from backend.trace import Trace
 from backend.unwarp import DocUnwarper
@@ -107,12 +107,14 @@ class RedactionPipeline:
         if lines is None:
             lines = self._ocr.lines(image)
         trace = trace or Trace()
-        labeled_idx = labeled_value_indices(lines)
         # The item table: the deterministic rules and the name memory run there
         # as everywhere else, the classifier does not (see item_table_indices).
+        # Computed first because the labeled-value pass needs it too — its column
+        # walks stop at the table rather than chaining down into the invoice body.
         table_idx = item_table_indices(lines)
         if table_idx:
             trace.add("item table: classifier off for %d line(s)", len(table_idx))
+        labeled_idx = labeled_value_indices(lines, table_idx)
         names = known_names if known_names is not None else set()
         for line in lines:
             names |= harvest_names(line.text)
@@ -132,11 +134,19 @@ class RedactionPipeline:
                 line.conf,
                 line.text,
             )
+            # Named and quoted under the line, the way the classifier reports its
+            # matches: the verdict says an arm fired, this says which pattern and
+            # on what — the two halves of diagnosing a box nobody expected. Only
+            # computed when a static rule can still decide, so the trace never
+            # names a rule that lost to `labeled-value`.
+            static = None if i in labeled_idx else static_rule_match(line.text)
+            if static is not None:
+                trace.add("    rule %s matched %r", *static)
             reason = (
                 "labeled-value"
                 if i in labeled_idx
                 else "static-rule"
-                if line_matches_static_rule(line.text)
+                if static is not None
                 else "name-memory"
                 if mentions_name(line.text, names)
                 else "classifier"

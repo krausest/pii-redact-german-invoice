@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 # these.
 _FORMAT_NAMES = ("QRCode", "MicroQRCode", "DataMatrix")
 
+# Linear symbologies, read by a separate pass — see `_read_linear` for why it cannot
+# just be this tuple with three more names in it. These are what German medical
+# paperwork actually prints: a lab order or sample number, rotated 90 degrees up the
+# left edge. EAN/UPC/Codabar are deliberately absent — they price groceries, not
+# invoices, and every format costs its own read of the page.
+_LINEAR_FORMAT_NAMES = ("ITF", "Code128", "Code39")
+
 # When no symbol on the page decoded, retry once on a 2x enlargement before
 # trusting any of the located-but-undecoded geometry. A QR that is merely too
 # coarse for the decoder — a SEPA/Girocode at a couple of pixels per module — comes
@@ -65,13 +72,22 @@ _RETRY_BLIND_MAX_PIXELS = 2_000_000
 # overlap-merging leaves several partial boxes with the symbol's middle and
 # bottom-right showing. That is the bug this constant exists for. Fragments of one
 # symbol are fused when the gap between them is under this multiple of the larger
-# one's longer side: a finder pattern is 7 modules on a symbol of at most ~57 here,
-# so the two extreme ones sit roughly 7 finder-widths apart.
-_FRAGMENT_REACH = 8.0
+# one's longer side.
+#
+# The value is measured, not derived from the 7-modules-of-57 geometry: what
+# zxing-cpp actually reports on the fragment path is not a bare finder pattern but a
+# chunk about a third of the symbol, so the widest real gap across the degradation
+# corpus is 0.79 (two pieces 27 px apart, longer side 34). The 7-finder-widths
+# reading gave 8.0, and that is wide enough to reach *past a symbol* to the next one:
+# a page carrying a DataMatrix above a Girocode fused the two into one box spanning
+# the item table between them. Nothing above ~2 is needed and everything above ~5
+# can bridge two symbols on the same page.
+_FRAGMENT_REACH = 1.5
 
-# Two shape guards on every candidate, needed only because `return_errors=True`
-# also reports symbols that were *located but not decoded* (see `code_boxes`), and
-# an undecoded candidate has had no checksum to prove it real.
+# Two shape guards on every candidate — see `_MIN_INK` below for the third, which is
+# about substance rather than shape. All three are needed only because
+# `return_errors=True` also reports symbols that were *located but not decoded* (see
+# `code_boxes`), and an undecoded candidate has had no checksum to prove it real.
 #
 # Measured on Arztrechnung/Rechnung1.pdf, where the error-tolerant DataMatrix
 # search latched onto three rows of the item table and returned a 738x108 quad
@@ -81,6 +97,28 @@ _FRAGMENT_REACH = 8.0
 _MAX_ASPECT = 3.0
 # Below this a "code" is a smudge; the smallest real symbol in the corpus is 36 px.
 _MIN_SIDE_PX = 12
+
+# The third guard, and the one shape cannot give: what a decoded symbol gets from its
+# checksum, and the only evidence left for one that did not decode. A matrix code is
+# about half ink *by construction* — QR's masking step exists to keep the module
+# balance near even, DataMatrix's timing border and ITF's bars do the same — so
+# roughly half of any real symbol is dark, at any size or resolution. Paper is not:
+# measured across the sample photos, blank paper reads 0.00, a page of plain text
+# 0.03, a hole-punch 0.03, the halftone screen of a printed logo 0.22, while every
+# real symbol reads 0.38-0.70. Shape alone let all of those through — one of them an
+# undecoded 2813x1647 quad at 1.7:1, which blackened 80% of the page it was on.
+#
+# There is deliberately no *upper* bound. A solid black rectangle passes this and is
+# never a QR, but the failure is asymmetric: an underexposed photo pushes a real
+# symbol up toward 1.0 and dropping it there leaks the IBAN, while what an upper
+# bound would catch (a shadow, a black logo bar) costs blank paper.
+_MIN_INK = 0.30
+# Measured over the middle of the rect, not all of it, because `Box` is axis-aligned
+# and a tilted code fills only part of its own bounding rect — a 20 degree tilt costs
+# a third of it, 45 degrees half. The middle stays inside the symbol at any tilt a
+# hand-held photo produces; over the whole rect a tilted code and a hole-punch are
+# indistinguishable.
+_INK_INNER = 0.7
 
 
 @dataclass(frozen=True)
@@ -111,18 +149,32 @@ def code_boxes(image: Image.Image, p: CodeParams) -> list[Box]:
     """
     reads = _read(image)
     if not any(decoded for decoded, _ in reads) and _worth_retrying(image, reads):
-        # Nothing verified. Before believing undecoded geometry, give the decoder a
-        # bigger picture to work from; exact corners beat reconstructed ones.
+        # Nothing verified. Give the decoder a bigger picture to work from — but take
+        # what comes back for its *geometry*, not for a decode: a symbol that will not
+        # checksum is still a symbol, and blackening it is the whole job.
+        #
+        # Unioned rather than substituted because neither pass is a superset of the
+        # other. An earlier version replaced `reads` only when the retry *decoded*
+        # something, which silently dropped the case this exists for: a dewarped phone
+        # photo whose Girocode zxing-cpp cannot even locate at 1x is located at 2x and
+        # still does not checksum, so the one pass that saw it was the one discarded.
         size = (image.width * _RETRY_UPSCALE, image.height * _RETRY_UPSCALE)
         retry = [(decoded, _scaled(rect, 1 / _RETRY_UPSCALE)) for decoded, rect in _read(image.resize(size))]
-        if retry and (not reads or any(decoded for decoded, _ in retry)):
-            logger.debug("no symbol decoded at 1x; using the %dx pass", _RETRY_UPSCALE)
-            reads = retry
+        if retry:
+            logger.debug("no symbol decoded at 1x; adding the %dx pass", _RETRY_UPSCALE)
+            reads += retry
 
     # Decoded corners are exact, so those boxes stand on their own. The rest are
     # fragments of something, and have to be reassembled before they mean anything.
     exact = [rect for decoded, rect in reads if decoded]
     fragments = [rect for decoded, rect in reads if not decoded]
+
+    # Linear barcodes are exact by construction — the pass only reports decoded ones —
+    # and are never fragments, so they join the set that vouches for itself. Added
+    # here rather than into `reads` on purpose: they must not count towards the
+    # "nothing decoded" test above, since a page can carry a readable barcode *and* an
+    # unreadable QR, and the QR is the one that needs the enlarged retry.
+    exact += _read_linear(image)
 
     if fragments:
         # Ask OpenCV for the outline before trying to rebuild one. It reads the three
@@ -137,7 +189,11 @@ def code_boxes(image: Image.Image, p: CodeParams) -> list[Box]:
         exact += outlines
         fragments = [f for f in fragments if not any(_overlaps_rect(f, r) for r in exact)]
 
-    boxes = [box for rect in exact + _fuse_fragments(fragments) if (box := _box(rect, image, p))]
+    # The fused squares are re-checked rather than trusted from their pieces: squaring
+    # a group grows the box past everything that was measured, and this is the box
+    # that gets drawn.
+    fused = [rect for rect in _fuse_fragments(fragments) if _inked(image, rect)]
+    boxes = [box for rect in exact + fused if (box := _box(rect, image, p))]
     for box in boxes:
         logger.debug("code -> REDACT %s", box.as_list())
     return _merge_overlapping(boxes)
@@ -167,7 +223,9 @@ def _qr_outlines(image: Image.Image) -> list[tuple[float, float, float, float]]:
             float(quad[:, 0].max()),
             float(quad[:, 1].max()),
         )
-        if _plausible(rect):
+        # Nothing here decoded either — that is the point of this detector — so an
+        # outline is unverified geometry and faces the same guards as an error read.
+        if _plausible(rect) and _inked(image, rect):
             outlines.append(rect)
     return outlines
 
@@ -187,11 +245,16 @@ def _read(image: Image.Image) -> list[tuple[bool, tuple[float, float, float, flo
     """Every located symbol as ``(decoded, enclosing rect)``, shape guards applied.
 
     ``return_errors=True`` is the setting that makes this pass worth having. Plain
-    decoding reports only symbols whose checksum verifies, and the Girocode on
-    ``Arztrechnung/Arztrechnung11.jpeg`` — a 60 px QR on a phone photo, labelled
-    "Zahlen mit Code" — does not verify: unredacted at exactly the resolution a real
-    upload has. With errors returned it is found. Detection, not decoding, is what
-    redaction needs; ``_MAX_ASPECT`` / ``_MIN_SIDE_PX`` pay for the looser gate.
+    decoding reports only symbols whose checksum verifies, and the ~60 px payment QR
+    on a phone-photographed invoice in the sample corpus does not verify: unredacted
+    at exactly the resolution a real upload has. With errors returned it is found.
+    Detection, not decoding, is what redaction needs; ``_MAX_ASPECT`` /
+    ``_MIN_SIDE_PX`` / ``_MIN_INK`` pay for the looser gate.
+
+    Note this is measured on the image *as passed in*, and `compute_boxes` runs after
+    unwarping. On that same page the dewarp resamples the symbol just past what the
+    finder-pattern search will locate at 1x — nothing here reports it, at either
+    error setting — which is why `code_boxes` cannot rely on a single read.
     (OpenCV's detect-without-decode QR detector was measured as an alternative and
     found nothing this misses, on 17 synthetic degradations or on the sample corpus,
     so it is not used.)
@@ -202,9 +265,42 @@ def _read(image: Image.Image) -> list[tuple[bool, tuple[float, float, float, flo
     reads: list[tuple[bool, tuple[float, float, float, float]]] = []
     for barcode in zxingcpp.read_barcodes(image, formats=formats, return_errors=True):
         rect = _quad_rect(barcode.position)
-        if _plausible(rect):
-            reads.append((barcode.error is None, rect))
+        decoded = barcode.error is None
+        # The checksum outranks the pixels: only a candidate with nothing vouching
+        # for it has to look like a code as well as be shaped like one.
+        if _plausible(rect) and (decoded or _inked(image, rect)):
+            reads.append((decoded, rect))
     return reads
+
+
+def _read_linear(image: Image.Image) -> list[tuple[float, float, float, float]]:
+    """Decoded linear barcodes, as one enclosing rect each.
+
+    Two things here are the exact opposite of :func:`_read`, and both are deliberate.
+
+    **One call per format**, which is not something a clean fixture will show you.
+    On a generated page a merged format list finds everything, so folding these three
+    names into `_FORMAT_NAMES` looks like an obvious simplification and passes the
+    tests. On the real thing it silently stops working: the ITF up the left edge of a
+    12 MP phone photo in the sample corpus is found by ``formats=ITF`` and by nothing
+    else — paired with any other format, or left to the default all-formats scan, the
+    result is an empty list. Verify against a photographed page, not a synthetic one.
+
+    **Decoded only** — no ``return_errors``. The matrix pass can afford undecoded
+    geometry because a matrix code is square and `_MAX_ASPECT` vouches for the shape.
+    A linear barcode *is* the long thin shape that guard exists to reject, so shape
+    proves nothing here and the checksum has to instead. Which is also why these
+    rects skip `_plausible`: printed the ordinary way round a barcode is 8:1 and
+    would fail it outright, and the one in the corpus clears 3.0 by 1% only because
+    it happens to be rotated.
+    """
+    import zxingcpp
+
+    rects = []
+    for name in _LINEAR_FORMAT_NAMES:
+        fmt = getattr(zxingcpp.BarcodeFormat, name)
+        rects += [_quad_rect(barcode.position) for barcode in zxingcpp.read_barcodes(image, formats=fmt)]
+    return rects
 
 
 def _quad_rect(position: Any) -> tuple[float, float, float, float]:
@@ -230,6 +326,51 @@ def _plausible(rect: tuple[float, float, float, float]) -> bool:
     if side_x < _MIN_SIDE_PX or side_y < _MIN_SIDE_PX:
         return False
     return max(side_x, side_y) <= _MAX_ASPECT * min(side_x, side_y)
+
+
+def _inked(image: Image.Image, rect: tuple[float, float, float, float]) -> bool:
+    """Whether a rect holds the ink a matrix code is made of (see ``_MIN_INK``).
+
+    Deliberately *not* Otsu. Otsu on a blank crop splits sensor noise down the middle
+    and calls half of it ink, which scores the phantoms this rejects (0.27, 0.42,
+    1.00) at or above the symbols it has to keep. The reference is the paper *around*
+    the candidate instead — the 95th percentile of a neighbourhood half the
+    candidate's size again — so the verdict survives the lighting gradient across a
+    photographed page, where a shadowed corner's paper is darker than the lit half's
+    ink.
+
+    Cropping before converting matters: this runs per candidate, on pages of 12 MP.
+    """
+    import numpy as np
+
+    x0, y0, x1, y1 = rect
+    reach = max(x1 - x0, y1 - y0) / 2
+    around = _pixels(image, (x0 - reach, y0 - reach, x1 + reach, y1 + reach))
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half_w, half_h = (x1 - x0) * _INK_INNER / 2, (y1 - y0) * _INK_INNER / 2
+    middle = _pixels(image, (cx - half_w, cy - half_h, cx + half_w, cy + half_h))
+    if around.size == 0 or middle.size == 0:
+        return False
+    # 95th percentile, not the mean: inside a symbol most of the neighbourhood is the
+    # symbol, and it is the light modules that read as paper. Ink is anything well
+    # under it — 0.6 sits between a JPEG-softened dark module and paper's own grain.
+    paper = float(np.percentile(around, 95))
+    return float((middle < 0.6 * paper).mean()) >= _MIN_INK
+
+
+def _pixels(image: Image.Image, rect: tuple[float, float, float, float]):
+    """The grey levels inside ``rect``, clamped to the page."""
+    import numpy as np
+
+    box = (
+        max(0, int(rect[0])),
+        max(0, int(rect[1])),
+        min(image.width, int(round(rect[2]))),
+        min(image.height, int(round(rect[3]))),
+    )
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return np.empty(0)
+    return np.asarray(image.crop(box).convert("L"), dtype=np.float32)
 
 
 def _scaled(rect, factor: float) -> tuple[float, float, float, float]:

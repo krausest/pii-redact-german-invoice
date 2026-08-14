@@ -12,8 +12,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 import zxingcpp
-from PIL import Image
+from PIL import Image, ImageDraw
 
+import backend.codes
 from backend.codes import CodeParams, code_boxes
 
 PAGE_W, PAGE_H = 850, 1200
@@ -218,6 +219,62 @@ def test_fragments_are_squared_away_from_their_anchor_not_about_their_centre():
     assert x1 - x0 == y1 - y0  # square, because a matrix code is
 
 
+def test_two_symbols_on_one_page_are_not_fused_into_each_other():
+    # Fusing reassembles the pieces of *one* symbol; reaching from one symbol to the
+    # next instead blackens everything between them. The rects below are the ones
+    # measured on a page carrying a DataMatrix above a payment QR: 330 px apart, on
+    # pieces of 46 and 64, which a reach of 8.0 bridged into a single 439 px box over
+    # the item table between the two.
+    from backend.codes import _fuse_fragments
+
+    data_matrix = (365.0, 234.0, 414.0, 280.0)
+    qr = (374.0, 610.0, 438.0, 674.0)
+    qr_corner = (374.0, 650.0, 396.0, 674.0)  # overlaps the QR, so it belongs to it
+
+    groups = _fuse_fragments([data_matrix, qr, qr_corner])
+
+    assert len(groups) == 2, "the two symbols were fused into one"
+    assert not any(g[3] - g[1] > 200 for g in groups), "a group spans the gap"
+
+
+def test_the_enlarged_pass_is_taken_for_geometry_not_for_a_decode():
+    # A symbol that will not checksum is still a symbol, and blackening it is the
+    # whole job — so the 2x pass counts even when nothing in it decoded. It used to
+    # be believed only if it *decoded*, which threw away the one case it exists for:
+    # a dewarped phone photo whose payment QR is not located at all at 1x, is located
+    # at 2x, and checksums at neither. The other symbol on the page kept `reads`
+    # non-empty, so the enlarged read was discarded and the QR went out unredacted.
+    import backend.codes
+
+    # Real symbols at both rects: `_read` is stubbed to model *where* each pass looks,
+    # not to conjure codes out of blank paper — an undecoded rect still has to hold
+    # the ink of one (`_MIN_INK`).
+    at_1x = [(False, (100.0, 100.0, 160.0, 160.0))]
+    only_at_2x = (400.0, 800.0, 464.0, 864.0)
+    page = _page(
+        (_matrix(EPC), (100, 100), 60),
+        (_matrix(EPC), (400, 800), 64),
+    )
+
+    original = backend.codes._read
+    backend.codes._read = lambda image: (
+        at_1x
+        if image.size == (PAGE_W, PAGE_H)
+        else [(False, _scale(r, 2)) for _, r in at_1x] + [(False, _scale(only_at_2x, 2))]
+    )
+    try:
+        boxes = code_boxes(page, PARAMS)
+    finally:
+        backend.codes._read = original
+
+    assert len(boxes) == 2, "the symbol only the enlarged pass saw was dropped"
+    assert any(_contains(b, only_at_2x) for b in boxes)
+
+
+def _scale(rect, factor):
+    return tuple(v * factor for v in rect)
+
+
 def test_a_blank_high_resolution_page_is_not_re_read():
     # The blind retry costs ~10x this pass for nothing on the common case — a page
     # with no code at all — so it is skipped once a page is big enough that "found
@@ -251,6 +308,70 @@ def test_a_decoded_page_does_not_pay_for_the_retry():
     assert calls == [(PAGE_W, PAGE_H)]
 
 
+# -- linear barcodes: decoded only, and exempt from the shape guards --------- #
+def _ink_rect(bars: Image.Image, at) -> tuple[float, float, float, float]:
+    """Where the bars land on the page, excluding the quiet zone.
+
+    Same reasoning as `_symbol_rect`, but measured off the ink rather than assuming a
+    square: a linear writer renders its quiet zone on two sides only, and the fixture
+    may have been rotated afterwards.
+    """
+    x0, y0, x1, y1 = bars.point(lambda v: 255 if v < 128 else 0).getbbox()
+    return (at[0] + x0, at[1] + y0, at[0] + x1, at[1] + y1)
+
+
+
+@pytest.mark.parametrize("fmt,payload", [("ITF", "12345678"), ("Code128", "LAB-4883-A"), ("Code39", "LAB4883")])
+@pytest.mark.parametrize("rotate", [0, 90], ids=["horizontal", "rotated"])
+def test_a_linear_barcode_is_redacted(fmt, payload, rotate):
+    # A lab order or sample number, which German medical paperwork prints as bars —
+    # often rotated 90 degrees up the left edge. The page must not still scan.
+    bars = Image.fromarray(_matrix(payload, fmt)).resize((420, 110), Image.NEAREST)
+    if rotate:
+        bars = bars.rotate(rotate, expand=True)
+    page = Image.new("L", (PAGE_W, PAGE_H), 255)
+    page.paste(bars, (200, 400))
+    page = page.convert("RGB")
+    assert zxingcpp.read_barcodes(page, formats=getattr(zxingcpp.BarcodeFormat, fmt))
+
+    boxes = code_boxes(page, PARAMS)
+    assert len(boxes) == 1
+    assert _contains(boxes[0], _ink_rect(bars, (200, 400)))
+
+    for box in boxes:
+        page.paste((0, 0, 0), (box.x0, box.y0, box.x1, box.y1))
+    assert zxingcpp.read_barcodes(page, formats=getattr(zxingcpp.BarcodeFormat, fmt)) == []
+
+
+def test_a_linear_barcode_is_not_rejected_by_the_aspect_guard():
+    # `_MAX_ASPECT` polices *undecoded* candidates, which have had no checksum to
+    # prove them real. A linear barcode is the long thin shape that guard exists to
+    # reject — printed the ordinary way round it is far past 3:1 — so the linear pass
+    # reports only decoded symbols and its rects skip `_plausible` entirely.
+    from backend.codes import _plausible
+
+    bars = Image.fromarray(_matrix("12345678", "ITF")).resize((640, 80), Image.NEAREST)
+    page = Image.new("L", (PAGE_W, PAGE_H), 255)
+    page.paste(bars, (100, 500))
+
+    assert not _plausible((100, 500, 740, 580)), "fixture is not past the guard"
+    assert len(code_boxes(page.convert("RGB"), PARAMS)) == 1
+
+
+def test_an_undecodable_smear_of_bars_is_not_a_linear_barcode():
+    # The other side of decoded-only: ruled lines, a table edge and an underline are
+    # all "parallel bars", and ITF in particular reads them happily when errors are
+    # tolerated. Nothing here checksums, so nothing here is reported.
+    from backend.codes import _read_linear
+
+    page = Image.new("L", (PAGE_W, PAGE_H), 255)
+    draw = ImageDraw.Draw(page)
+    for i in range(24):
+        draw.rectangle([100, 300 + i * 9, 700, 300 + i * 9 + (2 + i % 3)], fill=0)
+
+    assert _read_linear(page.convert("RGB")) == []
+
+
 # -- precision: the shape guards --------------------------------------------- #
 def test_real_invoice_page_without_a_code_yields_nothing():
     # The false-positive regression. `return_errors=True` will happily report a
@@ -273,6 +394,71 @@ def test_misshapen_detections_are_rejected(quad):
     from backend.codes import _plausible, _quad_rect
 
     assert not _plausible(_quad_rect(_FakePosition(quad)))
+
+
+# -- precision: the ink guard ------------------------------------------------- #
+def _forced_read(monkeypatch, *reads):
+    """Make the matrix pass report exactly ``(decoded, rect)``, whatever is on the
+    page. The guard under test is what happens to a candidate, not zxing-cpp's
+    opinion about one — and the phantoms it exists for are unreproducible by
+    construction: they are what a detector finds in sensor noise."""
+    monkeypatch.setattr(backend.codes, "_read", lambda image: list(reads))
+
+
+def _paper(size=(PAGE_W, PAGE_H), level=177, grain=3):
+    """A photographed sheet of blank paper: a flat tone plus sensor grain. Matched to
+    a sample photo, whose blank margin measures a spread of ~12 grey levels."""
+    rng = np.random.default_rng(0)
+    noise = rng.normal(level, grain, (size[1], size[0])).clip(0, 255)
+    return Image.fromarray(noise.astype(np.uint8)).convert("RGB")
+
+
+def test_a_blank_patch_of_paper_is_not_a_code(monkeypatch):
+    # The reported false positive, at the size it was measured: a 22x40 detection in
+    # the blank left margin of a photographed invoice. It is square enough and big
+    # enough, so shape alone passed it and the page came back with a black smudge on
+    # nothing.
+    _forced_read(monkeypatch, (False, (2.0, 3168.0, 24.0, 3208.0)))
+    assert code_boxes(_paper(size=(3024, 4032)), PARAMS) == []
+
+
+def test_a_page_of_text_is_not_one_giant_code(monkeypatch):
+    # The worst of them: an undecoded quad over most of a plain invoice, 1.7:1 and
+    # thousands of pixels on a side, which blackened 80% of the page. Nothing about
+    # its *shape* is wrong — which is the whole reason a third guard exists.
+    from backend.codes import _plausible
+
+    page = Image.open("example/GOÄ_Rechnung1.png").convert("RGB")
+    rect = (0.05 * page.width, 0.05 * page.height, 0.95 * page.width, 0.6 * page.height)
+
+    assert _plausible(rect), "fixture is not past the shape guards"
+    _forced_read(monkeypatch, (False, rect))
+    assert code_boxes(page, PARAMS) == []
+
+
+def test_a_tilted_code_is_measured_in_its_middle_not_its_corners(monkeypatch):
+    # `Box` is axis-aligned, so the rect around a code photographed at an angle is
+    # part blank paper: at 45 degrees half of it is, which is under the threshold. The
+    # middle of the rect is inside the symbol at any tilt a hand-held photo produces,
+    # and that is the only reason a tilted code survives the guard.
+    from backend.codes import _inked
+
+    page = _page((_matrix(EPC), (300, 400), 240)).rotate(
+        45, resample=Image.BICUBIC, fillcolor="white"
+    )
+    rect = page.convert("L").point(lambda v: 255 if v < 128 else 0).getbbox()
+
+    assert _inked(page, rect)
+    monkeypatch.setattr(backend.codes, "_INK_INNER", 1.0)
+    assert not _inked(page, rect), "the whole rect would have rejected it"
+
+
+def test_a_decoded_symbol_is_not_asked_to_look_like_one(monkeypatch):
+    # The checksum outranks the pixels. A detection that decoded has proved itself,
+    # so it is never re-judged on how it looks — this rect is on bare paper and its
+    # box is drawn anyway.
+    _forced_read(monkeypatch, (True, (100.0, 100.0, 160.0, 160.0)))
+    assert len(code_boxes(_paper(), PARAMS)) == 1
 
 
 def test_rotated_code_is_covered_by_its_enclosing_rect():

@@ -25,6 +25,7 @@ output/
 
 # Private sample corpus + its ground-truth annotations (both hold real PII).
 # The committed, synthetic annotation lives in tests/ground_truth/ instead.
+tests/Arztrechnungen/
 Arztrechnung/
 Arztrechnung2/
 

@@ -165,11 +165,20 @@ def build_analyzer() -> AnalyzerEngine:
 def _name_token_count(tokens: Sequence[_Token], start: int, end: int) -> int:
     """How many name tokens the PERSON span ``[start, end)`` is worth.
 
-    Inside the span a token must be a proper noun. *Across a comma* the bar is
-    only that it be capitalized: NER routinely returns just one half of
-    "Muster,Andrea" — surname-comma-forename is how a patient row is written —
-    and the surnames it leaves out are exactly the ones the tagger reads as
-    common nouns ("Bauer", "Jäger", "Wolf" are all ordinary German words). The
+    Inside the span a token must be a proper noun — whatever its case. The case
+    is not asked because German capitalizes every noun, which is the reason this
+    guard exists at all: that is an argument about capitals appearing where they
+    mean nothing, not about a missing one meaning something. OCR reads the capital
+    I of a name as a lowercase l ("loanna" for "Ioanna", "llona" for "Ilona"), and
+    half a name destroyed is still a name — the tagger, which called it a proper
+    noun regardless, is the better witness than the pixel that got lost.
+
+    *Across a comma* the bar is instead only that the token be capitalized: NER
+    routinely returns just one half of "Muster,Andrea" — surname-comma-forename is
+    how a patient row is written — and the surnames it leaves out are exactly the
+    ones the tagger reads as common nouns ("Bauer", "Jäger", "Wolf" are all
+    ordinary German words). There the case is the *only* evidence left, precisely
+    because the tagger has already declined to call the token a proper noun. The
     comma carries that weight safely because *something* on the line still has to
     have been recognized as a PERSON: the Leistungstexte this guard exists to
     reject ("Mikroskopie,Kultur", "Summe,Betrag", "Ferritin,CRP") produce no
@@ -184,11 +193,9 @@ def _name_token_count(tokens: Sequence[_Token], start: int, end: int) -> int:
         return 0
 
     def counts(tok: _Token, *, proper: bool) -> bool:
-        return (
-            tok.text[:1].isupper()
-            and tok.text not in _PERSON_WHITELIST
-            and (tok.pos_ == "PROPN" or not proper)
-        )
+        if tok.text in _PERSON_WHITELIST:
+            return False
+        return tok.pos_ == "PROPN" if proper else tok.text[:1].isupper()
 
     count = sum(1 for i in inside if counts(tokens[i], proper=True))
     for edge, step in ((inside[0], -1), (inside[-1], 1)):
@@ -211,8 +218,11 @@ def _redactable(results, line: str, tokens: Sequence[_Token], trace: Trace) -> b
     PROPN. It is the *coarse* tag that separates them — "Cleed" is tag_=NE.
 
     Requiring two also still drops the model's single-token noise ("5.0016") and
-    its hits on German medical terms. See :func:`_name_token_count` for the one
-    place the proper-noun bar is relaxed — a name across a comma.
+    its hits on German medical terms. See :func:`_name_token_count` for the two
+    places the bar moves — a name across a comma, and a name OCR decapitalized.
+
+    None of this reaches an item row: ``compute_boxes`` is the only caller of
+    ``is_pii`` and does not call it for a line in the item table at all.
     """
     for r in results:
         if r.entity_type == "PHONE_NUMBER":

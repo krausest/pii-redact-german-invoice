@@ -135,6 +135,32 @@ def test_item_table_gates_the_classifier_only():
     ]
 
 
+def test_the_classifier_is_never_asked_about_a_table_line():
+    # The gate above, asserted directly rather than through the boxes it produces.
+    # It is what keeps the PERSON guard's leniency (a proper noun counts whatever
+    # its case) away from the Leistungstexte, so inverting it must fail loudly.
+    class Forbidden:
+        def __init__(self):
+            self.asked = []
+
+        def is_pii(self, text, trace):
+            if text.startswith("Orientierende"):
+                raise AssertionError(f"classifier asked about an item-table line: {text!r}")
+            self.asked.append(text)
+            return False
+
+    lines = [
+        Line("Orientierende Testuntersuchg.", left=0, top=220, width=100, height=10),
+        Line("4,66 €", left=200, top=220, width=50, height=10),
+        Line("10,72 €", left=200, top=250, width=50, height=10),
+        Line("Vielen Dank", left=0, top=600, width=100, height=10),
+    ]
+    classifier = Forbidden()
+    p = RedactionPipeline(ocr=StubOCR(lines), classifier=classifier)
+    p.compute_boxes(Image.new("RGB", (400, 800)))
+    assert classifier.asked == ["Vielen Dank"]  # only the line below the table
+
+
 def test_name_memory_redacts_bare_recurrence():
     # "Diagnose Mustermann" matches no static rule and the classifier flags
     # nothing — only the surname harvested from the labeled patient line above
@@ -202,3 +228,6 @@ def test_compute_boxes_traces_each_line_and_its_verdict():
     # ...and the verdict names *which* arm fired, which is what a wrong box is
     # diagnosed from. The salutation is a static rule, so the classifier never ran.
     assert "    -> REDACT (static-rule)" in text
+    # "static-rule" is nine patterns, so the deciding one is named and quoted
+    # under its line — the other half of diagnosing an unexpected box.
+    assert "    rule SALUT matched 'Herr'" in text

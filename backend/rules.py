@@ -64,12 +64,41 @@ PATIENT_NAME = re.compile(
 # is what makes the neighbouring column a name — see LABELED_IDS. Anchored on
 # purpose: a Leistungstext that merely mentions "des Patienten" is a sentence, and
 # using it as a label would redact whatever capitalized pair sits beside it.
-PERSON_LABEL_CELL = re.compile(r"^\s*" + _PERSON_LABEL + r"\s*\.?\s*:?\s*$")
+#
+# The optional leading modifier is the spelling a third of the sample invoices
+# use — "Behandelte Person:", "Versicherte Person", "Zahlungspflichtige Person:".
+# It has to inflect like a German adjective or participle (-e/-er/-es/-en/-em),
+# and that ending is the whole guard: it keeps a cell that merely *ends* in the
+# label noun ("Beratung Person", "Leistung Name") from becoming a label and
+# blackening whatever sits beside it.
+PERSON_LABEL_CELL = re.compile(
+    r"^\s*(?:[A-ZÄÖÜ][a-zäöüß]+e[rnsm]?\s+)?" + _PERSON_LABEL + r"\s*\.?\s*:?\s*$"
+)
 
-# The value that pairs with it: two name-shaped tokens, spaced or comma-joined
-# ("Max Mustermann", "Muster, Andrea", "MUSTER,ANDREA"). Two are required — a
-# single capitalized word beside a label is too weak on its own.
-NAME_VALUE = re.compile(_NAME_PART + r"(?:\s*,\s*|\s+)" + _NAME_PART)
+# Surname and forename are written spaced or comma-joined: "Max Mustermann",
+# "Muster, Andrea", "MUSTER,ANDREA".
+_NAME_SEP = r"(?:\s*,\s*|\s+)"
+
+# A name token whose capital OCR destroyed: "Ioanna" comes back as "loanna" and
+# "Ilona" as "llona" — a capital I read as a lowercase l. Deliberately *not* a
+# confusion table (l/I, 0/O, rn/m): the general statement is that one half of a
+# name may have lost its case, and what makes believing that safe is the label
+# beside the cell, never the shape of the damage.
+_NAME_PART_OCR = r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß]{2,}(?:-[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß]+)?"
+
+# The value that pairs with the label: the *whole cell* is two name tokens, of
+# which at least one kept its capital. Two are required — a single capitalized
+# word beside a label is too weak on its own — and both further halves are
+# load-bearing. Anchoring mirrors the label ("nothing but a name" beside "nothing
+# but a label") and is what stops the column walks in labeled_value_indices from
+# running into a wrapped Leistungstext; requiring one intact capital is what stops
+# two ordinary German words from qualifying. In isolation this still matches
+# things that are not names ("eingehende Beratung") — it is never consulted in
+# isolation.
+NAME_VALUE = re.compile(
+    rf"^\s*(?:{_NAME_PART}{_NAME_SEP}{_NAME_PART_OCR}"
+    rf"|{_NAME_PART_OCR}{_NAME_SEP}{_NAME_PART})\s*$"
+)
 
 # Academic/medical title(s) followed by a capitalized name ("Dr. Weber",
 # "Prof. Dr. med. Hans Müller", "Dr. Dr. Daphne Schlegel-Lippert"). The NER
@@ -197,10 +226,23 @@ ORG_LEGAL = re.compile(
 
 # Contact details: URL (with scheme, "www." or a bare host on a common TLD),
 # email, and a phone/fax label followed by enough digits to be a number.
+#
+# The bare host — no scheme, no "www.", no "@" in front of it — is the one form
+# with nothing but the dot to go on, and German writes abbreviations the same
+# way: "Stütz-Bew.org.oder", "einschl.der Kosten". Two things tell a hostname
+# from an abbreviation chain, and both are needed:
+#   * it is **lower case** (`(?-i:...)`, against the rest of the pattern's
+#     `(?i)`) — a German abbreviation shortens a capitalized noun, "Bew.org";
+#   * the TLD **ends the token** — "einschl.der" would otherwise match its first
+#     six letters as a host, and "Bew.org.oder" its middle.
+# The cost is a letterhead printing a capitalized bare host ("Musterpraxis.de")
+# or ending a sentence with one; in the sample corpus every bare host also
+# carried a "www." or an "@" on the same line, so neither has ever been the only
+# evidence.
 CONTACT = re.compile(
     r"(?i)\bhttps?://\S+"
     r"|\bwww\.[\w\-]+(?:\.[\w\-]+)+"
-    r"|\b[\w\-]{2,}(?:\.[\w\-]+)*\.(?:de|com|net|org|eu|at|ch)\b"
+    r"|(?-i:\b[a-z\d][a-z\d\-]+(?:\.[a-z\d\-]+)*\.(?:de|com|net|org|eu|at|ch))(?![\w.\-])"
     r"|[\w.\-+]+@[\w\-]+(?:\.[\w\-]+)+"
     r"|\b(?:Tel(?:efon)?|Telefax|Fax|Mobil)\b\.?\s*:?\s*(?=[\d\s()/+\-]{6,})[\d(+]"
 )
@@ -245,24 +287,48 @@ ORG_MEDICAL = re.compile(
 )
 
 
+# The per-line deterministic rules, in the order they are tried. Named because
+# "static-rule" alone says nine different things in a trace, and the one thing
+# worth knowing about a wrong box is *which* pattern drew it. Keys are the
+# module-level names on purpose — a trace line is then a grep away from the
+# regex that produced it.
+STATIC_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("SALUT", SALUT),
+    ("PATIENT_NAME", PATIENT_NAME),
+    ("TITLE_NAME", TITLE_NAME),
+    ("NAME_DATE", NAME_DATE),
+    ("DE_STREET", DE_STREET),
+    ("DE_PLZ_CITY", DE_PLZ_CITY),
+    ("ORG_LEGAL", ORG_LEGAL),
+    ("CONTACT", CONTACT),
+    ("IMPRINT", IMPRINT),
+)
+
+
+def static_rule_match(text: str) -> tuple[str, str] | None:
+    """The first per-line deterministic rule that fires on ``text``, as
+    ``(rule name, matched text)`` — or ``None`` if none does.
+
+    The rules are salutation, patient label, titled name,
+    surname+forename+birthdate, German street / ZIP+city, and sender identity
+    (legal form, contact details, registry/banking identifiers). Birthdates and
+    labeled identifiers need the whole page, so they are handled separately by
+    :func:`labeled_value_indices`.
+
+    Returning the match rather than a bool is what lets the trace name the rule
+    *and* quote the substring it fired on: those two together are the whole
+    diagnosis of an unexpected box."""
+    for name, pattern in STATIC_RULES:
+        match = pattern.search(text)
+        if match is not None:
+            return name, match.group()
+    return None
+
+
 def line_matches_static_rule(text: str) -> bool:
-    """True if a line is redactable by the per-line deterministic rules
-    (salutation, patient label, titled name, surname+forename+birthdate, German
-    street / ZIP+city, or sender identity: legal form, contact details,
-    registry/banking identifiers).
-    Birthdates and labeled identifiers need the whole page, so they are handled
-    separately by :func:`labeled_value_indices`."""
-    return bool(
-        SALUT.search(text)
-        or PATIENT_NAME.search(text)
-        or TITLE_NAME.search(text)
-        or NAME_DATE.search(text)
-        or DE_STREET.search(text)
-        or DE_PLZ_CITY.search(text)
-        or ORG_LEGAL.search(text)
-        or CONTACT.search(text)
-        or IMPRINT.search(text)
-    )
+    """Whether any per-line deterministic rule fires — see
+    :func:`static_rule_match`, which callers that report *why* use instead."""
+    return static_rule_match(text) is not None
 
 
 @dataclass(frozen=True)
@@ -295,13 +361,26 @@ class LabeledId:
 # the top of a column often enough (a patient table, a lab form) that nothing
 # shares a row with the dates under it. A column headed that way holds birthdates
 # by definition, which is what makes the downward pass safe here and not for,
-# say, a "Datum" column.
+# say, a "Datum" column. The name row carries one for the same reason — a column
+# headed "Patient:" holds names — so a name reaches its label in either
+# direction, beside it or below it.
 LABELED_IDS: tuple[LabeledId, ...] = (
     LabeledId(
         label=BIRTH_LABEL, value=DATE_RE, merged=BIRTH_MARK, header=BIRTH_LABEL_CELL
     ),
     LabeledId(label=ID_LABEL, value=ID_VALUE),
-    LabeledId(label=PERSON_LABEL_CELL, value=NAME_VALUE),
+    LabeledId(label=PERSON_LABEL_CELL, value=NAME_VALUE, header=PERSON_LABEL_CELL),
+)
+
+# What a person's *other* details look like: a cell holding nothing but one name,
+# date or identifier. This is the vocabulary the column under a matched value may
+# continue with — a patient block prints the name and then the birthdate beneath
+# it, in the same column, labeled only by the person label beside the first row.
+# Anchored for the same reason NAME_VALUE is: a bare DATE_RE matches *inside*
+# "Behandlungszeitraum vom 15.04.2026 bis 28.04.2026", and three sample invoices
+# print exactly that line under the patient block.
+PERSON_DETAIL = re.compile(
+    rf"{NAME_VALUE.pattern}|^\s*{DATE_RE.pattern}\s*$|^\s*{ID_VALUE.pattern}\s*$"
 )
 
 # How far a column may jump between two of its own entries before it counts as
@@ -460,41 +539,64 @@ def item_table_indices(lines: list[Line]) -> set[int]:
     }
 
 
-def _column_below(lines: list[Line], header: Line, value: re.Pattern[str], gap: float) -> set[int]:
-    """The value lines of the column headed by ``header``.
+def _column_below(
+    lines: list[Line],
+    start: Line,
+    value: re.Pattern[str],
+    gap: float,
+    table: set[int],
+) -> set[int]:
+    """The value lines of the column running below ``start``.
 
-    A line belongs to the column when its horizontal *center* falls within the
-    header's own x-range — centers rather than overlap, because a "Geburtsdatum"
+    A line belongs to the column when its horizontal *center* falls within
+    ``start``'s x-range — centers rather than overlap, because a "Geburtsdatum"
     header is wider than the dates under it and would otherwise reach into the
     columns on either side. The walk stops at the first line in that column that
-    is not a value, or as soon as the vertical gap exceeds ``gap``: a header may
-    only claim what runs on directly beneath it, never the rest of the page.
+    is not a value, as soon as the vertical gap exceeds ``gap``, or at the item
+    table: a header may only claim what runs on directly beneath it, never the
+    rest of the page.
+
+    The table stop is the one bound the geometry cannot supply. A column of cells
+    ends where the invoice body begins, but nothing in a line's position says so —
+    and a Leistungstext is two capitalized words, which is the shape of a name
+    ("Eingehende Untersuchung"). So the walk is told where the table is instead of
+    being made to guess.
+
+    ``start`` is either the label cell (the column-header form) or a value cell
+    already matched beside its label (the person's remaining details below it).
     """
-    x0, x1 = header.left, header.left + header.width
+    x0, x1 = start.left, start.left + start.width
     found: set[int] = set()
-    bottom = header.top + header.height
+    bottom = start.top + start.height
     for i, ln in sorted(enumerate(lines), key=lambda pair: pair[1].top):
         if ln.top < bottom or not x0 <= ln.left + ln.width / 2 <= x1:
             continue
-        if ln.top - bottom > gap or not value.search(ln.text):
+        if i in table or ln.top - bottom > gap or not value.search(ln.text):
             break
         found.add(i)
         bottom = ln.top + ln.height
     return found
 
 
-def labeled_value_indices(lines: list[Line]) -> set[int]:
+def labeled_value_indices(lines: list[Line], table: set[int] | None = None) -> set[int]:
     """Indices of lines holding a labeled personal value (birthdate,
     Versicherten-Nr., Fall-Nr., name, ...).
 
     Labels and values routinely sit in different columns — separate OCR lines —
     which no per-line regex can pair. A value line is redacted when its line
     also matches the label (the merged one-line form), when it shares a row with
-    a line matching the label (the two-column form), or when it runs *below* a
-    line holding the label alone in its cell (the column-header form, see
-    :func:`_column_below`). The *label* line itself is only redacted if it
-    contains a value; a bare column header is not PII."""
+    a line matching the label (the two-column form), when it runs *below* a
+    line holding the label alone in its cell (the column-header form), or when it
+    continues the column under a value that was matched that way (a patient block
+    prints the name beside the label and the birthdate under the name). The last
+    two are the same :func:`_column_below` walk from a different starting cell.
+
+    The *label* line itself is only redacted if it contains a value; a bare column
+    header is not PII. ``table`` is ``item_table_indices`` — the column walks stop
+    there; ``None`` means "no table", which is what a caller testing the rule in
+    isolation wants."""
     idx: set[int] = set()
+    table = table or set()
     gap = _COLUMN_GAP_FACTOR * median([ln.height for ln in lines] or [0])
     for rule in LABELED_IDS:
         label_spans = [
@@ -502,6 +604,13 @@ def labeled_value_indices(lines: list[Line]) -> set[int]:
         ]
         for i, ln in enumerate(lines):
             if not rule.value.search(ln.text):
+                continue
+            # A cell holding nothing but the label is never a value. Implicit
+            # until the person labels grew a modifier — "Versicherte Person" is
+            # two name-shaped tokens, so the label cell now matches the value
+            # pattern too, and "a bare column header is not PII" has to be stated
+            # rather than left to the patterns not overlapping.
+            if rule.header is not None and rule.header.search(ln.text):
                 continue
             # label + value merged on one line, spelled out or abbreviated
             if rule.label.search(ln.text) or (
@@ -513,8 +622,13 @@ def labeled_value_indices(lines: list[Line]) -> set[int]:
             tol = ln.height / 2
             if any(y0 - tol <= center <= y1 + tol for y0, y1 in label_spans):
                 idx.add(i)
+                if rule.header is not None:
+                    # The label licensed this cell, so it licenses the person's
+                    # other details running on beneath it — the birthdate under
+                    # the name, which carries no label of its own.
+                    idx |= _column_below(lines, ln, PERSON_DETAIL, gap, table)
         if rule.header is not None:
             for ln in lines:
                 if rule.header.search(ln.text):
-                    idx |= _column_below(lines, ln, rule.value, gap)
+                    idx |= _column_below(lines, ln, rule.value, gap, table)
     return idx
