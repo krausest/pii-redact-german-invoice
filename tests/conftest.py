@@ -84,6 +84,30 @@ class FakePipeline:
         return Image.new("RGB", image.size, (0, 0, 0))
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--regression",
+        action="store_true",
+        default=False,
+        help="also run the OCR-replay regression suite (loads the classifier)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Make ``regression`` opt-in via a flag rather than a marker expression.
+
+    A marker alone would not do it: the documented selectors are ``-m 'not slow'``
+    and ``-m slow``, and a command-line ``-m`` replaces anything in ``addopts``,
+    so one of the two would always drag the suite in. A flag is orthogonal to
+    ``-m`` and holds whatever the caller selects."""
+    if config.getoption("--regression"):
+        return
+    skip = pytest.mark.skip(reason="needs --regression")
+    for item in items:
+        if "regression" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture
 def png_bytes() -> bytes:
     return make_image_bytes("PNG")

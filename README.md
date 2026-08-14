@@ -291,13 +291,15 @@ the log.
 
 ```
 line @(244,889 525x47 conf=99.40): 'Musterstr. 13'
-    match PERSON 0.85 'Musterstr. 13' [SpacyRecognizer]
-    match DE_ADDRESS 0.70 'Musterstr. 13' [PatternRecognizer/de_street]
-      Ignoring PERSON with only 1 name token(s)
+    rule DE_STREET matched 'Musterstr. 13'
     -> REDACT (static-rule)
+line @(112,261 99x17 conf=99.99): 'Max Mustermann'
+    match PERSON 0.85 'Max Mustermann' [SpacyRecognizer]
+    -> REDACT (classifier)
 ```
 
-Every OCR line with its pixel box, each classifier match under it, and the verdict
+Every OCR line with its pixel box, then what fired on it — the deterministic rule
+by name with the text it matched, or the classifier's matches — and the verdict
 — which arm fired (`static-rule`, `labeled-value`, `name-memory`, `classifier`) or
 why none did. It is how a wrong box is diagnosed without sending the document
 anywhere; pages are marked off with `=== page N ===`. `debug=true` on its own is a

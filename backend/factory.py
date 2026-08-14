@@ -8,6 +8,7 @@ and the CLI builds one per run.
 
 from __future__ import annotations
 
+from backend.classifiers.base import Classifier
 from backend.codes import CodeParams
 from backend.config import Config
 from backend.pipeline import RedactionPipeline
@@ -36,6 +37,16 @@ def _build_classifier(classifier: str, score_threshold: float):
 
         return GlinerClassifier()
     raise ValueError(f"unknown classifier {classifier!r}")
+
+
+def build_classifier(config: Config) -> Classifier:
+    """The classifier on its own, without the OCR backend beside it.
+
+    :mod:`backend.replay` is why this is public: replaying frozen OCR is exactly
+    the case where the OCR model load must *not* happen, and the engine pair still
+    has to be resolved from config so the snapshots record which classifier ran."""
+    _, classifier_name = config.engine.resolve()
+    return _build_classifier(classifier_name, config.redaction.score_threshold)
 
 
 def build_pipeline(config: Config) -> RedactionPipeline:
