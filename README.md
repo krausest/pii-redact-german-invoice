@@ -468,10 +468,26 @@ Matrix detection is tuned for **recall**: a symbol is covered once it is *locate
 even when it does not decode.
 That matters at the resolution real uploads have — the Girocode on one sample photo
 is 60 px across and fails its checksum, which a decode-only reader would skip and
-leave in the clear. Paying for the looser gate are two shape guards, since a symbol
-that never decoded has nothing proving it real: a candidate is dropped if it is
-under 12 px or more than 3:1 out of square. That is what rejects the run of item-table
-rows one sample page reports as a 738×108 "DataMatrix".
+leave in the clear. Paying for the looser gate are three guards, since a symbol that
+never decoded has nothing proving it real. Two are about shape: a candidate is
+dropped if it is under 12 px or more than 3:1 out of square, which is what rejects
+the run of item-table rows one sample page reports as a 738×108 "DataMatrix".
+
+The third is about substance, and it is the one shape cannot give. A matrix code is
+**about half ink by construction** — QR's masking step exists to keep the module
+balance near even, DataMatrix's timing border and ITF's bars do the same — so roughly
+half of any real symbol is dark, at any size or resolution. Paper is not: across the
+photographed sample pages, blank paper measures 0.00, a page of plain text 0.03, a
+hole-punch 0.03 and the halftone screen of a printed logo 0.22, against 0.38–0.70 for
+every real symbol. So an undecoded candidate must be at least 30% ink. Two details are
+measured rather than chosen: the reference is the paper *around* the candidate, not an
+Otsu threshold (Otsu splits sensor noise on a blank crop down the middle and calls
+half of it ink, scoring the phantoms above the symbols); and the ink is measured over
+the middle of the rect, because `Box` is axis-aligned and a code photographed at an
+angle fills only part of its own bounding rect — a 45° tilt costs half of it. There is
+deliberately no upper bound: an underexposed photo pushes a real symbol *toward* solid
+and dropping it there would leak the IBAN, while what an upper bound would catch (a
+shadow, a black logo bar) costs blank paper.
 
 **Linear barcodes invert both halves of that**, because a 1D barcode *is* the long
 thin shape the aspect guard exists to reject — shape cannot vouch for it, so the
@@ -483,8 +499,11 @@ finds immediately when ITF is requested alone. (A clean generated page does *not
 reproduce that, which makes merging the two format lists a tempting and silent
 regression.)
 
-Across the sample corpus the two passes together find five real codes and nothing
-else — the linear formats produce no false positive on any page, in either
+Across 31 photographed sample pages the two passes together find 20 real codes — 15
+matrix and 5 linear — and nothing else. Before the ink guard they also drew five boxes
+on nothing: two on blank margin, one on a hole-punch, one on a logo's halftone screen,
+and one undecoded 2813×1647 quad at 1.7:1 that blackened 80% of an invoice carrying no
+code at all. The linear formats produce no false positive on any page, in either
 orientation, before or after dewarping.
 
 | Key (`[redaction]`) | Default | Meaning |
