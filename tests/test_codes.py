@@ -14,6 +14,7 @@ import pytest
 import zxingcpp
 from PIL import Image, ImageDraw
 
+import backend.codes
 from backend.codes import CodeParams, code_boxes
 
 PAGE_W, PAGE_H = 850, 1200
@@ -245,9 +246,15 @@ def test_the_enlarged_pass_is_taken_for_geometry_not_for_a_decode():
     # non-empty, so the enlarged read was discarded and the QR went out unredacted.
     import backend.codes
 
-    page = Image.new("RGB", (PAGE_W, PAGE_H), "white")
+    # Real symbols at both rects: `_read` is stubbed to model *where* each pass looks,
+    # not to conjure codes out of blank paper — an undecoded rect still has to hold
+    # the ink of one (`_MIN_INK`).
     at_1x = [(False, (100.0, 100.0, 160.0, 160.0))]
     only_at_2x = (400.0, 800.0, 464.0, 864.0)
+    page = _page(
+        (_matrix(EPC), (100, 100), 60),
+        (_matrix(EPC), (400, 800), 64),
+    )
 
     original = backend.codes._read
     backend.codes._read = lambda image: (
@@ -387,6 +394,71 @@ def test_misshapen_detections_are_rejected(quad):
     from backend.codes import _plausible, _quad_rect
 
     assert not _plausible(_quad_rect(_FakePosition(quad)))
+
+
+# -- precision: the ink guard ------------------------------------------------- #
+def _forced_read(monkeypatch, *reads):
+    """Make the matrix pass report exactly ``(decoded, rect)``, whatever is on the
+    page. The guard under test is what happens to a candidate, not zxing-cpp's
+    opinion about one — and the phantoms it exists for are unreproducible by
+    construction: they are what a detector finds in sensor noise."""
+    monkeypatch.setattr(backend.codes, "_read", lambda image: list(reads))
+
+
+def _paper(size=(PAGE_W, PAGE_H), level=177, grain=3):
+    """A photographed sheet of blank paper: a flat tone plus sensor grain. Matched to
+    a sample photo, whose blank margin measures a spread of ~12 grey levels."""
+    rng = np.random.default_rng(0)
+    noise = rng.normal(level, grain, (size[1], size[0])).clip(0, 255)
+    return Image.fromarray(noise.astype(np.uint8)).convert("RGB")
+
+
+def test_a_blank_patch_of_paper_is_not_a_code(monkeypatch):
+    # The reported false positive, at the size it was measured: a 22x40 detection in
+    # the blank left margin of a photographed invoice. It is square enough and big
+    # enough, so shape alone passed it and the page came back with a black smudge on
+    # nothing.
+    _forced_read(monkeypatch, (False, (2.0, 3168.0, 24.0, 3208.0)))
+    assert code_boxes(_paper(size=(3024, 4032)), PARAMS) == []
+
+
+def test_a_page_of_text_is_not_one_giant_code(monkeypatch):
+    # The worst of them: an undecoded quad over most of a plain invoice, 1.7:1 and
+    # thousands of pixels on a side, which blackened 80% of the page. Nothing about
+    # its *shape* is wrong — which is the whole reason a third guard exists.
+    from backend.codes import _plausible
+
+    page = Image.open("example/GOÄ_Rechnung1.png").convert("RGB")
+    rect = (0.05 * page.width, 0.05 * page.height, 0.95 * page.width, 0.6 * page.height)
+
+    assert _plausible(rect), "fixture is not past the shape guards"
+    _forced_read(monkeypatch, (False, rect))
+    assert code_boxes(page, PARAMS) == []
+
+
+def test_a_tilted_code_is_measured_in_its_middle_not_its_corners(monkeypatch):
+    # `Box` is axis-aligned, so the rect around a code photographed at an angle is
+    # part blank paper: at 45 degrees half of it is, which is under the threshold. The
+    # middle of the rect is inside the symbol at any tilt a hand-held photo produces,
+    # and that is the only reason a tilted code survives the guard.
+    from backend.codes import _inked
+
+    page = _page((_matrix(EPC), (300, 400), 240)).rotate(
+        45, resample=Image.BICUBIC, fillcolor="white"
+    )
+    rect = page.convert("L").point(lambda v: 255 if v < 128 else 0).getbbox()
+
+    assert _inked(page, rect)
+    monkeypatch.setattr(backend.codes, "_INK_INNER", 1.0)
+    assert not _inked(page, rect), "the whole rect would have rejected it"
+
+
+def test_a_decoded_symbol_is_not_asked_to_look_like_one(monkeypatch):
+    # The checksum outranks the pixels. A detection that decoded has proved itself,
+    # so it is never re-judged on how it looks — this rect is on bare paper and its
+    # box is drawn anyway.
+    _forced_read(monkeypatch, (True, (100.0, 100.0, 160.0, 160.0)))
+    assert len(code_boxes(_paper(), PARAMS)) == 1
 
 
 def test_rotated_code_is_covered_by_its_enclosing_rect():
