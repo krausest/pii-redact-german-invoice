@@ -36,13 +36,6 @@ presidio-analyzer, so it does ship.
 | pytest | MIT |
 | requests | Apache-2.0 |
 
-## Python — optional `gliner` extra (`uv sync --extra gliner`; **not** installed in the Docker image)
-
-| Package | License |
-|---|---|
-| gliner | Apache-2.0 |
-| torch (pulled in transitively) | BSD-3-Clause |
-
 ## JavaScript — `frontend/` (build-time only; only the compiled static assets ship, not the source deps)
 
 | Package | License |
@@ -63,10 +56,9 @@ presidio-analyzer, so it does ship.
 
 | Model | Used by | License |
 |---|---|---|
-| `de_core_news_lg` (spaCy German pipeline, v3.8.0) | Presidio's NLP engine (`presidio`/`onnx` engine presets) | MIT |
+| `de_core_news_lg` (spaCy German pipeline, v3.8.0) | Presidio's NLP engine (both engine presets) | MIT |
 | PaddleOCR PP-OCRv6 German detection + recognition models | `PaddleOCRBackend` (both `paddle` and `onnxruntime` OCR backends) | Apache-2.0 |
 | PaddleX `doc_preprocessor` / UVDoc unwarping + doc-orientation models | `DocUnwarper` | Apache-2.0 |
-| `urchade/gliner_multi_pii-v1` (GLiNER + mDeBERTa backbone, HuggingFace) | `GlinerClassifier` (`gliner` engine preset only, optional extra) | Apache-2.0 |
 
 ## What license applies to the built Dockerfile image
 

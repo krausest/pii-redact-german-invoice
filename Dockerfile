@@ -39,16 +39,10 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
     PADDLE_PDX_CACHE_HOME=/app/.paddle_cache \
-    HF_HUB_CACHE=/app/.gliner_cache \
     PII_STATIC_DIR=/app/static
 
-# The image ships the presidio + onnx engines only. gliner is an optional extra
-# (`[project.optional-dependencies].gliner`) and is NOT installed here — it would
-# pull torch + ~4.6 GB of CUDA libraries that CPU inference never uses. To include
-# it, add `--extra gliner` to both syncs below (and expect a much larger image).
-
 # --- Dependency layer (cached across source changes) ---
-# `--no-default-groups` drops the dev group (pytest); no `--extra` means no gliner.
+# `--no-default-groups` drops the dev group (pytest).
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-default-groups --no-install-project
 
@@ -61,7 +55,8 @@ RUN uv sync --frozen --no-default-groups
 
 # --- Bake every model into the image (offline runtime) ---
 # HF_HUB_OFFLINE=0 is set for this step only so the models may download; the ENV
-# below forces offline at runtime. Populates /app/.paddle_cache + /app/.gliner_cache.
+# below forces offline at runtime. Populates /app/.paddle_cache. Nothing reaches
+# HuggingFace any more, so the offline flags are now a plain network guard.
 # `--no-sync`: don't let `uv run` re-sync (which would re-add the dev group).
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 uv run --no-sync python warmup.py
 

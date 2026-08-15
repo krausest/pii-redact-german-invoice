@@ -29,12 +29,6 @@ dependencies = [
     "zxing-cpp>=3.1.0",
 ]
 
-[project.optional-dependencies]
-# The gliner engine pulls torch (+ ~4.6 GB of CUDA libs on linux/amd64) that the
-# default presidio/onnx engines don't need. Kept optional so it's excluded from the
-# Docker image; install locally with `uv sync --extra gliner` to use engine=gliner.
-gliner = ["gliner>=0.2.27"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
