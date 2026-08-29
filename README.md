@@ -377,77 +377,53 @@ mistyped key is a mistake, not a no-op.
 
 The sender of an invoice — the practice, the clearing house — identifies itself in
 places no per-line detector can reach: a letterhead is usually a **logo**, and OCR
-returns no line for a graphic. So `[redaction].redact_regions` (on by default)
-adds boxes that are not tied to any single OCR line:
+returns no line for a graphic. So `[redaction].redact_regions` (on by default) runs
+a trained **layout detector** (PP-DocLayout, through the already-installed
+`paddleocr.LayoutDetection` — no extra dependency) over the page and adds boxes
+that are not tied to any single OCR line.
 
-| Key (`[redaction.regions]`) | Default | Meaning |
+| Key (`[redaction.layout]`) | Default | Meaning |
 |---|---|---|
-| `header_frac` | `0.12` | how far down the page letterhead lines are looked for |
-| `footer_frac` | `0.10` | how far up from the bottom imprint lines are looked for |
-| `column_x_frac` | `0.50` | the sender column is looked for right of this |
-| `column_y_frac` | `0.50` | …and its anchor must sit above this |
-| `vgap_factor` | `1.2` | vertical gap, in line heights, that a block may bridge |
-| `align_factor` | `0.4` | left-edge offset, in line heights, that still counts as aligned |
-| `recipient_y_min_frac` | `0.05` | the recipient address block is seeded below this… |
-| `recipient_y_max_frac` | `0.45` | …and above this, left of `column_x_frac` (`max <= min` disables) |
+| `model_name` | `PP-DocLayout_plus-L` | the detector checkpoint; `PP-DocLayout-{S,M,L}` and `PP-DocLayoutV2/V3` swap in by name |
+| `threshold` | `0.35` | minimum detection confidence |
+| `layout_nms` | `true` | prune near-duplicate overlapping detections |
 
-A band **spans the full page width** — that is what covers the logo, which sits
-beside or above the text and which OCR never reports — but it is only as tall as the
-text it found. The two fractions are a *search window*, not the band height:
-widening one finds more letterhead, it does not blacken more paper. (A cap at 1.5×
-the window bounds the height, since a single merged OCR box would otherwise set it.)
+The detector returns typed regions — `text`, `table`, `header`, `footer`, `image`,
+`seal`, `doc_title` and more — and two rules turn them into boxes:
 
-A band is drawn only when the text inside it **names a sender**: a company, a URL, a
-titled name, an address. Text alone is not enough. On a continuation page the item
-table can start at the very top of the sheet and the totals can sit in the bottom
-tenth; there is no sender in either band, so no strip is drawn and nothing is
-destroyed.
+- a region typed **`image`, `seal`, `header` or `footer` is blackened on sight**,
+  whatever it holds. `image` and `seal` cover the letterhead logo, a practice
+  stamp and a payment QR code — graphics that OCR never reports, so the detected
+  type is the only evidence they exist.
+- **every other region is blackened once more than half of its OCR lines** were
+  flagged by the per-line pass. This is what covers the lines *between* the hits: a
+  recipient address block is a `text` region whose street and ZIP+city lines
+  already match a static rule, so the majority carries the c/o line, the company
+  recipient and the name line OCR garbled.
 
-The **sender column** has no fixed extent, so it is not given one. Every line that
-looks like a sender — company/legal form, URL, e-mail, phone, `Behandlung durch`, a
-titled name, an address — seeds a block, which then absorbs any line adjoining one
-already in it until nothing more does. Two lines adjoin when they are *both*
-near-touching (`vgap_factor`) and share a left edge (`align_factor`). Recognition
-and extent are separate: the anchor says *this is the sender*, the layout says
-*this is how far it goes*.
+A line belongs to the region containing its **center point**; where regions nest,
+the smallest one wins, since the tighter box is the more specific claim. Blank
+lines are not counted — nothing can ever redact one, so counting them would only
+drag a block below the threshold.
 
-The gap is wide enough to **bridge a blank line**, so a line one empty line below
-the block still joins it if it is aligned — a letterhead prints its branch or bank
-line that way, and at a spacing-sized gap the block ended one line short of it. The
-cost is paid in invoice metadata: a `Rechnungs-Nr.` or `Rechnungsdatum` column
-sitting a blank line under the letterhead is drawn into the block and blackened
-too. That is an information loss, not a leak, and no threshold separates the two —
-on the sample corpus the invoice number joins at a gap of 0.6 line heights and the
-branch line needs 1.1.
+One consequence worth knowing: the majority rule has **no exception for `table`**.
+On a page where most item rows carry a patient name, the fee table goes black with
+them.
 
-Each block is a connected component, so it is the same set of lines whichever of
-its members you start from. That matters more than it sounds: anything walking the
-page in top-to-bottom order has to cope with the two columns of a letter
-interleaving, where a recipient-address line sorting between two sender lines
-splits the block and leaves a hole in the middle of it.
+The threshold sits **below the model's own 0.5 default** because photographed pages
+depress every confidence score: on the sample corpus a scanned page's fee table
+detects at 0.62–0.99, the phone photos at 0.38–0.43. Detection costs ~0.6 s per
+page, roughly 4 % of a page's total, and is near-constant in page size.
 
-Both halves of the merge test are needed, and the thresholds are measured rather
-than guessed. On one sample invoice the payment table *touches* the practice block
-and only the misalignment cuts it; on another the table is *exactly* aligned and
-only the gap does. Inside a real block the worst case measured is 0.41 and 0.14
-against thresholds of 0.5 and 0.4.
+`--debug-layout` (a CLI flag, not a query parameter) writes `<stem>_layout.jpg`
+with every detected region outlined and labeled, the always-blackened ones tinted
+red, so you can see what the model saw before trusting what it blackened.
 
-The **recipient address block** is the same machinery pointed at the other window:
-a street or ZIP+city line left of `column_x_frac`, inside the
-`recipient_y_min_frac`–`recipient_y_max_frac` window, seeds a block that grows the
-same way. The per-line rules already blacken the lines they recognize; this box
-covers the lines *between* them — a c/o line, a company recipient, a name line OCR
-garbled — which match nothing on their own. Only street and ZIP+city seed it (a
-salutation also occurs over left-aligned body text, where growth would swallow the
-paragraph); every deliverable address contains both, and the block reaches the
-name and salutation lines above them.
-
-Set a fraction to `0` to drop that one region; `redact_regions = false` (or
-`PII_REDACT_REGIONS=false` in the environment) drops all of them. This is a
-**config-only** setting — unlike `unwarp` it is not a query parameter and not a CLI
-flag, so it is fixed per process like the engine. The boxes
-it produces are ordinary boxes: they appear in the JSON report and are editable
-(and deletable) in the web UI like any other.
+`redact_regions = false` (or `PII_REDACT_REGIONS=false` in the environment) drops
+the pass entirely. This is a **config-only** setting — unlike `unwarp` it is not a
+query parameter, so it is fixed per process like the engine. The boxes it produces
+are ordinary boxes: they appear in the JSON report and are editable (and deletable)
+in the web UI like any other.
 
 ### Barcode redaction (QR, DataMatrix, 1D)
 
@@ -601,8 +577,9 @@ classify), and `apply_boxes()` (fill):
    the model-based classifier.
 4. **Draw** a filled black rectangle over the line's box (with a 2 px pad) if it is judged
    to contain PII.
-5. **Add the region boxes** — header band, footer band, sender column
-   ([`backend/regions.py`](backend/regions.py)) — not derived from an OCR line, and
+5. **Add the region boxes** — whole layout regions the detector typed as page
+   furniture, plus any region whose lines are mostly redacted
+   ([`backend/layout.py`](backend/layout.py)) — not derived from an OCR line, and
    therefore able to cover a letterhead logo. See
    [Region redaction](#region-redaction).
 6. **Add the barcode boxes** — QR, Micro QR, DataMatrix, ITF, Code 128, Code 39
@@ -788,7 +765,7 @@ backend/            the whole Python package — pipeline, CLI and REST service
   options.py        pydantic validation for query options and the assemble body
   config.py         config.toml schema + engine preset resolution
   rules.py          deterministic German patterns (salutation, street, birthdate)
-  regions.py        header/footer bands and the sender column (not line-derived)
+  layout.py         PP-DocLayout regions: whole-region boxes (not line-derived)
   codes.py          barcode boxes (QR/DataMatrix/1D) — the only pixel-reading source
   ocr/ classifiers/ the two swappable axes behind an engine preset
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
@@ -851,7 +828,7 @@ the built image.
   fires when it holds sender text, but once it does it covers everything on those
   rows, logo and legitimate content alike (`Seite 1 von 2`, a page number sharing a
   row with a bank line). That is the price of covering a letterhead graphic, which
-  no text-based rule can reach. Tune `[redaction.regions]` or set
+  no text-based rule can reach. Tune `[redaction.layout]` or set
   `redact_regions = false` (or `PII_REDACT_REGIONS=false`) if it costs you more
   than it buys.
 - **Matrix-code detection is tuned for recall, so it can over-cover.** A candidate

@@ -59,6 +59,7 @@ presidio-analyzer, so it does ship.
 | `de_core_news_lg` (spaCy German pipeline, v3.8.0) | Presidio's NLP engine (both engine presets) | MIT |
 | PaddleOCR PP-OCRv6 German detection + recognition models | `PaddleOCRBackend` (both `paddle` and `onnxruntime` OCR backends) | Apache-2.0 |
 | PaddleX `doc_preprocessor` / UVDoc unwarping + doc-orientation models | `DocUnwarper` | Apache-2.0 |
+| PaddleX PP-DocLayout_plus-L layout detection model | `backend.layout.PaddleLayoutDetector` (whole-region pass) | Apache-2.0 |
 
 ## What license applies to the built Dockerfile image
 

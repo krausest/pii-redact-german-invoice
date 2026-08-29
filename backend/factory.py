@@ -12,7 +12,6 @@ from backend.classifiers.base import Classifier
 from backend.codes import CodeParams
 from backend.config import Config
 from backend.pipeline import RedactionPipeline
-from backend.regions import RegionParams
 
 
 def _build_ocr(ocr_backend: str, det_box_thresh: float):
@@ -27,6 +26,12 @@ def _build_classifier(classifier: str, score_threshold: float):
 
         return PresidioClassifier(score_threshold=score_threshold)
     raise ValueError(f"unknown classifier {classifier!r}")
+
+
+def _build_layout_detector(model_name: str, threshold: float, layout_nms: bool):
+    from backend.layout import PaddleLayoutDetector
+
+    return PaddleLayoutDetector(model_name=model_name, threshold=threshold, layout_nms=layout_nms)
 
 
 def build_classifier(config: Config) -> Classifier:
@@ -61,15 +66,18 @@ def build_pipeline(config: Config) -> RedactionPipeline:
         unwarp_enabled=config.redaction.unwarp,
         # `None` is how the pipeline is told to skip the region pass, so the
         # toggle and its geometry collapse into one argument.
-        regions=(
-            RegionParams(
-                **config.redaction.regions.model_dump(),
-                padding=config.redaction.padding,
+        # Built eagerly, like the OCR backend — docker/warmup.py relies on
+        # pipeline construction alone baking every model into the image.
+        layout=(
+            _build_layout_detector(
+                config.redaction.layout.model_name,
+                config.redaction.layout.threshold,
+                config.redaction.layout.layout_nms,
             )
             if config.redaction.redact_regions
             else None
         ),
-        # Same `None`-means-off convention as `regions`.
+        # Same `None`-means-off convention as `layout`.
         codes=(
             CodeParams(
                 margin_frac=config.redaction.code_margin_frac,

@@ -128,9 +128,9 @@ def test_api_values_parsed(tmp_path):
         ('[engine]\nclassifier = "nope"\n', "classifier"),  # not a classifier
         ("[engine]\ndet_box_thresh = 1.5\n", "det_box_thresh"),  # not a probability
         ("[api]\nworkers = 0\n", "workers"),
-        ("[redaction.regions]\nheader_frac = 0.9\n", "header_frac"),  # over the 0.5 cap
-        ("[redaction.regions]\ngap_factor = 0\n", "gap_factor"),
-        ("[redaction.regions]\ncolumn_frac = 0.5\n", "column_frac"),  # typo
+        ("[redaction.layout]\nthreshold = 0.0\n", "threshold"),  # not a probability
+        ("[redaction.layout]\nthreshold = 1.5\n", "threshold"),
+        ("[redaction.layout]\nmodel = \"x\"\n", "model"),  # typo
     ],
 )
 def test_bad_config_is_rejected_at_load(tmp_path, body, culprit):
@@ -144,23 +144,23 @@ def test_fill_must_be_three_channels(tmp_path):
         load_config(_write(tmp_path, "[redaction]\nfill = [0, 0]\n"))
 
 
-def test_regions_section_is_independent_of_the_toggle(tmp_path):
-    # Geometry stays parseable with the pass switched off, so flipping the toggle
-    # back on does not need the fractions retyped.
-    body = "[redaction]\nredact_regions = false\n\n[redaction.regions]\nfooter_frac = 0.2\n"
+def test_layout_section_is_independent_of_the_toggle(tmp_path):
+    # The model settings stay parseable with the pass switched off, so flipping
+    # the toggle back on does not need them retyped.
+    body = '[redaction]\nredact_regions = false\n\n[redaction.layout]\nthreshold = 0.5\n'
     cfg = load_config(_write(tmp_path, body))
     assert cfg.redaction.redact_regions is False
-    assert cfg.redaction.regions.footer_frac == 0.2
-    assert cfg.redaction.regions.header_frac == 0.12  # default preserved
+    assert cfg.redaction.layout.threshold == 0.5
+    assert cfg.redaction.layout.model_name == "PP-DocLayout_plus-L"  # default preserved
 
 
-def test_recipient_window_defaults_and_override(tmp_path):
-    cfg = load_config(_write(tmp_path, ""))
-    assert cfg.redaction.regions.recipient_y_min_frac == 0.05
-    assert cfg.redaction.regions.recipient_y_max_frac == 0.45
-    # An empty window (max <= min) is the documented off switch and must parse.
-    body = "[redaction.regions]\nrecipient_y_max_frac = 0.0\n"
-    assert load_config(_write(tmp_path, body)).redaction.regions.recipient_y_max_frac == 0.0
+def test_layout_defaults():
+    cfg = Config()
+    assert cfg.redaction.layout.model_name == "PP-DocLayout_plus-L"
+    # Pinned: the model's own default is 0.5, at which a photographed page's fee
+    # table (0.38-0.43 on the corpus) is not detected at all.
+    assert cfg.redaction.layout.threshold == 0.35
+    assert cfg.redaction.layout.layout_nms is True
 
 
 def test_code_margin_is_independent_of_the_toggle(tmp_path):

@@ -1,6 +1,7 @@
 """Build-time model warmup: bake every engine's models into the image.
 
-Run during `docker build`. Building each engine's pipeline *constructs* its models,
+Run during `docker build`. Building each engine's pipeline *constructs* its models
+(OCR, classifier, and the PP-DocLayout detector behind the whole-region pass),
 which is what triggers the download into the image cache (Paddle native +
 onnxruntime OCR). The unwarp models are NOT covered by that: the engines only
 receive an unwarper *factory* (see backend/factory.py), and the DocUnwarper is

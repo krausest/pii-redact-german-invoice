@@ -7,9 +7,14 @@ from PIL import Image
 from backend.codes import CodeParams
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
-from backend.regions import RegionParams
+from backend.layout import LayoutRegion
 from backend.trace import Trace
-from tests.conftest import RecordingUnwarper, StubClassifier, StubOCR
+from tests.conftest import (
+    RecordingUnwarper,
+    StubClassifier,
+    StubLayoutDetector,
+    StubOCR,
+)
 
 
 def _pipeline(lines, pii_subs, **kwargs):
@@ -51,27 +56,41 @@ def test_compute_boxes_flags_only_pii_lines():
     assert boxes == [Box(3, 18, 67, 34)]  # only the second line, padded by 2
 
 
-def test_compute_boxes_appends_region_boxes():
-    # StubOCR ignores the image, so the page size the bands are measured against
-    # comes from the image argument alone.
-    lines = [Line("Muster GmbH", left=0, top=5, width=80, height=10)]
-    p = _pipeline(
-        lines,
-        [],
-        padding=0,
-        regions=RegionParams(
-            header_frac=0.2,
-            footer_frac=0.0,
-            column_x_frac=1.0,
-            column_y_frac=0.0,
-            vgap_factor=0.5,
-            align_factor=0.4,
-        ),
-    )
+def _region(label, x0, y0, x1, y1):
+    return LayoutRegion(label=label, score=0.9, box=Box(x0, y0, x1, y1))
+
+
+def test_compute_boxes_blackens_an_image_region_whole():
+    # `image` is blackened on sight — it holds no OCR line at all (a logo is
+    # pixels), which is exactly why the majority rule below cannot reach it.
+    lines = [Line("Muster GmbH", left=0, top=50, width=80, height=10)]
+    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("image", 0, 0, 100, 30)]))
     boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
-    # the line itself (ORG_LEGAL) plus the full-width header band over it — same
-    # height as the line, but spanning the page so a logo beside it is covered too.
-    assert boxes == [Box(0, 5, 80, 15), Box(0, 0, 100, 15)]
+    assert boxes == [Box(0, 50, 80, 60), Box(0, 0, 100, 30)]
+
+
+def test_compute_boxes_blackens_a_region_whose_lines_are_mostly_redacted():
+    # Two of three lines match a static rule (ORG_LEGAL / street), so the third —
+    # which no per-line rule reaches — is carried by the majority.
+    lines = [
+        Line("Muster GmbH", left=10, top=10, width=80, height=10),
+        Line("Musterstrasse 7", left=10, top=25, width=80, height=10),
+        Line("c/o irgendwer", left=10, top=40, width=80, height=10),
+    ]
+    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 55)]))
+    boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
+    assert boxes[-1] == Box(5, 5, 95, 55)
+
+
+def test_compute_boxes_leaves_a_region_alone_at_exactly_half():
+    # Strictly more than half: one of two lines is not a majority, so the
+    # untouched line stays readable.
+    lines = [
+        Line("Muster GmbH", left=10, top=10, width=80, height=10),
+        Line("Beratung nach GOAE", left=10, top=25, width=80, height=10),
+    ]
+    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 40)]))
+    assert p.compute_boxes(Image.new("RGB", (100, 100))) == [Box(10, 10, 90, 20)]
 
 
 def test_compute_boxes_skips_regions_by_default():

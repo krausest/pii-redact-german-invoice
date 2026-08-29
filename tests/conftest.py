@@ -116,3 +116,14 @@ def png_bytes() -> bytes:
 @pytest.fixture
 def jpeg_bytes() -> bytes:
     return make_image_bytes("JPEG")
+
+
+class StubLayoutDetector:
+    """Duck-types ``backend.layout.PaddleLayoutDetector`` with a fixed region
+    list — no paddle model anywhere near the fast suite."""
+
+    def __init__(self, regions):
+        self._regions = regions
+
+    def regions(self, image):
+        return list(self._regions)

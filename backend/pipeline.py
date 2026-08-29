@@ -21,7 +21,7 @@ from backend.classifiers.base import Classifier
 from backend.codes import CodeParams, code_boxes
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
-from backend.regions import RegionParams, region_boxes
+from backend.layout import PaddleLayoutDetector, assign_lines, draw_layout_debug, region_boxes
 from backend.rules import (
     harvest_names,
     item_table_indices,
@@ -43,7 +43,7 @@ class RedactionPipeline:
         padding: int = 2,
         unwarp_enabled: bool = True,
         unwarper_factory: Callable[[], DocUnwarper] | None = None,
-        regions: RegionParams | None = None,
+        layout: PaddleLayoutDetector | None = None,
         codes: CodeParams | None = None,
     ) -> None:
         self._ocr = ocr
@@ -53,10 +53,10 @@ class RedactionPipeline:
         self._fill = fill
         self._padding = padding
         self._unwarp_enabled = unwarp_enabled
-        # Whole-region redaction is off unless geometry is supplied — `None` is
-        # both "no params" and "don't run it", so there is no second flag to
+        # Whole-region redaction is off unless a detector is supplied — `None` is
+        # both "no model" and "don't run it", so there is no second flag to
         # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
-        self._regions = regions
+        self._layout = layout
         # Same convention for the QR/DataMatrix pass, from `redaction.redact_codes`.
         self._codes = codes
 
@@ -86,9 +86,9 @@ class RedactionPipeline:
         trace: Trace | None = None,
     ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
-        flagged OCR line, plus — when configured — the header / footer /
-        sender-column boxes and the QR / DataMatrix boxes, which are the ones not
-        tied to a line.
+        flagged OCR line, plus — when configured — the whole-region boxes the
+        layout detector earns (see :mod:`backend.layout`) and the QR / DataMatrix
+        boxes, which are the ones not tied to a line.
 
         ``lines`` skips the OCR call when the caller already holds
         :meth:`read_lines` output for this exact ``image``.
@@ -120,6 +120,9 @@ class RedactionPipeline:
             names |= harvest_names(line.text)
         pad = self._padding
         boxes: list[Box] = []
+        # Which lines the per-line pass flagged: `backend.layout` blackens a
+        # region whole once more than half of its lines are in here.
+        redacted: set[int] = set()
         for i, line in enumerate(lines):
             if not line.text.strip():
                 continue
@@ -158,6 +161,7 @@ class RedactionPipeline:
                 trace.add("    -> keep (item table)")
             if reason is not None:
                 trace.add("    -> REDACT (%s)", reason)
+                redacted.add(i)
                 boxes.append(
                     Box(
                         line.left - pad,
@@ -166,12 +170,14 @@ class RedactionPipeline:
                         line.top + line.height + pad,
                     )
                 )
-        if self._regions is not None:
-            # Appended, never merged: these cover whole strips of the page,
+        if self._layout is not None:
+            # Appended, never merged: these cover whole regions of the page,
             # including the pixels OCR returned nothing for (a letterhead logo),
-            # and `apply_boxes` is happy to draw overlapping rectangles.
-            for box in region_boxes(lines, image.width, image.height, self._regions):
-                trace.add("region -> REDACT %s", box.as_list())
+            # and `apply_boxes` is happy to draw overlapping rectangles. The
+            # detector reads the same image the boxes are reported in, so region
+            # and line coordinates share one pixel space by construction.
+            for box, why in region_boxes(lines, self._layout.regions(image), redacted, pad):
+                trace.add("region (%s) -> REDACT %s", why, box.as_list())
                 boxes.append(box)
         if self._codes is not None:
             # The only source that reads pixels rather than `lines`: a QR code is a
@@ -197,3 +203,21 @@ class RedactionPipeline:
         """Unwarp (when enabled) then blacken the computed boxes."""
         work = self.unwarp(image) if self._unwarp_enabled else image.convert("RGB")
         return self.apply_boxes(work, self.compute_boxes(work))
+
+    # -- debug-only extra --------------------------------------------------- #
+    def layout_debug_image(
+        self, image: Image.Image, lines: list[Line] | None = None
+    ) -> Image.Image | None:
+        """``None`` when no layout detector is configured; otherwise ``image``
+        copied with the detected regions outlined and labeled and each line
+        group's bounding box drawn — what ``--debug-layout`` writes to
+        ``<stem>_layout.jpg``. It shows what the detector *saw*, not which
+        regions the majority rule then blackened; only ``backend/cli.py``
+        calls it."""
+        if self._layout is None:
+            return None
+        if lines is None:
+            lines = self._ocr.lines(image)
+        text_lines = [ln for ln in lines if ln.text.strip()]
+        regions = self._layout.regions(image)
+        return draw_layout_debug(image, text_lines, assign_lines(text_lines, regions), regions)

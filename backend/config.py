@@ -58,34 +58,30 @@ class EngineConfig(BaseModel):
         return self.ocr_backend or preset_ocr, self.classifier or preset_clf
 
 
-class RegionsConfig(BaseModel):
-    """Geometry of the whole-region redaction pass (:mod:`backend.regions`), as
-    fractions of the page. A zero fraction switches that region off, so there is
-    no per-region boolean; ``[redaction].redact_regions`` turns off all three."""
+class LayoutConfig(BaseModel):
+    """The layout detector behind the whole-region pass (:mod:`backend.layout`).
+
+    Replaces the six interacting page fractions the anchor-growth geometry
+    needed: a trained model needs a checkpoint and a confidence bar, not a
+    search window. ``[redaction].redact_regions`` still turns the pass off."""
 
     model_config = _STRICT
 
-    header_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.12
-    footer_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.10
-    # The sender column is looked for right of `column_x_frac` and above
-    # `column_y_frac`; `gap_factor` is the vertical gap (in line heights) that ends
-    # a block, which is what keeps the invoice-number table out of it.
-    column_x_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
-    column_y_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
-    # Two lines join the same sender block only if they are BOTH near-touching and
-    # column-aligned, each in units of the smaller line's height. Neither test
-    # alone works across the samples: one page's payment table touches the block
-    # (only alignment cuts it), another's is perfectly aligned (only the gap does).
-    # The gap is set wide enough to bridge a blank line, not just a line spacing —
-    # letterheads put one between the address and the branch below it.
-    vgap_factor: Annotated[float, Field(gt=0.0, le=10.0)] = 1.2
-    align_factor: Annotated[float, Field(gt=0.0, le=2.0)] = 0.4
-    # The recipient address block is seeded left of `column_x_frac`, between
-    # these two fractions of the page height (the DIN 5008 address-field area,
-    # with slack for photographed pages). An empty window (max <= min) disables
-    # the pass — the same "geometry is the toggle" convention as the bands.
-    recipient_y_min_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.05
-    recipient_y_max_frac: Annotated[float, Field(ge=0.0, le=1.0)] = 0.45
+    # PP-DocLayout-{S,M,L} and PP-DocLayoutV2/V3 are in the same registry and
+    # swap in by name. Measured on the corpus, the small ones are not a real
+    # option: -S runs 7x faster but loses the fee table on half the pages that
+    # have one, -M and -L find none at all on photographed pages.
+    model_name: str = "PP-DocLayout_plus-L"
+    # Below the model's own 0.5 default because phone photos depress every
+    # score: on the sample corpus a scanned page's fee table detects at 0.9+,
+    # the photographed ones at 0.38-0.43 — invisible at 0.5. NOTE this was
+    # tuned when regions only shaped reading order, where a false region cost
+    # nothing; here a region draws a box, so the trade is the other way round
+    # and per-class thresholds (as PP-StructureV3 uses) are the next knob.
+    threshold: Annotated[float, Field(gt=0.0, le=1.0)] = 0.35
+    # Prunes the near-duplicate overlapping detections a low threshold lets
+    # through — without it the same region comes back 3-4 times.
+    layout_nms: bool = True
 
 
 class RedactionConfig(BaseModel):
@@ -101,17 +97,17 @@ class RedactionConfig(BaseModel):
     pdf_dpi: Annotated[int, Field(ge=36, le=1200)] = 200
     max_pages: Annotated[int, Field(ge=1)] = 30
     jpeg_quality: Annotated[int, Field(ge=1, le=100)] = 90
-    # Blacken the letterhead/footer bands and the sender column as well as the
-    # lines the rules and the classifier flag. Config only — unlike `unwarp` this
-    # is not a query parameter, so it is fixed per process like the engine.
+    # Blacken whole detected layout regions as well as the lines the rules and
+    # the classifier flag. Config only — unlike `unwarp` this is not a query
+    # parameter, so it is fixed per process like the engine.
     redact_regions: bool = True
-    regions: RegionsConfig = Field(default_factory=RegionsConfig)
+    layout: LayoutConfig = Field(default_factory=LayoutConfig)
     # Blacken QR, DataMatrix and 1D barcodes (backend.codes). A Girocode carries IBAN,
     # BIC and the account holder's name, a lab barcode the order number, so a page
     # that still scans is not redacted. One toggle covers both passes deliberately:
     # they differ in policy, not in what the reader wants turned on.
     # Config only, like `redact_regions`. One knob does not earn a sub-section the
-    # way `[redaction.regions]`' six interacting fractions do; `code_margin_frac`
+    # way `[redaction.layout]`'s model settings do; `code_margin_frac`
     # grows each box by that fraction of its own longer side, as headroom over a
     # detection that already lands on the symbol edge.
     redact_codes: bool = True

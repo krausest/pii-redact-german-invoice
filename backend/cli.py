@@ -34,13 +34,15 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
-from backend.config import load_config
+from backend.config import Config, load_config
 from backend.factory import build_pipeline
 from backend.options import RedactOptions
+from backend.pdf import rasterize_pdf
+from backend.pipeline import RedactionPipeline
 from backend.service import EXTENSION_BY_MEDIA_TYPE, produce_output, run_redaction
 
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf"}
-_REDACTED = re.compile(r".*_redacted.*")
+_REDACTED = re.compile(r".*_(redacted|layout).*")
 
 
 def collect_input_files(paths: list[str]) -> list[Path]:
@@ -106,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="include the per-line detection trace in the report (needs --json-output)",
     )
+    # Deliberately NOT a RedactOptions field / query parameter — it never
+    # reaches POST /api/redact, only the CLI. See backend/layout.py.
+    parser.add_argument(
+        "--debug-layout",
+        action="store_true",
+        default=False,
+        help="write <stem>_layout.jpg showing the detected layout regions "
+        "(labeled, cyclically colored) and the line groups derived from them",
+    )
     return parser
 
 
@@ -124,6 +135,38 @@ def query_from_args(args: argparse.Namespace) -> dict[str, Any]:
         for name in RedactOptions.wire_names()
         if (value := getattr(args, name.replace("-", "_"))) is not None
     }
+
+
+def write_layout_debug_images(
+    pipeline: RedactionPipeline, f: Path, opts: RedactOptions, config: Config
+) -> None:
+    """``--debug-layout``: decode ``f`` the same way ``run_redaction`` does and
+    write ``<stem>_layout.jpg`` (``<stem>_layout_p{N}.jpg`` per page for a
+    multi-page PDF) with the detected layout regions and line groups outlined.
+
+    This re-decodes/re-OCRs the file rather than reusing ``run_redaction``'s
+    work: `run_redaction`/`Redaction` carry no per-page `Line`s out (by design —
+    see CLAUDE.md's coordinate rule), and this is an opt-in debugging aid, not a
+    production path, so the extra pass is an acceptable cost.
+    """
+    if f.suffix.lower() == ".pdf":
+        pages = rasterize_pdf(
+            f.read_bytes(),
+            dpi=opts.pdf_dpi,
+            max_pages=config.redaction.max_pages,
+            max_pixels=config.api.max_image_pixels,
+        )
+    else:
+        with Image.open(f) as src:
+            pages = [ImageOps.exif_transpose(src).convert("RGB")]
+
+    for index, page in enumerate(pages):
+        image = pipeline.unwarp(page) if opts.unwarp else page.convert("RGB")
+        debug_image = pipeline.layout_debug_image(image, pipeline.read_lines(image))
+        if debug_image is None:
+            return
+        suffix = "_layout.jpg" if len(pages) == 1 else f"_layout_p{index}.jpg"
+        debug_image.save(f.with_name(f.stem + suffix), "JPEG", quality=opts.jpeg_quality)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {f.name}: {e}", file=sys.stderr)
             failed += 1
             continue
+        if args.debug_layout:
+            write_layout_debug_images(pipeline, f, opts, config)
         out_path = f.with_name(f.stem + "_redacted" + EXTENSION_BY_MEDIA_TYPE[media_type])
         out_path.write_bytes(body)
         print(f"Redacted {f.name} -> {out_path.name}")

@@ -77,7 +77,6 @@ from backend.classifiers.base import Classifier
 from backend.config import Config
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
-from backend.regions import RegionParams
 from backend.trace import Trace
 
 # A line counts as redacted at 90% covered and as kept at 10%. The gap is
@@ -288,22 +287,21 @@ def build_replay_pipeline(config: Config, classifier: Classifier) -> RedactionPi
 
     Built directly rather than through :func:`backend.factory.build_pipeline`,
     which always constructs the OCR backend — the model load this whole module
-    exists to skip. Region geometry and padding still come from ``config``, so
-    tuning ``[redaction.regions]`` shows up in the snapshots where you want it."""
+    exists to skip.
+
+    The whole-region pass is off here too (``layout=None``), for the same reason
+    ``codes`` is: :mod:`backend.layout` reads its regions off the *pixels*, and
+    the page a snapshot replays against is blank. So a snapshot pins the per-line
+    half — rules, labeled values, name memory, classifier — and says nothing
+    about which regions got blackened. Freezing the detected regions into the
+    dumps beside the OCR text is what would close that gap."""
     return RedactionPipeline(
         ocr=_NoOCR(),
         classifier=classifier,
         fill=config.redaction.fill,
         padding=config.redaction.padding,
         unwarp_enabled=False,
-        regions=(
-            RegionParams(
-                **config.redaction.regions.model_dump(),
-                padding=config.redaction.padding,
-            )
-            if config.redaction.redact_regions
-            else None
-        ),
+        layout=None,
         codes=None,
     )
 
