@@ -21,22 +21,12 @@ pdf_dpi = 200              # rasterization DPI for uploaded PDFs (default for ?p
 max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
 redact_regions = true      # also blacken whole detected layout regions
-# OFF on this branch: an `image` region already covers a Girocode, and the point of
-# this experiment is to see how far the layout model gets on its own. Flip it back
-# on if `image` turns out to miss codes on photographed pages.
-redact_codes = false       # also blacken QR / DataMatrix / 1D barcodes
-# A payment QR (Girocode/EPC) holds IBAN, BIC and the account holder's name in plain
-# text, so leaving one readable undoes the redaction — anyone can scan the page. The
-# detected box already lands on the symbol edge (within ~1% of its width, even
-# blurred or downscaled); the margin below is headroom on top of that, which also
-# takes in the quiet zone. It costs blank paper, since a code sits in whitespace.
-code_margin_frac = 0.08    # grow each box by this fraction of its longer side
-
 # The whole-region pass. A trained layout detector (PP-DocLayout) finds typed
-# regions on the page; `image`, `header` and `footer` are blackened on sight,
-# every other region once more than half of its OCR lines were flagged by the
-# per-line pass. That majority rule is what covers the lines between the hits —
-# a c/o line, a company recipient, a garbled name line.
+# regions on the page; `image`, `seal`, `header` and `footer` are blackened on
+# sight, every other region once at least 40% of its OCR lines were flagged by
+# the per-line pass. That ratio rule is what covers the lines between the hits —
+# a c/o line, a company recipient, a garbled name line. It also covers a payment
+# QR code, which the detector reports as an `image`.
 [redaction.layout]
 model_name = "PP-DocLayout_plus-L"
 # Under the model's own 0.5 default: phone photos depress every score, and a

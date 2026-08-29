@@ -61,9 +61,9 @@ class EngineConfig(BaseModel):
 class LayoutConfig(BaseModel):
     """The layout detector behind the whole-region pass (:mod:`backend.layout`).
 
-    Replaces the six interacting page fractions the anchor-growth geometry
-    needed: a trained model needs a checkpoint and a confidence bar, not a
-    search window. ``[redaction].redact_regions`` still turns the pass off."""
+    A trained detector needs a checkpoint and a confidence bar, nothing else —
+    which region is a header, a table or a graphic is the model's judgement, not
+    a page fraction. ``[redaction].redact_regions`` turns the pass off."""
 
     model_config = _STRICT
 
@@ -102,16 +102,6 @@ class RedactionConfig(BaseModel):
     # parameter, so it is fixed per process like the engine.
     redact_regions: bool = True
     layout: LayoutConfig = Field(default_factory=LayoutConfig)
-    # Blacken QR, DataMatrix and 1D barcodes (backend.codes). A Girocode carries IBAN,
-    # BIC and the account holder's name, a lab barcode the order number, so a page
-    # that still scans is not redacted. One toggle covers both passes deliberately:
-    # they differ in policy, not in what the reader wants turned on.
-    # Config only, like `redact_regions`. One knob does not earn a sub-section the
-    # way `[redaction.layout]`'s model settings do; `code_margin_frac`
-    # grows each box by that fraction of its own longer side, as headroom over a
-    # detection that already lands on the symbol edge.
-    redact_codes: bool = True
-    code_margin_frac: Annotated[float, Field(ge=0.0, le=0.5)] = 0.08
 
 
 class ApiConfig(BaseModel):
@@ -146,7 +136,6 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "PII_ENGINE": ("engine", "name"),
     "PII_UNWARP": ("redaction", "unwarp"),
     "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
-    "PII_REDACT_CODES": ("redaction", "redact_codes"),
 }
 
 

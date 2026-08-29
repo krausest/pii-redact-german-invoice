@@ -9,7 +9,6 @@ and the CLI builds one per run.
 from __future__ import annotations
 
 from backend.classifiers.base import Classifier
-from backend.codes import CodeParams
 from backend.config import Config
 from backend.pipeline import RedactionPipeline
 
@@ -75,15 +74,6 @@ def build_pipeline(config: Config) -> RedactionPipeline:
                 config.redaction.layout.layout_nms,
             )
             if config.redaction.redact_regions
-            else None
-        ),
-        # Same `None`-means-off convention as `layout`.
-        codes=(
-            CodeParams(
-                margin_frac=config.redaction.code_margin_frac,
-                padding=config.redaction.padding,
-            )
-            if config.redaction.redact_codes
             else None
         ),
     )

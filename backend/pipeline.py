@@ -18,7 +18,6 @@ from collections.abc import Callable
 from PIL import Image, ImageDraw
 
 from backend.classifiers.base import Classifier
-from backend.codes import CodeParams, code_boxes
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
 from backend.layout import PaddleLayoutDetector, assign_lines, draw_layout_debug, region_boxes
@@ -44,7 +43,6 @@ class RedactionPipeline:
         unwarp_enabled: bool = True,
         unwarper_factory: Callable[[], DocUnwarper] | None = None,
         layout: PaddleLayoutDetector | None = None,
-        codes: CodeParams | None = None,
     ) -> None:
         self._ocr = ocr
         self._classifier = classifier
@@ -57,8 +55,6 @@ class RedactionPipeline:
         # both "no model" and "don't run it", so there is no second flag to
         # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
         self._layout = layout
-        # Same convention for the QR/DataMatrix pass, from `redaction.redact_codes`.
-        self._codes = codes
 
     # -- primitives -------------------------------------------------------- #
     def unwarp(self, image: Image.Image) -> Image.Image:
@@ -87,8 +83,8 @@ class RedactionPipeline:
     ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
         flagged OCR line, plus — when configured — the whole-region boxes the
-        layout detector earns (see :mod:`backend.layout`) and the QR / DataMatrix
-        boxes, which are the ones not tied to a line.
+        layout detector earns (see :mod:`backend.layout`), which are the only
+        ones not tied to a line.
 
         ``lines`` skips the OCR call when the caller already holds
         :meth:`read_lines` output for this exact ``image``.
@@ -176,14 +172,12 @@ class RedactionPipeline:
             # and `apply_boxes` is happy to draw overlapping rectangles. The
             # detector reads the same image the boxes are reported in, so region
             # and line coordinates share one pixel space by construction.
+            # `why` names the rule that drew the box (a type, or the hit ratio).
+            # Deliberately not machine-readable: nothing parses this line since
+            # the replay dropped its region format, and a human debugging an
+            # unexpected box wants the ratio, not a bare token.
             for box, why in region_boxes(lines, self._layout.regions(image), redacted, pad):
                 trace.add("region (%s) -> REDACT %s", why, box.as_list())
-                boxes.append(box)
-        if self._codes is not None:
-            # The only source that reads pixels rather than `lines`: a QR code is a
-            # graphic, so OCR never reports it, yet it is PII in the clear.
-            for box in code_boxes(image, self._codes):
-                trace.add("code -> REDACT %s", box.as_list())
                 boxes.append(box)
         return boxes
 

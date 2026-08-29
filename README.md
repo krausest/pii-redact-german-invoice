@@ -356,13 +356,11 @@ containers where editing the file is awkward:
 | `PII_ENGINE` | `[engine].name` |
 | `PII_UNWARP` | `[redaction].unwarp` |
 | `PII_REDACT_REGIONS` | `[redaction].redact_regions` |
-| `PII_REDACT_CODES` | `[redaction].redact_codes` |
 
-`PII_UNWARP` differs in reach from the other two, because `unwarp` also has a
+`PII_UNWARP` differs in reach from the other one, because `unwarp` also has a
 wire name: `PII_UNWARP` sets the **default** for `?unwarp=` and `--unwarp`, so a
-request that names the parameter still wins, while `redact_regions` and
-`redact_codes` are neither query parameters nor flags and so those variables are
-absolute. `PII_LOG_LEVEL=DEBUG`
+request that names the parameter still wins, while `redact_regions` is neither a
+query parameter nor a flag and so that variable is absolute. `PII_LOG_LEVEL=DEBUG`
 (API and CLI) logs every OCR line with its box, plus each classifier match with its
 score and the recognizer/context that produced it, followed by the redact verdict —
 useful for seeing exactly why a line was or wasn't redacted.
@@ -425,102 +423,6 @@ query parameter, so it is fixed per process like the engine. The boxes it produc
 are ordinary boxes: they appear in the JSON report and are editable (and deletable)
 in the web UI like any other.
 
-### Barcode redaction (QR, DataMatrix, 1D)
-
-A payment QR is the one piece of PII on an invoice that a reader does not have to
-read. An **EPC QR / Girocode** encodes the IBAN, the BIC and the account holder's
-*name*; a **Swiss QR-bill** adds the debtor's full address; a **DataMatrix** carries
-an E-Rezept token or a securPharm pack identity; a **1D barcode** up the left edge of
-a lab invoice carries the order or sample number. A page whose text is blacked out
-but whose code still scans is not redacted — and no text rule can reach one, because
-a code is a graphic and OCR returns no line for it.
-
-So `[redaction].redact_codes` (on by default) detects QR, Micro QR, DataMatrix, ITF,
-Code 128 and Code 39 symbols in the page image and blackens their bounding boxes.
-The matrix formats and the linear ones are found by two passes with **opposite**
-policies, for one reason — see the shape guards below.
-
-Matrix detection is tuned for **recall**: a symbol is covered once it is *located*,
-even when it does not decode.
-That matters at the resolution real uploads have — the Girocode on one sample photo
-is 60 px across and fails its checksum, which a decode-only reader would skip and
-leave in the clear. Paying for the looser gate are three guards, since a symbol that
-never decoded has nothing proving it real. Two are about shape: a candidate is
-dropped if it is under 12 px or more than 3:1 out of square, which is what rejects
-the run of item-table rows one sample page reports as a 738×108 "DataMatrix".
-
-The third is about substance, and it is the one shape cannot give. A matrix code is
-**about half ink by construction** — QR's masking step exists to keep the module
-balance near even, DataMatrix's timing border and ITF's bars do the same — so roughly
-half of any real symbol is dark, at any size or resolution. Paper is not: across the
-photographed sample pages, blank paper measures 0.00, a page of plain text 0.03, a
-hole-punch 0.03 and the halftone screen of a printed logo 0.22, against 0.38–0.70 for
-every real symbol. So an undecoded candidate must be at least 30% ink. Two details are
-measured rather than chosen: the reference is the paper *around* the candidate, not an
-Otsu threshold (Otsu splits sensor noise on a blank crop down the middle and calls
-half of it ink, scoring the phantoms above the symbols); and the ink is measured over
-the middle of the rect, because `Box` is axis-aligned and a code photographed at an
-angle fills only part of its own bounding rect — a 45° tilt costs half of it. There is
-deliberately no upper bound: an underexposed photo pushes a real symbol *toward* solid
-and dropping it there would leak the IBAN, while what an upper bound would catch (a
-shadow, a black logo bar) costs blank paper.
-
-**Linear barcodes invert both halves of that**, because a 1D barcode *is* the long
-thin shape the aspect guard exists to reject — shape cannot vouch for it, so the
-checksum has to. The linear pass therefore reports only symbols that actually
-**decode**, and in exchange its boxes skip the shape guards entirely. It also issues
-one read per format: asked for together, or left to a default all-formats scan,
-zxing-cpp returns nothing for the rotated ITF on a photographed sample page that it
-finds immediately when ITF is requested alone. (A clean generated page does *not*
-reproduce that, which makes merging the two format lists a tempting and silent
-regression.)
-
-Across 31 photographed sample pages the two passes together find 20 real codes — 15
-matrix and 5 linear — and nothing else. Before the ink guard they also drew five boxes
-on nothing: two on blank margin, one on a hole-punch, one on a logo's halftone screen,
-and one undecoded 2813×1647 quad at 1.7:1 that blackened 80% of an invoice carrying no
-code at all. The linear formats produce no false positive on any page, in either
-orientation, before or after dewarping.
-
-| Key (`[redaction]`) | Default | Meaning |
-|---|---|---|
-| `redact_codes` | `true` | run the pass at all |
-| `code_margin_frac` | `0.08` | grow each box by this fraction of its longer side |
-
-The margin is headroom, not a correction: a *decoded* box already lands on the
-symbol's edge to within about 1% of its width, even blurred or downscaled. It is
-spent on the code's quiet zone, which the format requires to be blank paper.
-
-**When a code is too coarse to decode**, though, what comes back is not one box per
-symbol but one per *finder pattern* — a QR's three concentric corner squares each
-read as a Micro QR. They do not touch each other, so taken at face value they leave
-partial boxes pinned to the code's top-left corner with the rest of it showing. Three
-things prevent that, in order: the page is re-read once at 2×, which is often enough
-to turn the pieces back into a single exact read; failing that **OpenCV's QR
-detector** is asked for the outline, which it derives from the finder patterns
-without ever decoding; and only if that finds nothing are the pieces themselves
-grouped and squared up, extending from their top-left anchor toward the symbol.
-
-The 2× re-read is taken for its **geometry, not for a decode**, and is added to the
-first pass rather than replacing it — neither is a superset of the other. Dewarping
-resamples a symbol just enough that a payment QR on one sample photo is not located
-at 1× at all, is located at 2×, and checksums at neither; requiring the enlarged pass
-to decode before believing it left that code in the clear on a page that was
-otherwise fully redacted. Grouping is likewise deliberately short-reaching: pieces
-fuse across a gap of at most 1.5× their own size, measured off a corpus where the
-widest real gap between two pieces of one symbol is 0.79×. Reaching further lets one
-symbol swallow the next, and the item table between them.
-
-Note this is driven by how coarse the *code* is, not the page: a 15 mm Girocode is
-only 118 px at the default 200 dpi and fragments on a full-resolution A4 scan. It is
-also not a clean threshold — 12 mm decodes, 15 mm does not and 20 mm does again,
-because it depends on how the module grid lands on the pixel grid. Coverage costs
-little: the box comes out about 1.2× the symbol, which is roughly its quiet zone.
-
-Like region redaction this is **config-only** — not a query parameter, not a CLI
-flag — and its boxes are ordinary boxes in the report and the web UI. Turn it off
-with `redact_codes = false` or `PII_REDACT_CODES=false`.
-
 ### Engine presets
 
 A single pipeline (unwarp → OCR → per-line classify → draw a box) is configured
@@ -578,15 +480,10 @@ classify), and `apply_boxes()` (fill):
 4. **Draw** a filled black rectangle over the line's box (with a 2 px pad) if it is judged
    to contain PII.
 5. **Add the region boxes** — whole layout regions the detector typed as page
-   furniture, plus any region whose lines are mostly redacted
-   ([`backend/layout.py`](backend/layout.py)) — not derived from an OCR line, and
-   therefore able to cover a letterhead logo. See
-   [Region redaction](#region-redaction).
-6. **Add the barcode boxes** — QR, Micro QR, DataMatrix, ITF, Code 128, Code 39
-   ([`backend/codes.py`](backend/codes.py)) — the only pass that reads the page
-   *pixels* rather than the OCR lines, because a payment QR is machine-readable PII
-   that no text rule can see. See
-   [Barcode redaction](#barcode-redaction-qr-datamatrix-1d).
+   furniture or a graphic, plus any region enough of whose lines were flagged
+   ([`backend/layout.py`](backend/layout.py)) — the only boxes not derived from an
+   OCR line, and therefore the only ones that can cover a letterhead logo or a
+   payment QR code. See [Region redaction](#region-redaction).
 
 ### `presidio` classifier
 
@@ -766,7 +663,6 @@ backend/            the whole Python package — pipeline, CLI and REST service
   config.py         config.toml schema + engine preset resolution
   rules.py          deterministic German patterns (salutation, street, birthdate)
   layout.py         PP-DocLayout regions: whole-region boxes (not line-derived)
-  codes.py          barcode boxes (QR/DataMatrix/1D) — the only pixel-reading source
   ocr/ classifiers/ the two swappable axes behind an engine preset
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
 tests/              fast tests stub the models; `-m slow` runs the real ones
@@ -824,21 +720,20 @@ the built image.
 - **Detection is best-effort.** It is statistical NER plus hand-written rules, not a
   guarantee. Missed PII is possible on layouts unlike the ones it was tuned for.
   **Review every document before releasing it.** The web UI exists for exactly this.
-- **Region redaction is deliberately blind across the page width.** A band only
-  fires when it holds sender text, but once it does it covers everything on those
-  rows, logo and legitimate content alike (`Seite 1 von 2`, a page number sharing a
-  row with a bank line). That is the price of covering a letterhead graphic, which
-  no text-based rule can reach. Tune `[redaction.layout]` or set
+- **Region redaction covers whole regions, not lines.** Once a region qualifies,
+  everything inside it goes — a page number sharing the region with a bank line
+  included. That is the price of covering what no text rule can reach: a
+  letterhead graphic, a stamp, a payment QR code. It cuts the other way too, since
+  a region only qualifies by its *type* or by enough of its lines being flagged:
+  a two-line letterhead whose tagline matches nothing survives if the practice
+  name did not match either. Tune `[redaction.layout]` or set
   `redact_regions = false` (or `PII_REDACT_REGIONS=false`) if it costs you more
   than it buys.
-- **Matrix-code detection is tuned for recall, so it can over-cover.** A candidate
-  only has to be *located*, not decoded, which is what catches a Girocode too coarse
-  to scan; the size and squareness guards are all that stand between that and a dense
-  block of table rules. If a page loses a square graphic it should have kept, set
-  `redact_codes = false` (or `PII_REDACT_CODES=false`). The linear pass has the
-  opposite failure mode — it requires a decode, so a barcode too damaged or too
-  coarse to read is **not** covered. Note also that PDF417, Aztec and MaxiCode are
-  not looked for at all.
+- **Machine-readable codes are covered only as graphics.** There is no dedicated
+  barcode pass: a payment QR is blackened when the layout detector reports an
+  `image` region over it, which it does on the sample corpus, but a code the
+  detector misses stays readable — and a scanner does not need the surrounding
+  text to be legible. Check `--debug-layout` on a page whose codes matter.
 - **Redaction is destructive drawing, not text removal**, which is what makes it safe:
   output pages are rasterized images with filled rectangles, so there is no selectable
   text layer left underneath to recover. The trade-off is that redacted PDFs are images

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from PIL import Image
 
-from backend.codes import CodeParams
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
 from backend.layout import LayoutRegion
@@ -23,19 +22,6 @@ def _pipeline(lines, pii_subs, **kwargs):
         classifier=StubClassifier(pii_subs),
         **kwargs,
     )
-
-
-def _qr_page(size=(500, 500), at=(200, 200), px=150):
-    """A page with a real QR drawn on it. StubOCR ignores the image, so this is
-    only ever seen by the code pass."""
-    import numpy as np
-    import zxingcpp
-
-    barcode = zxingcpp.create_barcode("Max Mustermann", zxingcpp.BarcodeFormat.QRCode)
-    matrix = np.array(zxingcpp.write_barcode_to_image(barcode))
-    page = Image.new("RGB", size, "white")
-    page.paste(Image.fromarray(matrix).convert("RGB").resize((px, px), Image.NEAREST), at)
-    return page
 
 
 def test_apply_boxes_fills_exact_rectangle():
@@ -82,14 +68,16 @@ def test_compute_boxes_blackens_a_region_whose_lines_are_mostly_redacted():
     assert boxes[-1] == Box(5, 5, 95, 55)
 
 
-def test_compute_boxes_leaves_a_region_alone_at_exactly_half():
-    # Strictly more than half: one of two lines is not a majority, so the
-    # untouched line stays readable.
+def test_compute_boxes_leaves_a_region_alone_below_the_ratio():
+    # One hit in four lines is under the bar, so the three lines no per-line rule
+    # reached stay readable — the region pass does not blacken on a single hit.
     lines = [
         Line("Muster GmbH", left=10, top=10, width=80, height=10),
         Line("Beratung nach GOAE", left=10, top=25, width=80, height=10),
+        Line("Untersuchung Organsystem", left=10, top=40, width=80, height=10),
+        Line("Erhoehter Zeitaufwand", left=10, top=55, width=80, height=10),
     ]
-    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 40)]))
+    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 70)]))
     assert p.compute_boxes(Image.new("RGB", (100, 100))) == [Box(10, 10, 90, 20)]
 
 
@@ -97,29 +85,6 @@ def test_compute_boxes_skips_regions_by_default():
     lines = [Line("Muster GmbH", left=0, top=5, width=80, height=10)]
     p = _pipeline(lines, [], padding=0)
     assert p.compute_boxes(Image.new("RGB", (100, 100))) == [Box(0, 5, 80, 15)]
-
-
-def test_compute_boxes_appends_code_boxes_last():
-    # The code pass is the one source that reads the image rather than `lines`, so
-    # unlike the others it needs a page with something actually drawn on it.
-    page = _qr_page()
-    p = _pipeline(
-        [Line("Muster GmbH", left=0, top=5, width=80, height=10)],
-        [],
-        padding=0,
-        codes=CodeParams(margin_frac=0.08),
-    )
-    boxes = p.compute_boxes(page)
-    assert boxes[0] == Box(0, 5, 80, 15)  # the OCR line, first
-    assert len(boxes) == 2  # then the QR, appended
-    assert boxes[1].x0 >= 150 and boxes[1].x1 <= 400  # where it was drawn
-
-
-def test_compute_boxes_skips_codes_by_default():
-    # A page carrying a real QR yields nothing without `codes` — the toggle and the
-    # geometry are one argument, so there is no way to half-enable the pass.
-    p = _pipeline([], [], padding=0)
-    assert p.compute_boxes(_qr_page()) == []
 
 
 def test_compute_boxes_does_not_unwarp():

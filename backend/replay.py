@@ -11,20 +11,20 @@ sample and its output written to a ``<stem>_ocr.txt``::
     line @(1873,2869 195x49 conf=99.98890757560730): '195,18'
 
 Everything downstream — the deterministic rules, the labeled-value geometry, the
-item table, the name memory, the classifier and the region bands — is then
+item table, the name memory and the classifier — is then
 replayed against that text alone, with a blank page of the recorded size standing
 in for the image. The result is a ``<stem>_ocr.expected.txt`` snapshot holding one
 asserted verdict per OCR line, so a whole document is pinned rather than the few
 PII snippets someone thought to annotate, and the suite runs in seconds.
 
 **Verdicts are effective, not per-line.** ``compute_boxes`` decides per line, but
-a line it kept can still be blackened by a header/footer band drawn over it. What
+a line it kept can still be blackened by a neighbour's padded box. What
 matters is whether the pixels end up covered, so each line is scored against
 *every* box: ``>= COVERED`` is ``REDACT``, ``<= UNTOUCHED`` is ``keep``, and the
 deliberate gap between them is ``PARTIAL``, which satisfies neither expectation
 and so forces a human to look at a line some neighbour's padding merely nicked.
-The verdict carries *why*, which is how a snapshot diff distinguishes a rule that
-stopped firing from a band that moved off the line it used to cover.
+The verdict carries *why*, which is how a snapshot diff says whether a rule
+stopped firing or a neighbouring box moved off the line it used to cover.
 Asserting ``keep`` is the point of the exercise: without it the suite could not
 tell a working pipeline from one that blackens the page.
 
@@ -34,12 +34,13 @@ parsing it here makes that narration the contract — if its format drifts, the
 replay notices immediately (:func:`_outcome` compares each header against
 :func:`format_line`) instead of silently reporting different reasons.
 
-**No OCR, no unwarp, no QR pass.** The pipeline is built with an OCR backend that
-raises if called and with ``codes=None``: a QR code is pixels, and the page here
-is blank by construction, so the pass is switched off rather than left to find
-nothing (``tests/test_codes.py`` covers it). The consequence to remember is that
-a frozen dump can go stale — re-run ``dump`` after anything that changes what OCR
-reads, ``det_box_thresh`` above all.
+**No OCR, no unwarp, no layout pass.** The pipeline is built with an OCR backend
+that raises if called and with ``layout=None``: the whole-region pass reads its
+regions off the *pixels*, and the page here is blank by construction, so it is
+switched off rather than left to find nothing. The consequence to remember is
+that a frozen dump can go stale — re-run ``dump`` after anything that changes
+what OCR reads, ``det_box_thresh`` above all — and that a snapshot pins the
+per-line half only, saying nothing about which regions got blackened.
 
 Both commands take files or whole directories, since a corpus is the normal unit
 of work::
@@ -51,7 +52,7 @@ of work::
 A dump is a document's whole text, so a real one is PII and cannot be committed
 as it stands. Scrubbing it — swapping each real name, address and identifier for
 a placeholder of the same shape — makes it committable, and ``--ignore-text``
-is how that edit is checked: it compares geometry, verdicts and regions while
+is how that edit is checked: it compares geometry and verdicts while
 letting the text differ, so it answers the one question a scrub raises, whether
 the placeholder still redacts where the real value did::
 
@@ -80,8 +81,8 @@ from backend.pipeline import RedactionPipeline
 from backend.trace import Trace
 
 # A line counts as redacted at 90% covered and as kept at 10%. The gap is
-# deliberate: a line neither the rules nor a band meant to touch, but which a
-# neighbour's padding clipped, matches no expectation and has to be looked at.
+# deliberate: a line nothing meant to touch, but which a neighbour's padding
+# clipped, matches no expectation and has to be looked at.
 COVERED = 0.9
 UNTOUCHED = 0.1
 
@@ -93,8 +94,8 @@ OCR_SUFFIX = "_ocr.txt"
 class Page:
     """One page of a frozen dump: the OCR lines plus the size they were read at.
 
-    The size is not decoration — ``region_boxes`` takes its search windows as
-    *fractions* of the page, so replaying at a different height moves every band."""
+    The size is recorded because the blank stand-in page has to match it: box
+    coordinates are only meaningful against the raster they were measured on."""
 
     index: int
     width: int
@@ -107,9 +108,9 @@ class Verdict:
     line: str  # the `line @(...)` header, verbatim
     kind: str  # REDACT | keep | PARTIAL
     # What put ink on the line: one of compute_boxes' own reasons (labeled-value,
-    # static-rule, name-memory, classifier), or `region` for a band drawn over a
-    # line nothing flagged, or `overlap` for a neighbour's padding spilling onto
-    # it. `item table` on a `keep` records that the classifier was off there.
+    # static-rule, name-memory, classifier), or `overlap` for a neighbour's
+    # padding spilling onto it. `item table` on a `keep` records that the
+    # classifier was off there.
     reason: str | None
     coverage: float
 
@@ -127,14 +128,12 @@ class Verdict:
 class Outcome:
     index: int
     verdicts: tuple[Verdict, ...]
-    regions: tuple[Box, ...]
 
 
 # -- reading the dump ------------------------------------------------------ #
 _PAGE_RE = re.compile(r"^=== page (\d+)(?: \((\d+)x(\d+)\))? ===$")
 _LINE_RE = re.compile(r"^line @\((-?\d+),(-?\d+) (\d+)x(\d+) conf=(\S+)\): (.+)$")
 _VERDICT_RE = re.compile(r"^\s+-> (REDACT|keep|PARTIAL)\b(.*)$")
-_REGION_RE = re.compile(r"^region -> REDACT \[(-?\d+), (-?\d+), (-?\d+), (-?\d+)\]$")
 _REASON_RE = re.compile(r"\(([^)]*)\)\s*$")
 
 
@@ -217,25 +216,16 @@ def parse_expected(text: str) -> list[Outcome]:
     outcomes: list[Outcome] = []
     index = -1
     verdicts: list[Verdict] = []
-    regions: list[Box] = []
 
     def flush() -> None:
-        if index >= 0 or verdicts or regions:
-            outcomes.append(
-                Outcome(index=max(index, 0), verdicts=tuple(verdicts), regions=tuple(regions))
-            )
+        if index >= 0 or verdicts:
+            outcomes.append(Outcome(index=max(index, 0), verdicts=tuple(verdicts)))
 
     for raw in text.splitlines():
         page = _PAGE_RE.match(raw)
         if page is not None:
             flush()
-            index, verdicts, regions = int(page.group(1)), [], []
-            continue
-        if raw.startswith("code -> REDACT"):
-            raise ValueError("code boxes are not replayed; remove the `code -> REDACT` line")
-        region = _REGION_RE.match(raw)
-        if region is not None:
-            regions.append(Box(*(int(g) for g in region.groups())))
+            index, verdicts = int(page.group(1)), []
             continue
         if raw.startswith("line @"):
             verdicts.append(Verdict(line=raw, kind="keep", reason=None, coverage=0.0))
@@ -289,12 +279,12 @@ def build_replay_pipeline(config: Config, classifier: Classifier) -> RedactionPi
     which always constructs the OCR backend — the model load this whole module
     exists to skip.
 
-    The whole-region pass is off here too (``layout=None``), for the same reason
-    ``codes`` is: :mod:`backend.layout` reads its regions off the *pixels*, and
-    the page a snapshot replays against is blank. So a snapshot pins the per-line
-    half — rules, labeled values, name memory, classifier — and says nothing
-    about which regions got blackened. Freezing the detected regions into the
-    dumps beside the OCR text is what would close that gap."""
+    The whole-region pass is off here (``layout=None``): :mod:`backend.layout`
+    reads its regions off the *pixels*, and the page a snapshot replays against
+    is blank. So a snapshot pins the per-line half — rules, labeled values, name
+    memory, classifier — and says nothing about which regions got blackened.
+    Freezing the detected regions into the dumps beside the OCR text is what
+    would close that gap."""
     return RedactionPipeline(
         ocr=_NoOCR(),
         classifier=classifier,
@@ -302,7 +292,6 @@ def build_replay_pipeline(config: Config, classifier: Classifier) -> RedactionPi
         padding=config.redaction.padding,
         unwarp_enabled=False,
         layout=None,
-        codes=None,
     )
 
 
@@ -311,7 +300,6 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
     headers: list[str] = []
     reasons: list[str | None] = []
     kept_by_table: list[bool] = []
-    regions: list[Box] = []
     for raw in trace_text.splitlines():
         if raw.startswith("line @"):
             headers.append(raw)
@@ -321,10 +309,6 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
             reasons[-1] = raw[len("    -> REDACT (") : -1]
         elif raw.startswith("    -> keep (item table)"):
             kept_by_table[-1] = True
-        else:
-            region = _REGION_RE.match(raw)
-            if region is not None:
-                regions.append(Box(*(int(g) for g in region.groups())))
 
     # compute_boxes skips blank lines silently, so pair against the same subset.
     spoken = [ln for ln in page.lines if ln.text.strip()]
@@ -340,12 +324,11 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
         if cov <= UNTOUCHED:
             verdicts.append(Verdict(header, "keep", "item table" if table else None, cov))
             continue
-        # Ink on a line nothing flagged comes from one of two places, and they
-        # want different fixes: a band drawn across it, or the padded box of the
-        # line above or below spilling over.
-        source = reason or ("region" if coverage(line, regions) > UNTOUCHED else "overlap")
+        # Ink on a line nothing flagged can only be a neighbour's padded box
+        # spilling over — the whole-region pass does not run here.
+        source = reason or "overlap"
         verdicts.append(Verdict(header, "REDACT" if cov >= COVERED else "PARTIAL", source, cov))
-    return Outcome(index=page.index, verdicts=tuple(verdicts), regions=tuple(regions))
+    return Outcome(index=page.index, verdicts=tuple(verdicts))
 
 
 def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
@@ -379,7 +362,6 @@ def render(outcomes: list[Outcome], classifier: str) -> str:
         for verdict in outcome.verdicts:
             out.append(verdict.line)
             out.append(verdict.render())
-        out.extend(f"region -> REDACT {box.as_list()}" for box in outcome.regions)
     return "\n".join(out) + "\n"
 
 
@@ -408,7 +390,7 @@ def compare(
     Swapping a real name for a placeholder rewrites the text the snapshot was
     written against, so the ordinary staleness guard fires on every edited line
     and buries the one thing worth knowing — whether the replacement still
-    redacts. Position, size, confidence, verdicts and regions are all still
+    redacts. Position, size, confidence and verdicts are all still
     compared, so a line going missing or a rule going quiet is still caught."""
     failures: list[str] = []
     if len(outcomes) != len(expected):
@@ -438,15 +420,6 @@ def compare(
                     f"{page} line {i} {_excerpt(got.line)}: expected "
                     f"{_verdict_text(wanted)}, got {_verdict_text(got)}"
                 )
-        # Regions are a multiset: `_grow` yields the same block from any member,
-        # so their order carries no meaning and only the set of boxes does.
-        got_regions, want_regions = list(actual.regions), list(want.regions)
-        for box in actual.regions:
-            if box in want_regions:
-                want_regions.remove(box)
-                got_regions.remove(box)
-        failures.extend(f"{page}: unexpected region {box.as_list()}" for box in got_regions)
-        failures.extend(f"{page}: missing region {box.as_list()}" for box in want_regions)
     return failures
 
 

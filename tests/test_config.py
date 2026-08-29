@@ -73,7 +73,7 @@ def test_env_engine_overrides_file(tmp_path, monkeypatch):
     assert cfg.engine.resolve() == ("onnxruntime", "presidio")
 
 
-@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS", "PII_REDACT_CODES"])
+@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
 @pytest.mark.parametrize(
     "value,expected",
     [("false", False), ("0", False), ("off", False), ("true", True), ("1", True)],
@@ -101,7 +101,7 @@ def test_unset_env_leaves_the_file_alone(tmp_path, monkeypatch):
     assert load_config(path).redaction.unwarp is False
 
 
-@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS", "PII_REDACT_CODES"])
+@pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
 def test_env_rejects_a_non_boolean(tmp_path, monkeypatch, env):
     monkeypatch.setenv(env, "maybe")
     with pytest.raises(ValueError) as e:
@@ -161,21 +161,6 @@ def test_layout_defaults():
     # table (0.38-0.43 on the corpus) is not detected at all.
     assert cfg.redaction.layout.threshold == 0.35
     assert cfg.redaction.layout.layout_nms is True
-
-
-def test_code_margin_is_independent_of_the_toggle(tmp_path):
-    # Same bargain as the regions geometry above: the margin survives the pass
-    # being switched off.
-    body = "[redaction]\nredact_codes = false\ncode_margin_frac = 0.2\n"
-    cfg = load_config(_write(tmp_path, body))
-    assert cfg.redaction.redact_codes is False
-    assert cfg.redaction.code_margin_frac == 0.2
-
-
-def test_code_margin_frac_is_bounded(tmp_path):
-    with pytest.raises(ValueError) as e:
-        load_config(_write(tmp_path, "[redaction]\ncode_margin_frac = 0.9\n"))
-    assert "code_margin_frac" in str(e.value)
 
 
 def test_committed_config_toml_loads():

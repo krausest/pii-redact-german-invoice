@@ -216,7 +216,7 @@ ID_VALUE = re.compile(r"\b[A-Z]?\d(?:[ ./-]?\d){3,}\b")
 # --- sender identity ------------------------------------------------------- #
 # The three below identify the *sender* (practice, clearing house, bank) rather
 # than the patient. They are page-wide because the letterhead and the imprint sit
-# at opposite ends of the page and neither is reliably inside a region band.
+# at opposite ends of the page and no single window holds both.
 # Each is deliberately restricted to markers that cannot occur in a GOÄ
 # Leistungstext — see the negative cases in tests/test_rules.py.
 
@@ -259,9 +259,10 @@ IMPRINT = re.compile(
     r"|\bBankverbindung\b|\bKonto(?:\-?Nr)?\b|\bPostfach\b"
 )
 
-# Loose organisation nouns: strong evidence of a sender *in the sender column*,
+# Loose organisation nouns: strong evidence of a sender *inside a sender block*,
 # but too common in body text to redact page-wide ("Zentrum", "Labor", "Institut"
-# all show up in Leistungstexte). Exported for :mod:`backend.regions` only.
+# all show up in Leistungstexte). Not used by :func:`static_rule_match`; exported
+# for a caller that already knows it is looking at sender-shaped content.
 #
 # German compounds defeat a plain word list — ``\bPraxis\b`` never matches
 # "Zahnarztpraxis" because there is no word boundary mid-compound. So the nouns
@@ -269,7 +270,7 @@ IMPRINT = re.compile(
 # noun-initial compounds that a suffix form doesn't reach ("Praxisgemeinschaft",
 # "Laborgemeinschaft") stay listed. "Labor" deliberately gets no *suffix*
 # wildcard: "Laboruntersuchung"/"Laborkosten" are ordinary Leistungstext words,
-# and a footer line holding one must not seed the footer band.
+# and a footer line holding one must not count as naming a sender.
 ORG_MEDICAL = re.compile(
     r"(?i)\b(?:MVZ"
     r"|\w*praxis|Praxisgemeinschaft"  # Praxis, Zahnarzt-/Gemeinschaftspraxis
@@ -505,8 +506,7 @@ def item_table_indices(lines: list[Line]) -> set[int]:
     :meth:`~backend.pipeline.RedactionPipeline.compute_boxes` skips the
     classifier (and only the classifier).
 
-    Recognition and extent are separated the way :mod:`backend.regions` separates
-    them for the sender column, and for the same reason: what *marks* the table
+    Recognition and extent are separated deliberately: what *marks* the table
     (an amount) is not what *bounds* it. Money lines are merged into rows — one
     item row is three OCR lines, one per amount column — the rows are clustered
     by vertical gap, and each cluster of at least ``_MIN_TABLE_ROWS`` rows spans

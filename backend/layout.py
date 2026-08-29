@@ -18,13 +18,13 @@ turn them into boxes:
   (:data:`_ALWAYS_BLACKEN`) is blackened whole, whatever it holds. ``image`` is
   what pays for the QR/DataMatrix pass being switched off on this branch: a
   Girocode is a graphic, and the detector sees graphics.
-* every other region is blackened whole once **more than half** of its OCR
-  lines were flagged by the per-line pass. This is the generic replacement for
-  block growth: a recipient address block is a ``text`` region whose street and
-  ZIP+city lines already match a static rule, so the majority carries the c/o
-  line, the company name and the garbled name line with it — no gap factor
-  anywhere, and it works the same for a sender column, which is what let
-  ``regions.py`` go entirely.
+* every other region is blackened whole once at least
+  :data:`_MIN_REDACTED_RATIO` of its OCR lines were flagged by the per-line
+  pass. This is the generic replacement for block growth: a recipient address
+  block is a ``text`` region whose street and ZIP+city lines already match a
+  static rule, so those hits carry the c/o line, the company name and the
+  garbled name line with them — no gap factor anywhere, and it works the same
+  for a sender column, which is what let ``regions.py`` go entirely.
 
 Only :class:`PaddleLayoutDetector` touches the model; everything else here is
 pure functions over ``LayoutRegion``/``Line``, so the fast suite never loads
@@ -39,15 +39,20 @@ from PIL import Image, ImageDraw, ImageFont
 
 from backend.models import Box, Line
 
-# Blackened on sight, whatever they contain. The majority rule below could
-# never reach `image` or `seal` anyway — a logo and a practice stamp are pixels,
-# they hold no OCR line, and 0 of 0 is not a majority — so for those two the
-# type is the only evidence there is. `header`/`footer` are here because page
-# furniture carries the sender's identity wherever it appears on the sheet.
+# Blackened on sight, whatever they contain. The ratio rule below could never
+# reach `image` or `seal` anyway — a logo and a practice stamp are pixels, they
+# hold no OCR line, and 0 of 0 clears no bar — so for those two the type is the
+# only evidence there is. `header`/`footer` are here because page furniture
+# carries the sender's identity wherever it appears on the sheet.
 _ALWAYS_BLACKEN = frozenset({"image", "seal", "header", "footer","aside_text"})
 
-# Strictly more than half, so a two-line region needs both of its lines.
-_MAJORITY = 0.4
+# How much of a region has to be flagged before the whole of it goes. Below a
+# half deliberately: a two-line sender block where only the line naming the
+# company matched is the common shape, and at a strict majority it survived.
+# Measured on the corpus at 0.4, 92 of 179 regions are blackened; the ones left
+# under the bar are 1/3 and 1/8 cases, and reaching those means going near 0.15,
+# where a fee table holding a couple of names goes black with them.
+_MIN_REDACTED_RATIO = 0.4
 
 _DEBUG_LINE_WIDTH = 4
 _DEBUG_LABEL_PAD = 4
@@ -186,14 +191,14 @@ def region_boxes(
     """Whole-region boxes, each with the short reason it exists, for the trace.
 
     ``redacted`` holds the indices into ``lines`` that the per-line pass
-    flagged. Blank lines are not counted toward the majority: OCR emits them,
+    flagged. Blank lines are not counted toward the ratio: OCR emits them,
     nothing can ever redact one, so counting them would only dilute a block
     below the threshold.
 
-    Note that ``table`` takes part in the majority rule like any other region.
+    Note that ``table`` takes part in the ratio rule like any other region.
     That is a deliberate trade, not an oversight: it keeps the rule without
-    exceptions, and it costs the invoice body on a page where more than half
-    the item rows carry a patient name — the case to watch on the corpus.
+    exceptions, and it costs the invoice body on a page where enough of the item
+    rows carry a patient name — the case to watch on the corpus.
     """
     out: list[tuple[Box, str]] = []
     for region, idx in zip(regions, lines_by_region(lines, regions)):
@@ -204,7 +209,7 @@ def region_boxes(
         if not counted:
             continue
         hits = sum(1 for i in counted if i in redacted)
-        if hits >= _MAJORITY * len(counted):
+        if hits >= _MIN_REDACTED_RATIO * len(counted):
             out.append((_padded(region.box, padding), f"{region.label} {hits}/{len(counted)} lines"))
     return out
 

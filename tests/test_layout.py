@@ -167,18 +167,28 @@ def test_region_boxes_pads_outwards():
     assert box == Box(7, 7, 93, 43)
 
 
-def test_region_boxes_needs_more_than_half_the_lines():
-    lines = [_line("a", left=10, top=10), _line("b", left=10, top=40), _line("c", left=10, top=70)]
+def test_region_boxes_needs_enough_of_the_lines():
+    lines = [_line(c, left=10, top=10 + 30 * i) for i, c in enumerate("abc")]
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes(lines, regions, {0}, padding=0) == []
+    assert region_boxes(lines, regions, {0}, padding=0) == []  # 1/3 is under the bar
     assert region_boxes(lines, regions, {0, 1}, padding=0)[0][0] == Box(0, 0, 300, 100)
 
 
-def test_region_boxes_is_a_strict_majority():
+def test_region_boxes_takes_a_two_line_block_on_one_hit():
+    # The common sender-block shape: one line names the company and matches a
+    # static rule, the tagline beside it matches nothing. At a strict majority
+    # this survived, which is why the bar sits below a half.
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes(lines, regions, {0}, padding=0) == []  # exactly half
+    assert region_boxes(lines, regions, {0}, padding=0)[0][0] == Box(0, 0, 300, 100)
+
+
+def test_region_boxes_treats_the_ratio_as_inclusive():
+    # Exactly _MIN_REDACTED_RATIO counts: 2 of 5 is 0.4, and it goes.
+    lines = [_line(str(i), left=10, top=10 + 30 * i) for i in range(5)]
+    regions = [_region(0, 0, 300, 200, label="text")]
     assert region_boxes(lines, regions, {0, 1}, padding=0)
+    assert region_boxes(lines, regions, {0}, padding=0) == []
 
 
 def test_region_boxes_ignores_blank_lines_in_the_ratio():
