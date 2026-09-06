@@ -2,10 +2,11 @@
 # delete any of these; the values below are the committed defaults.
 
 [engine]
-name = "onnx"          # native | onnx | gliner
+name = "onnx"          # native | onnx — the inference engine for every paddle
+                       # model on the page: OCR detection, recognition and layout.
 # Advanced: override either axis to unlock combinations the presets don't name.
 # ocr_backend = "paddle"   # paddle | onnxruntime
-# classifier = "presidio"  # presidio | gliner
+# classifier = "presidio"  # presidio
 # Minimum mean detector score for a text box; PaddleOCR's own default is 0.6.
 # Because it is a mean over the box, a full-width line of small type dilutes it —
 # an imprint footer scored just under 0.6 and was not detected at all. Raise it if
@@ -22,11 +23,12 @@ max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
 redact_regions = true      # also blacken whole detected layout regions
 # The whole-region pass. A trained layout detector (PP-DocLayout) finds typed
-# regions on the page; `image`, `seal`, `header` and `footer` are blackened on
-# sight, every other region once at least 40% of its OCR lines were flagged by
-# the per-line pass. That ratio rule is what covers the lines between the hits —
+# regions on the page; `image`, `seal`, `header`, `footer` and `aside_text` are
+# blackened on sight, every other once at least 40% of its OCR lines were flagged
+# by the per-line pass. That ratio rule covers the lines between the hits —
 # a c/o line, a company recipient, a garbled name line. It also covers a payment
 # QR code, which the detector reports as an `image`.
+# Which model and how sure it has to be; *what it runs on* is [engine] above.
 [redaction.layout]
 model_name = "PP-DocLayout_plus-L"
 # Under the model's own 0.5 default: phone photos depress every score, and a

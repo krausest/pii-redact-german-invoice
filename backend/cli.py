@@ -34,12 +34,10 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
-from backend.config import Config, load_config
+from backend.config import load_config
 from backend.factory import build_pipeline
 from backend.options import RedactOptions
-from backend.pdf import rasterize_pdf
-from backend.pipeline import RedactionPipeline
-from backend.service import EXTENSION_BY_MEDIA_TYPE, produce_output, run_redaction
+from backend.service import EXTENSION_BY_MEDIA_TYPE, Redaction, produce_output, run_redaction
 
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf"}
 _REDACTED = re.compile(r".*_(redacted|layout).*")
@@ -137,36 +135,22 @@ def query_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def write_layout_debug_images(
-    pipeline: RedactionPipeline, f: Path, opts: RedactOptions, config: Config
-) -> None:
-    """``--debug-layout``: decode ``f`` the same way ``run_redaction`` does and
-    write ``<stem>_layout.jpg`` (``<stem>_layout_p{N}.jpg`` per page for a
-    multi-page PDF) with the detected layout regions and line groups outlined.
+def write_layout_debug_images(redaction: Redaction, f: Path, opts: RedactOptions) -> None:
+    """``--debug-layout``: write ``<stem>_layout.jpg`` (``<stem>_layout_p{N}.jpg``
+    per page for a multi-page PDF) with the detected layout regions and line
+    groups outlined.
 
-    This re-decodes/re-OCRs the file rather than reusing ``run_redaction``'s
-    work: `run_redaction`/`Redaction` carry no per-page `Line`s out (by design —
-    see CLAUDE.md's coordinate rule), and this is an opt-in debugging aid, not a
-    production path, so the extra pass is an acceptable cost.
+    Only writing is left here. The images were drawn during the redaction itself
+    (:attr:`backend.service.PageResult.layout_debug`), because they are a view of
+    what that pass saw — re-deriving them meant decoding, unwarping, OCRing and
+    running layout detection over the same file a second time. Nothing is written
+    when no layout detector is configured; there is then nothing to show.
     """
-    if f.suffix.lower() == ".pdf":
-        pages = rasterize_pdf(
-            f.read_bytes(),
-            dpi=opts.pdf_dpi,
-            max_pages=config.redaction.max_pages,
-            max_pixels=config.api.max_image_pixels,
-        )
-    else:
-        with Image.open(f) as src:
-            pages = [ImageOps.exif_transpose(src).convert("RGB")]
-
-    for index, page in enumerate(pages):
-        image = pipeline.unwarp(page) if opts.unwarp else page.convert("RGB")
-        debug_image = pipeline.layout_debug_image(image, pipeline.read_lines(image))
-        if debug_image is None:
+    for page in redaction.pages:
+        if page.layout_debug is None:
             return
-        suffix = "_layout.jpg" if len(pages) == 1 else f"_layout_p{index}.jpg"
-        debug_image.save(f.with_name(f.stem + suffix), "JPEG", quality=opts.jpeg_quality)
+        suffix = "_layout.jpg" if len(redaction.pages) == 1 else f"_layout_p{page.index}.jpg"
+        page.layout_debug.save(f.with_name(f.stem + suffix), "JPEG", quality=opts.jpeg_quality)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -202,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
     for f in input_files:
         try:
             if f.suffix.lower() == ".pdf":
-                redaction = run_redaction(pipeline, f.read_bytes(), opts, config)
+                redaction = run_redaction(
+                    pipeline, f.read_bytes(), opts, config, layout_debug=args.debug_layout
+                )
             else:
                 with Image.open(f) as src:
                     # A phone photo stores its pixels sideways and an EXIF tag saying
@@ -210,7 +196,13 @@ def main(argv: list[str] | None = None) -> int:
                     # is the only truth from here on — OCR sees an upright page, and
                     # the output (JPEG, written without EXIF) needs no tag to display
                     # the way the input did.
-                    redaction = run_redaction(pipeline, ImageOps.exif_transpose(src), opts, config)
+                    redaction = run_redaction(
+                        pipeline,
+                        ImageOps.exif_transpose(src),
+                        opts,
+                        config,
+                        layout_debug=args.debug_layout,
+                    )
             # The same bytes POST /api/redact would return, so the extension is the
             # one that belongs to the media type service chose — never re-derived.
             media_type, body = produce_output(redaction, opts)
@@ -221,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
             failed += 1
             continue
         if args.debug_layout:
-            write_layout_debug_images(pipeline, f, opts, config)
+            write_layout_debug_images(redaction, f, opts)
         out_path = f.with_name(f.stem + "_redacted" + EXTENSION_BY_MEDIA_TYPE[media_type])
         out_path.write_bytes(body)
         print(f"Redacted {f.name} -> {out_path.name}")

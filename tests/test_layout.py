@@ -13,8 +13,10 @@ from backend.layout import (
     _DEBUG_PALETTE,
     LayoutRegion,
     assign_lines,
+    document_order,
     draw_layout_debug,
     region_boxes,
+    region_parents,
 )
 
 
@@ -157,13 +159,13 @@ def test_region_boxes_always_blackens_the_graphic_and_furniture_types():
         _region(0, 90, 100, 110, label="seal"),
     ]
     boxes = region_boxes([], regions, set(), padding=0)
-    assert [b for b, _ in boxes] == [r.box for r in regions]
-    assert [why for _, why in boxes] == ["header", "image", "footer", "seal"]
+    assert [b for _, b, _ in boxes] == [r.box for r in regions]
+    assert [why for _, _, why in boxes] == ["header", "image", "footer", "seal"]
 
 
 def test_region_boxes_pads_outwards():
     regions = [_region(10, 10, 90, 40, label="image")]
-    (box, _), = region_boxes([], regions, set(), padding=3)
+    (_, box, _), = region_boxes([], regions, set(), padding=3)
     assert box == Box(7, 7, 93, 43)
 
 
@@ -171,7 +173,7 @@ def test_region_boxes_needs_enough_of_the_lines():
     lines = [_line(c, left=10, top=10 + 30 * i) for i, c in enumerate("abc")]
     regions = [_region(0, 0, 300, 100, label="text")]
     assert region_boxes(lines, regions, {0}, padding=0) == []  # 1/3 is under the bar
-    assert region_boxes(lines, regions, {0, 1}, padding=0)[0][0] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {0, 1}, padding=0)[0][1] == Box(0, 0, 300, 100)
 
 
 def test_region_boxes_takes_a_two_line_block_on_one_hit():
@@ -180,7 +182,7 @@ def test_region_boxes_takes_a_two_line_block_on_one_hit():
     # this survived, which is why the bar sits below a half.
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes(lines, regions, {0}, padding=0)[0][0] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {0}, padding=0)[0][1] == Box(0, 0, 300, 100)
 
 
 def test_region_boxes_treats_the_ratio_as_inclusive():
@@ -209,4 +211,72 @@ def test_region_boxes_treats_a_table_like_any_other_region():
     # body on a page where most item rows carry a name.
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
     regions = [_region(0, 0, 300, 100, label="table")]
-    assert region_boxes(lines, regions, {0, 1}, padding=0)[0][0] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {0, 1}, padding=0)[0][1] == Box(0, 0, 300, 100)
+
+
+# -- reading order ---------------------------------------------------------- #
+def test_a_table_row_reads_across_although_its_cells_are_offset():
+    """The reason ordering is banded rather than a plain (top, left) sort: on a
+    photographed page the cells of one row differ by a few pixels, and a plain
+    sort would read the table column by column, pulling "Datum" away from the
+    date beside it and gluing it to the row below."""
+    lines = [
+        _line("Datum", left=100, top=812),
+        _line("Ziffer", left=300, top=814),
+        _line("Betrag", left=500, top=811),
+        _line("18.02.", left=100, top=846),
+        _line("2", left=300, top=848),
+        _line("3,15", left=500, top=845),
+    ]
+    regions = [_region(50, 800, 650, 880, label="table")]
+    assert [lines[i].text for i in document_order(lines, regions)] == [
+        "Datum", "Ziffer", "Betrag", "18.02.", "2", "3,15",
+    ]
+
+
+def test_two_columns_at_the_same_height_stay_whole():
+    """The interleaving that made per-line classification necessary in the first
+    place: a sender column and a recipient block at similar page height. Each
+    must arrive as a run, not alternating line by line."""
+    lines = [
+        _line("Absender GmbH", left=600, top=100),
+        _line("Musterweg 1", left=600, top=130),
+        _line("Herrn", left=100, top=110),
+        _line("Max Muster", left=100, top=140),
+    ]
+    regions = [_region(580, 90, 900, 190), _region(80, 100, 400, 200)]
+    assert [lines[i].text for i in document_order(lines, regions)] == [
+        "Herrn", "Max Muster", "Absender GmbH", "Musterweg 1",
+    ]
+
+
+def test_a_nested_block_stays_contiguous():
+    """A table inside a text region enters as a whole at its own position,
+    rather than interleaving its rows with the surrounding paragraph."""
+    lines = [
+        _line("Ueberschrift", left=100, top=10),
+        _line("Datum", left=120, top=110),
+        _line("Betrag", left=400, top=112),
+        _line("Schluss", left=100, top=300),
+    ]
+    regions = [_region(50, 0, 600, 350, label="text"), _region(100, 100, 500, 140, label="table")]
+    assert region_parents(regions) == [None, 0]
+    assert [lines[i].text for i in document_order(lines, regions)] == [
+        "Ueberschrift", "Datum", "Betrag", "Schluss",
+    ]
+
+
+def test_nesting_uses_mostly_contained_not_strict_containment():
+    """Detector boxes overhang each other by a few pixels routinely; demanding
+    true containment would make a nested table a sibling instead of a child."""
+    outer = _region(0, 0, 1000, 1000, label="text")
+    poking_out = _region(-20, 100, 400, 300, label="table")
+    assert region_parents([outer, poking_out]) == [None, 0]
+
+
+def test_every_line_survives_the_ordering():
+    """A permutation, not a filter: a line no region claimed is ordered among
+    the top-level items rather than dropped."""
+    lines = [_line(f"l{n}", left=10 * n, top=37 * n) for n in range(12)]
+    regions = [_region(0, 0, 100, 200), _region(0, 300, 200, 400)]
+    assert sorted(document_order(lines, regions)) == list(range(12))

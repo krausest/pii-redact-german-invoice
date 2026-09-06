@@ -27,10 +27,12 @@ def _build_classifier(classifier: str, score_threshold: float):
     raise ValueError(f"unknown classifier {classifier!r}")
 
 
-def _build_layout_detector(model_name: str, threshold: float, layout_nms: bool):
+def _build_layout_detector(model_name: str, threshold: float, layout_nms: bool, engine: str):
     from backend.layout import PaddleLayoutDetector
 
-    return PaddleLayoutDetector(model_name=model_name, threshold=threshold, layout_nms=layout_nms)
+    return PaddleLayoutDetector(
+        model_name=model_name, threshold=threshold, layout_nms=layout_nms, engine=engine
+    )
 
 
 def build_classifier(config: Config) -> Classifier:
@@ -72,6 +74,9 @@ def build_pipeline(config: Config) -> RedactionPipeline:
                 config.redaction.layout.model_name,
                 config.redaction.layout.threshold,
                 config.redaction.layout.layout_nms,
+                # The same inference engine the OCR models run on: it is one
+                # machine-level choice, so there is one place that answers it.
+                ocr_backend,
             )
             if config.redaction.redact_regions
             else None

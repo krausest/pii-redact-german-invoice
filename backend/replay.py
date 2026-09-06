@@ -78,7 +78,7 @@ from backend.classifiers.base import Classifier
 from backend.config import Config
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
-from backend.trace import Trace
+from backend.trace import Trace, format_line
 
 # A line counts as redacted at 90% covered and as kept at 10%. The gap is
 # deliberate: a line nothing meant to touch, but which a neighbour's padding
@@ -107,10 +107,10 @@ class Page:
 class Verdict:
     line: str  # the `line @(...)` header, verbatim
     kind: str  # REDACT | keep | PARTIAL
-    # What put ink on the line: one of compute_boxes' own reasons (labeled-value,
-    # static-rule, name-memory, classifier), or `overlap` for a neighbour's
-    # padding spilling onto it. `item table` on a `keep` records that the
-    # classifier was off there.
+    # What put ink on the line: the source of every span that touched it
+    # ("rule SALUT", "labeled-value", "name-memory", "presidio"), joined with
+    # "+" when several did, or `overlap` for a neighbour's padding spilling onto
+    # it. `item table` on a `keep` records that the classifier was off there.
     reason: str | None
     coverage: float
 
@@ -135,23 +135,16 @@ _PAGE_RE = re.compile(r"^=== page (\d+)(?: \((\d+)x(\d+)\))? ===$")
 _LINE_RE = re.compile(r"^line @\((-?\d+),(-?\d+) (\d+)x(\d+) conf=(\S+)\): (.+)$")
 _VERDICT_RE = re.compile(r"^\s+-> (REDACT|keep|PARTIAL)\b(.*)$")
 _REASON_RE = re.compile(r"\(([^)]*)\)\s*$")
+# A span line in the trace: `PERSON 'Max Mustermann' [presidio 0.85]`. Only the
+# source is read back — the label and the score are for a human, the source is
+# what a snapshot diff needs to say *which* detector went quiet.
+_SPAN_RE = re.compile(r"^[A-Z_]+ .* \[(.+?) \d+\.\d+\]$")
 
 
-def format_line(line: Line) -> str:
-    """The one-line form of an OCR line — byte-identical to what the trace emits.
-
-    ``compute_boxes`` builds the same text through ``trace.add(fmt, *args)``
-    (which defers the interpolation, since it runs per line on pages nobody
-    reads), so the format string lives in two places by necessity. Nothing drifts
-    unnoticed: :func:`_outcome` compares this against the trace's own header."""
-    return "line @(%d,%d %dx%d conf=%s): %r" % (
-        line.left,
-        line.top,
-        line.width,
-        line.height,
-        line.conf,
-        line.text,
-    )
+# `format_line` lives in backend.trace, next to the code that emits it — the
+# format string used to be written out twice, here and in the pipeline, with a
+# runtime check in `_outcome` guarding against the two drifting apart. One
+# producer removes the whole class of problem.
 
 
 def _parse_line(text: str) -> Line | None:
@@ -296,33 +289,46 @@ def build_replay_pipeline(config: Config, classifier: Classifier) -> RedactionPi
 
 
 def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
-    """Pair the trace's per-line reasons with the effective coverage."""
-    headers: list[str] = []
-    reasons: list[str | None] = []
-    kept_by_table: list[bool] = []
+    """Pair the trace's per-line span sources with the effective coverage.
+
+    The trace is region-first, so the lines arrive in *reading* order while the
+    page's lines are in OCR order. They are paired by their header text rather
+    than by position — the header carries the pixel box, so it identifies the
+    line unambiguously and the ordering difference stays an implementation
+    detail of the trace."""
+    sources: dict[str, list[str]] = {}
+    kept_by_table: set[str] = set()
+    header: str | None = None
     for raw in trace_text.splitlines():
-        if raw.startswith("line @"):
-            headers.append(raw)
-            reasons.append(None)
-            kept_by_table.append(False)
-        elif raw.startswith("    -> REDACT ("):
-            reasons[-1] = raw[len("    -> REDACT (") : -1]
-        elif raw.startswith("    -> keep (item table)"):
-            kept_by_table[-1] = True
+        stripped = raw.strip()
+        if stripped.startswith("line @"):
+            header = stripped
+            sources.setdefault(header, [])
+        elif header is None:
+            continue
+        elif stripped.startswith("-> keep (item table)"):
+            kept_by_table.add(header)
+        elif (m := _SPAN_RE.match(stripped)) is not None:
+            if m.group(1) not in sources[header]:
+                sources[header].append(m.group(1))
 
     # compute_boxes skips blank lines silently, so pair against the same subset.
     spoken = [ln for ln in page.lines if ln.text.strip()]
-    if len(spoken) != len(headers):
-        raise RuntimeError(f"page {page.index}: {len(spoken)} lines but {len(headers)} traced")
+    if len(spoken) != len(sources):
+        raise RuntimeError(f"page {page.index}: {len(spoken)} lines but {len(sources)} traced")
 
     all_boxes = tuple(boxes)
     verdicts: list[Verdict] = []
-    for line, header, reason, table in zip(spoken, headers, reasons, kept_by_table):
-        if format_line(line) != header:
-            raise RuntimeError(f"trace format drifted:\n  {format_line(line)}\n  {header}")
+    for line in spoken:
+        header = format_line(line)
+        if header not in sources:
+            raise RuntimeError(f"line missing from the trace:\n  {header}")
+        reason = "+".join(sources[header]) or None
         cov = coverage(line, all_boxes)
         if cov <= UNTOUCHED:
-            verdicts.append(Verdict(header, "keep", "item table" if table else None, cov))
+            verdicts.append(
+                Verdict(header, "keep", "item table" if header in kept_by_table else None, cov)
+            )
             continue
         # Ink on a line nothing flagged can only be a neighbour's padded box
         # spilling over — the whole-region pass does not run here.

@@ -1,12 +1,19 @@
-"""Pipeline composition with stub OCR/classifier (no models)."""
+"""What the pipeline promises when the pieces are composed.
+
+Acceptance-level: every test here states a behaviour a user of the redactor
+would notice, using stub OCR/classifier/layout so no model loads. The
+line-by-line correctness of the rules lives in ``test_rules.py``, the reading
+order in ``test_layout.py``, and the real documents in the corpus replay
+(``pytest --regression``).
+"""
 
 from __future__ import annotations
 
 from PIL import Image
 
+from backend.layout import LayoutRegion
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
-from backend.layout import LayoutRegion
 from backend.trace import Trace
 from tests.conftest import (
     RecordingUnwarper,
@@ -17,201 +24,181 @@ from tests.conftest import (
 
 
 def _pipeline(lines, pii_subs, **kwargs):
-    return RedactionPipeline(
-        ocr=StubOCR(lines),
-        classifier=StubClassifier(pii_subs),
-        **kwargs,
-    )
+    return RedactionPipeline(ocr=StubOCR(lines), classifier=StubClassifier(pii_subs), **kwargs)
 
 
-def test_apply_boxes_fills_exact_rectangle():
-    img = Image.new("RGB", (50, 50), (255, 255, 255))
-    p = _pipeline([], [], fill=(0, 0, 0))
-    out = p.apply_boxes(img, [Box(10, 10, 20, 20)])
-    assert out.getpixel((15, 15)) == (0, 0, 0)  # inside the box
-    assert out.getpixel((40, 40)) == (255, 255, 255)  # outside
-
-
-def test_compute_boxes_flags_only_pii_lines():
-    lines = [
-        Line("Rechnung Nr 5", left=0, top=0, width=40, height=10),
-        Line("Max Mustermann", left=5, top=20, width=60, height=12),
-    ]
-    p = _pipeline(lines, ["Mustermann"], padding=2)
-    boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
-    assert boxes == [Box(3, 18, 67, 34)]  # only the second line, padded by 2
+def _line(text, top, left=10, width=80, height=10):
+    return Line(text=text, left=left, top=top, width=width, height=height)
 
 
 def _region(label, x0, y0, x1, y1):
     return LayoutRegion(label=label, score=0.9, box=Box(x0, y0, x1, y1))
 
 
-def test_compute_boxes_blackens_an_image_region_whole():
-    # `image` is blackened on sight — it holds no OCR line at all (a logo is
-    # pixels), which is exactly why the majority rule below cannot reach it.
-    lines = [Line("Muster GmbH", left=0, top=50, width=80, height=10)]
-    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("image", 0, 0, 100, 30)]))
-    boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
-    assert boxes == [Box(0, 50, 80, 60), Box(0, 0, 100, 30)]
+def _page():
+    return Image.new("RGB", (300, 300))
 
 
-def test_compute_boxes_blackens_a_region_whose_lines_are_mostly_redacted():
-    # Two of three lines match a static rule (ORG_LEGAL / street), so the third —
-    # which no per-line rule reaches — is carried by the majority.
+# -- what the whole-document switch bought ---------------------------------- #
+def test_a_name_broken_across_two_lines_blackens_both():
+    """The reason the page is classified as one text at all.
+
+    Per line, "Max" and "Mustermann" are each a single token that no classifier
+    would call a person; joined, they are one entity, and *both* lines have to go
+    black or half the name stays on the page."""
+    lines = [_line("Max", top=10), _line("Mustermann", top=30), _line("Summe", top=200)]
+    p = _pipeline(lines, ["Max\nMustermann"], padding=0)
+    assert p.compute_boxes(_page()) == [Box(10, 10, 90, 20), Box(10, 30, 90, 40)]
+
+
+def test_the_classifier_sees_the_page_in_reading_order_not_ocr_order():
+    """Two blocks side by side must not be interleaved into one another.
+
+    This is what raw OCR order does and what the layout hierarchy undoes: the
+    stub only matches if the recipient's three lines arrive consecutively."""
     lines = [
-        Line("Muster GmbH", left=10, top=10, width=80, height=10),
-        Line("Musterstrasse 7", left=10, top=25, width=80, height=10),
-        Line("c/o irgendwer", left=10, top=40, width=80, height=10),
+        _line("Absender GmbH", top=100, left=200),
+        _line("Herrn", top=105, left=10),
+        _line("Musterweg 1", top=130, left=200),
+        _line("Max Muster", top=135, left=10),
+    ]
+    regions = [_region("text", 190, 90, 290, 150), _region("text", 5, 95, 100, 150)]
+    p = _pipeline(lines, ["Herrn\nMax Muster"], padding=0, layout=StubLayoutDetector(regions))
+    boxes = p.compute_boxes(_page())
+    assert Box(10, 105, 90, 115) in boxes and Box(10, 135, 90, 145) in boxes
+
+
+# -- the two span sources are not equal ------------------------------------- #
+def test_a_deterministic_rule_redacts_without_the_classifier():
+    lines = [_line("Musterstrasse 7", top=10)]
+    assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 10, 90, 20)]
+
+
+def test_the_item_table_gates_the_classifier_and_only_the_classifier():
+    """An invoice body is a grid of two-word service texts, which in German read
+    exactly like a forename/surname pair. So a model hit inside the table is
+    ignored — while a rule that fires there is still evidence."""
+    rows = [_line(f"Beratung {n}", top=100 + 20 * n) for n in range(4)]
+    money = [_line("10,72", top=100 + 20 * n, left=200) for n in range(4)]
+    lines = [_line("Cleed Agar", top=105), *rows, *money]
+    boxes = _pipeline(lines, ["Cleed Agar"], padding=0).compute_boxes(_page())
+    assert boxes == []  # the model's only hit sits in the table
+    # ...but a street in the same rows is still redacted.
+    lines[0] = _line("Musterstrasse 7", top=105)
+    assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 105, 90, 115)]
+
+
+# -- the name memory: pass one names a person, pass two finds them again ----- #
+def test_the_name_memory_carries_a_surname_across_pages():
+    """A name the rules labelled on page 1 is redacted bare on page 2, through
+    the accumulator the caller threads between pages."""
+    names: set[str] = set()
+    p1 = _pipeline([_line("Patient Mustermann, Max", top=10)], [], padding=0)
+    p1.compute_boxes(_page(), known_names=names)
+    p2 = _pipeline([_line("Diagnose Mustermann", top=10)], [], padding=0)
+    assert p2.compute_boxes(_page(), known_names=names) == [Box(10, 10, 90, 20)]
+
+
+def test_a_name_only_the_model_found_still_redacts_its_bare_recurrence():
+    """The reason the memory reads spans rather than patterns.
+
+    No rule labels the first line — the model does. The second names the same
+    person with nothing beside it: a lone token no classifier calls a person and
+    no pattern describes. It is redacted because the page already said who that
+    is."""
+    lines = [_line("Anna Beispiel", top=10), _line("Betrifft: Beispiel", top=200)]
+    boxes = _pipeline(lines, ["Anna Beispiel"], padding=0).compute_boxes(_page())
+    assert boxes == [Box(10, 10, 90, 20), Box(10, 200, 90, 210)]
+
+
+def test_the_memory_takes_the_model_span_not_the_line_around_it():
+    """A letterhead line names the managing director *and* the practice. Taking
+    the line whole made the company a remembered name, which then blackened body
+    text and an invoice number elsewhere on the page — measured on the corpus.
+    The span carries the name and stops."""
+    lines = [
+        _line("Musterlabor GmbH, Anna Beispiel", top=10),
+        _line("Musterlabor rechnet quartalsweise ab", top=200),
+    ]
+    boxes = _pipeline(lines, ["Anna Beispiel"], padding=0).compute_boxes(_page())
+    assert boxes == [Box(10, 10, 90, 20)]  # the second line stays readable
+
+
+def test_a_model_hit_inside_the_item_table_never_feeds_the_memory():
+    """The table gate would be worth little if the hit it drops came back as a
+    memory: a two-word service text reads like a name, and remembering one would
+    spread that single mistake over the whole document."""
+    rows = [_line(f"Beratung {n}", top=100 + 20 * n) for n in range(4)]
+    money = [_line("10,72", top=100 + 20 * n, left=200) for n in range(4)]
+    lines = [*rows, *money, _line("Cleed Agar", top=100), _line("Cleed", top=250)]
+    assert _pipeline(lines, ["Cleed Agar"], padding=0).compute_boxes(_page()) == []
+
+
+# -- regions ---------------------------------------------------------------- #
+def test_a_graphic_region_is_blackened_although_it_holds_no_text():
+    """The only boxes not derived from an OCR line: a logo, a stamp, a payment
+    QR code. Nothing text-based could ever reach them."""
+    lines = [_line("Muster GmbH", top=200)]
+    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("image", 0, 0, 100, 30)]))
+    assert Box(0, 0, 100, 30) in p.compute_boxes(_page())
+
+
+def test_a_region_goes_whole_once_enough_of_its_lines_are_flagged():
+    """What covers the lines *between* the hits — a c/o line, a company
+    recipient, a name line OCR garbled."""
+    lines = [
+        _line("Muster GmbH", top=10),
+        _line("Musterstrasse 7", top=25),
+        _line("c/o irgendwer", top=40),
     ]
     p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 55)]))
-    boxes = p.compute_boxes(Image.new("RGB", (100, 100)))
-    assert boxes[-1] == Box(5, 5, 95, 55)
+    assert p.compute_boxes(_page())[-1] == Box(5, 5, 95, 55)
 
 
-def test_compute_boxes_leaves_a_region_alone_below_the_ratio():
-    # One hit in four lines is under the bar, so the three lines no per-line rule
-    # reached stay readable — the region pass does not blacken on a single hit.
-    lines = [
-        Line("Muster GmbH", left=10, top=10, width=80, height=10),
-        Line("Beratung nach GOAE", left=10, top=25, width=80, height=10),
-        Line("Untersuchung Organsystem", left=10, top=40, width=80, height=10),
-        Line("Erhoehter Zeitaufwand", left=10, top=55, width=80, height=10),
-    ]
-    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 70)]))
-    assert p.compute_boxes(Image.new("RGB", (100, 100))) == [Box(10, 10, 90, 20)]
+def test_regions_are_off_without_a_detector():
+    lines = [_line("Muster GmbH", top=10)]
+    assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 10, 90, 20)]
 
 
-def test_compute_boxes_skips_regions_by_default():
-    lines = [Line("Muster GmbH", left=0, top=5, width=80, height=10)]
-    p = _pipeline(lines, [], padding=0)
-    assert p.compute_boxes(Image.new("RGB", (100, 100))) == [Box(0, 5, 80, 15)]
-
-
-def test_compute_boxes_does_not_unwarp():
+# -- composition ------------------------------------------------------------ #
+def test_compute_boxes_never_unwarps():
+    """The coordinate rule: boxes are in the space of the image passed in."""
     unwarper = RecordingUnwarper()
     p = _pipeline([], [], unwarper=unwarper)
-    p.compute_boxes(Image.new("RGB", (30, 30)))
+    p.compute_boxes(_page())
     assert unwarper.calls == 0
 
 
-def test_static_rule_redacts_without_classifier_hit():
-    lines = [Line("Musterstrasse 23", left=0, top=0, width=80, height=10)]
-    p = _pipeline(lines, [])  # classifier flags nothing
-    assert len(p.compute_boxes(Image.new("RGB", (100, 100)))) == 1
-
-
-def test_item_table_gates_the_classifier_only():
-    # Two money rows 30px apart make one table band (220..260). The Leistungstext
-    # inside it is flagged by the classifier and must NOT be redacted; the same
-    # text below the table still is, and a deterministic rule keeps working
-    # *inside* the table.
-    lines = [
-        Line("Orientierende Testuntersuchg.", left=0, top=220, width=100, height=10),
-        Line("4,66 €", left=200, top=220, width=50, height=10),
-        Line("Patient Mustermann, Max", left=0, top=240, width=100, height=10),
-        Line("10,72 €", left=200, top=250, width=50, height=10),
-        Line("Orientierende Testuntersuchg.", left=0, top=600, width=100, height=10),
-    ]
-    p = _pipeline(lines, ["Orientierende"], padding=0)
-    assert p.compute_boxes(Image.new("RGB", (400, 800))) == [
-        Box(0, 240, 100, 250),  # static rule, inside the table
-        Box(0, 600, 100, 610),  # classifier, below the table
-    ]
-
-
-def test_the_classifier_is_never_asked_about_a_table_line():
-    # The gate above, asserted directly rather than through the boxes it produces.
-    # It is what keeps the PERSON guard's leniency (a proper noun counts whatever
-    # its case) away from the Leistungstexte, so inverting it must fail loudly.
-    class Forbidden:
-        def __init__(self):
-            self.asked = []
-
-        def is_pii(self, text, trace):
-            if text.startswith("Orientierende"):
-                raise AssertionError(f"classifier asked about an item-table line: {text!r}")
-            self.asked.append(text)
-            return False
-
-    lines = [
-        Line("Orientierende Testuntersuchg.", left=0, top=220, width=100, height=10),
-        Line("4,66 €", left=200, top=220, width=50, height=10),
-        Line("10,72 €", left=200, top=250, width=50, height=10),
-        Line("Vielen Dank", left=0, top=600, width=100, height=10),
-    ]
-    classifier = Forbidden()
-    p = RedactionPipeline(ocr=StubOCR(lines), classifier=classifier)
-    p.compute_boxes(Image.new("RGB", (400, 800)))
-    assert classifier.asked == ["Vielen Dank"]  # only the line below the table
-
-
-def test_name_memory_redacts_bare_recurrence():
-    # "Diagnose Mustermann" matches no static rule and the classifier flags
-    # nothing — only the surname harvested from the labeled patient line above
-    # can catch it.
-    lines = [
-        Line("Patient Mustermann, Max", left=0, top=0, width=80, height=10),
-        Line("Diagnose Mustermann", left=0, top=30, width=80, height=10),
-    ]
-    p = _pipeline(lines, [], padding=0)
-    assert p.compute_boxes(Image.new("RGB", (100, 100))) == [
-        Box(0, 0, 80, 10),
-        Box(0, 30, 80, 40),
-    ]
-
-
-def test_name_memory_carries_across_pages_via_accumulator():
-    page1 = [Line("Patient Mustermann, Max", left=0, top=0, width=80, height=10)]
-    page2 = [Line("Diagnose Mustermann", left=0, top=0, width=80, height=10)]
-    known: set[str] = set()
-    img = Image.new("RGB", (100, 100))
-
-    p1 = _pipeline(page1, [], padding=0)
-    assert len(p1.compute_boxes(img, known_names=known)) == 1
-    assert "Mustermann" in known  # harvested into the caller's set
-
-    p2 = _pipeline(page2, [], padding=0)
-    assert len(p2.compute_boxes(img, known_names=known)) == 1  # bare recurrence
-
-    # Without the accumulator, page 2 on its own finds nothing.
-    p3 = _pipeline(page2, [], padding=0)
-    assert p3.compute_boxes(img) == []
-
-
-def test_redact_unwarps_then_applies_boxes():
-    lines = [Line("Max Mustermann", left=0, top=0, width=40, height=10)]
+def test_redact_unwarps_then_applies_the_boxes():
     unwarper = RecordingUnwarper()
-    p = _pipeline(lines, ["Mustermann"], unwarper=unwarper, unwarp_enabled=True, fill=(0, 0, 0))
-    out = p.redact(Image.new("RGB", (50, 50), (255, 255, 255)))
+    p = _pipeline([_line("Musterstrasse 7", top=10)], [], unwarper=unwarper, unwarp_enabled=True)
+    out = p.redact(_page())
     assert unwarper.calls == 1
-    # box drawn on the unwarped (recolored) canvas: inside black, elsewhere the
-    # unwarper's fill (10, 20, 30).
-    assert out.getpixel((5, 5)) == (0, 0, 0)
-    assert out.getpixel((45, 45)) == (10, 20, 30)
+    assert out.getpixel((50, 15)) == (0, 0, 0)  # the box, over the recolored page
+    assert out.getpixel((250, 250)) == (10, 20, 30)  # untouched unwarped ground
 
 
-def test_redact_without_unwarp_uses_original():
-    lines = [Line("Max Mustermann", left=0, top=0, width=40, height=10)]
-    p = _pipeline(lines, ["Mustermann"], unwarp_enabled=False, fill=(0, 0, 0))
-    out = p.redact(Image.new("RGB", (50, 50), (255, 255, 255)))
-    assert out.getpixel((45, 45)) == (255, 255, 255)  # original background kept
+def test_apply_boxes_fills_the_exact_rectangle():
+    img = Image.new("RGB", (50, 50), (255, 255, 255))
+    _pipeline([], [], fill=(0, 0, 0)).apply_boxes(img, [Box(10, 10, 20, 20)])
+    assert img.getpixel((15, 15)) == (0, 0, 0)
+    assert img.getpixel((25, 25)) == (255, 255, 255)
 
 
-def test_compute_boxes_traces_each_line_and_its_verdict():
-    lines = [
-        Line("Rechnung Nr 5", left=0, top=0, width=40, height=10, conf=98.0),
-        Line("Sehr geehrter Herr Mustermann,", left=5, top=20, width=60, height=12, conf=99.0),
-    ]
+# -- the trace -------------------------------------------------------------- #
+def test_the_trace_narrates_region_then_content_then_verdict():
+    """The debug format: a box first, then the text it contributed, then each
+    line with the span that decided it. Every region appears, including one
+    holding no text at all."""
+    lines = [_line("Musterstrasse 7", top=110)]
+    regions = [_region("text", 5, 100, 95, 130), _region("image", 0, 0, 90, 40)]
+    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector(regions))
     trace = Trace(collect=True)
-    p = _pipeline(lines, [], padding=0)
-    p.compute_boxes(Image.new("RGB", (100, 100)), trace=trace)
-    text = trace.collected
-    # Every line is reported with the pixel box that would be blackened...
-    assert "line @(0,0 40x10 conf=98.0): 'Rechnung Nr 5'" in text
-    assert "line @(5,20 60x12 conf=99.0): 'Sehr geehrter Herr Mustermann,'" in text
-    # ...and the verdict names *which* arm fired, which is what a wrong box is
-    # diagnosed from. The salutation is a static rule, so the classifier never ran.
-    assert "    -> REDACT (static-rule)" in text
-    # "static-rule" is nine patterns, so the deciding one is named and quoted
-    # under its line — the other half of diagnosing an unexpected box.
-    assert "    rule SALUT matched 'Herr'" in text
+    p.compute_boxes(_page(), trace=trace)
+    out = trace.collected
+    assert "--- region 0  text  0.90  [5, 100, 95, 130] ---" in out
+    assert "wholetext: 'Musterstrasse 7'" in out
+    assert "ADDRESS 'Musterstrasse 7' [rule DE_STREET 1.00]" in out
+    assert "-> REDACT" in out
+    # the graphic region is narrated too, though it has no lines to show
+    assert "--- region 1  image  0.90  [0, 0, 90, 40] ---" in out

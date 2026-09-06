@@ -1,9 +1,15 @@
 """Presidio classifier: spaCy German NER + custom regex recognizers.
 
-Each OCR line is analyzed on its own (not one page-wide blob): PaddleOCR's reading
-order interleaves the page's columns, which pollutes the text around an entity and
-makes the NER model miss names it recognizes fine in isolation. A line counts as
-PII whenever analyzing it turns up any redactable entity.
+Analyzes the **whole page at once**, in the reading order the layout hierarchy
+established (:func:`backend.layout.document_order`). It used to run per OCR line,
+for a reason that no longer holds: raw PaddleOCR order interleaves the page's
+columns, so a page-wide blob put unrelated blocks next to each other and the NER
+model missed names it recognized fine in isolation. Grouping the lines by region
+first removes that pollution — and buys back what per-line analysis could never
+do, which is to see an entity that spans a line wrap.
+
+Returns :class:`backend.pii.Span` objects rather than a per-line verdict, so the
+pipeline treats this and the deterministic rules alike.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_analyzer.predefined_recognizers import EmailRecognizer, IbanRecognizer, CreditCardRecognizer, PhoneRecognizer
 
 from backend.rules import DE_PLZ_CITY
+from backend.pii import PRESIDIO_LABELS, PiiLabel, Span
 from backend.trace import Trace
 
 # Entities we treat as PII to redact. LOCATION is intentionally excluded: the NLP
@@ -162,7 +169,39 @@ def build_analyzer() -> AnalyzerEngine:
     return analyzer
 
 
-def _name_token_count(tokens: Sequence[_Token], start: int, end: int) -> int:
+def _name_fragments(
+    text: str, tokens: Sequence[_Token], start: int, end: int
+) -> list[tuple[int, int]]:
+    """A wrapped PERSON span, cut back to the parts that are actually a name.
+
+    The model extends an entity across a line break in two very different
+    situations, and only one of them is wanted. "Max\nMustermann" is a name
+    *split* by a wrap, and catching it is the whole reason the page is read as
+    one text. "Max Mustermann\nLeistungsdatum" is the model running on past the
+    end of the name into the first word of the row below — measured on the
+    corpus, where it blackened a treatment date.
+
+    The tagger tells them apart, exactly as it does inside :func:`_name_token_count`:
+    the fragment on each line is kept only if it holds a proper noun. A name half
+    keeps its PROPN whatever OCR did to its capital; a German compound noun that
+    happens to start the next line does not.
+
+    An unwrapped span comes back unchanged, as its single fragment.
+    """
+    fragments: list[tuple[int, int]] = []
+    pos = start
+    for piece in text[start:end].split("\n"):
+        lo, hi = pos, pos + len(piece)
+        if piece.strip() and any(
+            tok.pos_ == "PROPN" and tok.idx < hi and tok.idx + len(tok.text) > lo
+            for tok in tokens
+        ):
+            fragments.append((lo, hi))
+        pos = hi + 1  # + the "\n"
+    return fragments
+
+
+def _name_token_count(text: str, tokens: Sequence[_Token], start: int, end: int) -> int:
     """How many name tokens the PERSON span ``[start, end)`` is worth.
 
     Inside the span a token must be a proper noun — whatever its case. The case
@@ -183,6 +222,12 @@ def _name_token_count(tokens: Sequence[_Token], start: int, end: int) -> int:
     have been recognized as a PERSON: the Leistungstexte this guard exists to
     reject ("Mikroskopie,Kultur", "Summe,Betrag", "Ferritin,CRP") produce no
     PERSON entity at all, so there is no span here to extend.
+
+    The comma must be on the **same OCR line** as the span. The page is analyzed
+    as one text now, so the token before a span is often the last cell of the row
+    above — and a table row ending in a comma would lend its capital to whatever
+    single word starts the next line. That is how "Leistungsdatum" came to count
+    as two name tokens on the corpus.
     """
     inside = [
         i
@@ -201,13 +246,16 @@ def _name_token_count(tokens: Sequence[_Token], start: int, end: int) -> int:
     for edge, step in ((inside[0], -1), (inside[-1], 1)):
         comma, neighbour = edge + step, edge + 2 * step
         if 0 <= comma < len(tokens) and 0 <= neighbour < len(tokens):
+            lo, hi = sorted((tokens[edge].idx, tokens[neighbour].idx))
+            if "\n" in text[lo:hi]:
+                continue
             if tokens[comma].text == "," and counts(tokens[neighbour], proper=False):
                 count += 1
     return count
 
 
-def _redactable(results, line: str, tokens: Sequence[_Token], trace: Trace) -> bool:
-    """True if any result warrants redacting the line.
+def _keep(results, line: str, tokens: Sequence[_Token], trace: Trace) -> list:
+    """The results worth acting on, dropping the two kinds of known false hit.
 
     A PERSON must contain at least two *proper-noun* tokens ("First Last").
     Capitalization alone is not evidence in German — every noun is capitalized,
@@ -221,9 +269,10 @@ def _redactable(results, line: str, tokens: Sequence[_Token], trace: Trace) -> b
     its hits on German medical terms. See :func:`_name_token_count` for the two
     places the bar moves — a name across a comma, and a name OCR decapitalized.
 
-    None of this reaches an item row: ``compute_boxes`` is the only caller of
-    ``is_pii`` and does not call it for a line in the item table at all.
+    None of this reaches an item row: ``compute_boxes`` ignores classifier spans
+    for a line inside the item table entirely.
     """
+    kept = []
     for r in results:
         if r.entity_type == "PHONE_NUMBER":
             span = line[r.start : r.end].strip()
@@ -231,12 +280,12 @@ def _redactable(results, line: str, tokens: Sequence[_Token], trace: Trace) -> b
                 trace.add("      Ignoring PHONE_NUMBER %r: a date or an identifier", span)
                 continue
         if r.entity_type == "PERSON":
-            names = _name_token_count(tokens, r.start, r.end)
+            names = _name_token_count(line, tokens, r.start, r.end)
             if names < 2:
                 trace.add("      Ignoring PERSON with only %d name token(s)", names)
                 continue
-        return True
-    return False
+        kept.append(r)
+    return kept
 
 
 class PresidioClassifier:
@@ -244,7 +293,7 @@ class PresidioClassifier:
         self._analyzer = build_analyzer()
         self._score_threshold = score_threshold
 
-    def is_pii(self, text: str, trace: Trace) -> bool:
+    def spans(self, text: str, trace: Trace) -> list[Span]:
         # The decision process (per-match explanations) is extra work presidio
         # only has to do when someone will actually read it — which is exactly
         # what `trace.wanted` answers, for the log and for a `?debug=true`
@@ -277,4 +326,25 @@ class PresidioClassifier:
                     )
                     + "]"
                 )
-        return _redactable(results, text, artifacts.tokens, trace)
+        spans: list[Span] = []
+        for r in _keep(results, text, artifacts.tokens, trace):
+            label = PRESIDIO_LABELS[r.entity_type]
+            # A PERSON is the one entity allowed to wrap, so it is also the one
+            # that has to be cut back when the model wrapped it too far.
+            pieces = (
+                _name_fragments(text, artifacts.tokens, r.start, r.end)
+                if label is PiiLabel.PERSON and "\n" in text[r.start : r.end]
+                else [(r.start, r.end)]
+            )
+            for lo, hi in pieces:
+                spans.append(
+                    Span(
+                        label=label,
+                        start=lo,
+                        end=hi,
+                        text=text[lo:hi],
+                        source="presidio",
+                        score=r.score,
+                    )
+                )
+        return spans

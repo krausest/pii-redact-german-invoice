@@ -2,8 +2,10 @@
 
 Run during `docker build`. Building each engine's pipeline *constructs* its models
 (OCR, classifier, and the PP-DocLayout detector behind the whole-region pass),
-which is what triggers the download into the image cache (Paddle native +
-onnxruntime OCR). The unwarp models are NOT covered by that: the engines only
+which is what triggers the download into the image cache. Looping over both
+presets is what makes that complete: the engine selects the *inference runtime*
+for every paddle model, so each pass fetches its own flavour of the OCR
+detection/recognition models and of the layout detector (native and ONNX). The unwarp models are NOT covered by that: the engines only
 receive an unwarper *factory* (see backend/factory.py), and the DocUnwarper is
 built on the first ``unwarp()`` call — which never happens here — so it is
 constructed explicitly below. Afterwards `/app/.paddle_cache` is populated, so

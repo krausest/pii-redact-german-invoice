@@ -290,18 +290,28 @@ the detection trace as plain text, the same stream `PII_LOG_LEVEL=DEBUG` writes 
 the log.
 
 ```
-line @(244,889 525x47 conf=99.40): 'Musterstr. 13'
-    rule DE_STREET matched 'Musterstr. 13'
-    -> REDACT (static-rule)
-line @(112,261 99x17 conf=99.99): 'Max Mustermann'
-    match PERSON 0.85 'Max Mustermann' [SpacyRecognizer]
-    -> REDACT (classifier)
+--- region 2  text  0.93  [134, 175, 368, 286] ---
+  wholetext: 'Herrn | Max Mustermann | Musterstr. 13 | 12345 Musterhausen'
+  line @(134,175 234x28 conf=99.40): 'Herrn'
+      SALUTATION 'Herrn' [rule SALUT 1.00]
+      -> REDACT
+  line @(134,210 234x28 conf=99.99): 'Max Mustermann'
+      PERSON 'Max Mustermann' [presidio 0.85]
+      -> REDACT
+  -> region REDACT (text 4/4 lines)
 ```
 
-Every OCR line with its pixel box, then what fired on it — the deterministic rule
-by name with the text it matched, or the classifier's matches — and the verdict
-— which arm fired (`static-rule`, `labeled-value`, `name-memory`, `classifier`) or
-why none did. It is how a wrong box is diagnosed without sending the document
+Region first, then what is inside it — because a line's fate depends on the block
+it was read in. Each region carries its type, the detector's score and its pixel
+box, then the text it contributed to the document (`wholetext`, the reading order
+the classifier actually saw), then every line with the spans that touched it and
+its verdict, then the region's own. A span prints as `LABEL 'text' [source score]`,
+and the source names the detector to go and fix when the box is wrong: a rule by
+name (`rule DE_STREET`), `labeled-value` for the spatial label↔value matcher,
+`presidio` for the classifier, `name-memory` for pass two. Regions holding no OCR
+line at all — a logo, a stamp — are narrated too, since they are exactly the black
+rectangles a text-only trace could never account for; lines no region claimed
+follow under `--- unclaimed lines ---`. It is how a wrong box is diagnosed without sending the document
 anywhere; pages are marked off with `=== page N ===`. `debug=true` on its own is a
 `400`: the file response carries no metadata, so there would be nowhere to put it.
 
@@ -389,33 +399,40 @@ that are not tied to any single OCR line.
 The detector returns typed regions — `text`, `table`, `header`, `footer`, `image`,
 `seal`, `doc_title` and more — and two rules turn them into boxes:
 
-- a region typed **`image`, `seal`, `header` or `footer` is blackened on sight**,
-  whatever it holds. `image` and `seal` cover the letterhead logo, a practice
-  stamp and a payment QR code — graphics that OCR never reports, so the detected
-  type is the only evidence they exist.
-- **every other region is blackened once more than half of its OCR lines** were
+- a region typed **`image`, `seal`, `header`, `footer` or `aside_text` is
+  blackened on sight**, whatever it holds. `image` and `seal` cover the letterhead
+  logo, a practice stamp and a payment QR code — graphics that OCR never reports,
+  so the detected type is the only evidence they exist.
+- **every other region is blackened once at least 40 % of its OCR lines** were
   flagged by the per-line pass. This is what covers the lines *between* the hits: a
   recipient address block is a `text` region whose street and ZIP+city lines
-  already match a static rule, so the majority carries the c/o line, the company
-  recipient and the name line OCR garbled.
+  already match a static rule, so those hits carry the c/o line, the company
+  recipient and the name line OCR garbled. The bar sits **below a half**
+  deliberately: a two-line sender block where only the line naming the company
+  matched is the common shape, and at a strict majority it survived.
 
 A line belongs to the region containing its **center point**; where regions nest,
 the smallest one wins, since the tighter box is the more specific claim. Blank
 lines are not counted — nothing can ever redact one, so counting them would only
 drag a block below the threshold.
 
-One consequence worth knowing: the majority rule has **no exception for `table`**.
+One consequence worth knowing: the ratio rule has **no exception for `table`**.
 On a page where most item rows carry a patient name, the fee table goes black with
 them.
 
 The threshold sits **below the model's own 0.5 default** because photographed pages
 depress every confidence score: on the sample corpus a scanned page's fee table
-detects at 0.62–0.99, the phone photos at 0.38–0.43. Detection costs ~0.6 s per
-page, roughly 4 % of a page's total, and is near-constant in page size.
+detects at 0.62–0.99, the phone photos at 0.38–0.43. Detection costs ~0.22 s per
+page on ONNX Runtime (~0.58 s native) and is near-constant in page size — the
+model resizes the page to its own fixed input, so a 3024×4032 photo costs what a
+960×1280 one does.
 
 `--debug-layout` (a CLI flag, not a query parameter) writes `<stem>_layout.jpg`
 with every detected region outlined and labeled, the always-blackened ones tinted
-red, so you can see what the model saw before trusting what it blackened.
+red, so you can see what the model saw before trusting what it blackened. It is
+drawn *during* the redaction, from that pass's own raster, OCR lines and regions,
+so it costs a JPEG write and nothing else — the flag does not read the page a
+second time.
 
 `redact_regions = false` (or `PII_REDACT_REGIONS=false` in the environment) drops
 the pass entirely. This is a **config-only** setting — unlike `unwarp` it is not a
@@ -425,17 +442,24 @@ in the web UI like any other.
 
 ### Engine presets
 
-A single pipeline (unwarp → OCR → per-line classify → draw a box) is configured
+A single pipeline (unwarp → OCR → read the page in layout order → classify → draw
+a box) is configured
 along two independent axes, selected by an **engine preset** in `config.toml`:
 
-| Preset (`engine.name`) | OCR backend | PII classifier |
+| Preset (`engine.name`) | Inference engine | PII classifier |
 |---|---|---|
-| `native` *(default)* | PaddleOCR (native) | Presidio (spaCy NER + custom regex recognizers) |
-| `onnx` | PaddleOCR (ONNX Runtime, multi-core) | Presidio — *the same classifier as `native`* |
+| `native` *(default)* | Paddle native | Presidio (spaCy NER + custom regex recognizers) |
+| `onnx` | ONNX Runtime, multi-core | Presidio — *the same classifier as `native`* |
 
-The two presets differ **only** in the OCR inference backend: same detection and
-recognition models, same Presidio classifier, same results. `native` is the
-baseline; `onnx` is the fastest (~3.3× faster OCR at identical accuracy).
+The two presets differ **only** in the inference engine: same detection,
+recognition and layout models, same Presidio classifier, same results. The engine
+is one machine-level choice, so it drives **every** Paddle model the page passes
+through — text detection, text recognition and the layout detector alike; a page
+whose text models run on ONNX Runtime while its layout model does not would be a
+configuration disagreeing with itself. `native` is the baseline; `onnx` is the
+fastest (~3.3× faster OCR and ~2.6× faster layout detection, at identical output —
+measured over 12 sample pages, all 194 detected regions identical in type and
+pixel box).
 Either axis can be overridden explicitly (`engine.ocr_backend` /
 `engine.classifier`) instead of naming a preset. Presidio is currently the only
 classifier — a zero-shot NER engine (GLiNER) was tried and dropped, since it was
@@ -466,12 +490,21 @@ classify), and `apply_boxes()` (fill):
    never get back, with no way to map them onto the curled original. By flattening
    first ourselves we hold that image, OCR + redact it, and the boxes align by
    construction.
-2. **OCR per line.** PaddleOCR returns one box + text per line. Each line is classified
-   **on its own**, never as one page-wide blob: PaddleOCR's reading order interleaves the
-   two columns of these invoices, which pollutes the text around an entity and makes NER
-   miss names it recognizes fine in isolation. Per-line text is
-   coherent, so both NER and the regex/context rules work.
-3. **Classify** the line (this is where the engines differ, see below). The
+2. **OCR per line, then read the page as one text.** PaddleOCR returns one box +
+   text per line, in a plain top-to-bottom order that interleaves the two columns of
+   these invoices. The layout regions fix that: lines are grouped by the region that
+   holds them, ordered in bands within it (so a table row reads *across* even when its
+   cells sit a few pixels apart), and nested blocks enter whole at their own position.
+   The joined text is what gets classified — which is what lets a name broken across a
+   wrap ("Max" / "Mustermann" on two lines) be seen as one entity at all. Classifying
+   per line, as this used to, could not.
+3. **Classify** the page (this is where the engines differ, see below). Every
+   detector — the regex rules and the model alike — returns labeled character
+   spans, and a line is redacted when a span touches it. A pattern match that only
+   exists because two lines were joined is discarded: `\s` in a regex matches the
+   joining newline, so a recognizer would otherwise glue a number at one line's end
+   to the first word of the next. A person's name is the one entity allowed to
+   wrap. The
    shared deterministic rules — salutation, titled name (`Dr. Weber`), German
    street / PLZ+city, sender identity (legal form, URL/e-mail/phone, registry and
    banking identifiers), and the spatial date-of-birth matcher
@@ -526,10 +559,10 @@ on top of the built-in IBAN/e-mail/credit-card ones:
 
 - **Name in the next column.** A patient block often prints `Patient:` (or `Versicherte`,
   `Name`, `Person`, `Mitglied`, …) alone in one cell with the name beside it — two
-  separate OCR lines, so no same-line rule can pair them, and a bare `Wolf,Uwe` gives the
+  separate OCR lines, so no same-line rule can pair them, and a bare `Muster,Uwe` gives the
   NER model nothing to hold on to. The same spatial matcher used for birth dates carries
   a **name** row: a label standing alone in its cell makes a two-token name (`Max
-  Mustermann`, `MUSTER, ANDREA`, `Wolf,Uwe`) on its row a value. The label must be the
+  Mustermann`, `MUSTER, ANDREA`, `Muster,Uwe`) on its row a value. The label must be the
   *whole* cell — an unanchored `Patient` would turn a Leistungstext sentence into a label
   and blacken whatever capitalized pair happened to share its row.
 - **Date of birth (three layouts).** The label and the date are usually separate OCR
@@ -572,8 +605,20 @@ on top of the built-in IBAN/e-mail/credit-card ones:
   line, name and date together, and feeds the surname to the name memory. Both halves
   are required: a Leistungstext can hold two comma-joined capitalized nouns
   (`Mikroskopie,Kultur`), and a bare date in an item row is a treatment date.
-- **Name memory across casings.** Surnames harvested from deterministic person evidence
-  are redacted on bare recurrence elsewhere in the document. The match is whole-word
+- **Name memory, in two passes.** The page is read twice: pass one lets every detector
+  say what it found, pass two redacts every bare recurrence of the names those findings
+  named — a subject line, a Diagnose, a footer signature, where a lone surname is a token
+  no model calls a person and no pattern describes. The witness may be either kind of
+  detector, and the two harvest differently. A *pattern* names a person on its line, so
+  the whole line is harvested: the label rules stop after a single name part
+  (`Patient Mustermann` never reaches the `Max` behind it) and OCR glues the pair around
+  its label in either order. A *span* says where the person is, so only the span is
+  harvested — reading the whole line around a model's find made a letterhead's company
+  name a remembered "name" that then blackened body text and an invoice number. Only
+  `PERSON` counts as evidence; an address, a company or an identifier names no one to
+  look for. And only spans that were allowed to redact their own line feed the memory,
+  so a model hit dropped inside the item table cannot come back as a name and spread
+  over the whole document. The match is whole-word
   (that, not letter case, is what keeps `Allgemeine` from matching a Dr. Allgemein) and
   **case-insensitive with one condition: the occurrence must start with a capital**. One
   document prints the same person as `Andrea Muster` in the address block and

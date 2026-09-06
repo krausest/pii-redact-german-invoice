@@ -7,6 +7,7 @@ import io
 import pytest
 from PIL import Image
 
+from backend.pii import PiiLabel, Span
 from backend.models import Box, Line
 from backend.pdf import assemble_pdf
 
@@ -35,14 +36,23 @@ class StubOCR:
 
 
 class StubClassifier:
-    """Flags a line as PII when its text contains any of the given substrings."""
+    """Reports every occurrence of the given substrings as a PERSON span.
+
+    Duck-types ``backend.classifiers.base.Classifier`` over the *document* text,
+    so a fixture can hand it a substring that straddles a line break ("Max\\n
+    Mustermann") and exercise the one thing per-line classification could not do."""
 
     def __init__(self, pii_substrings: list[str] | None = None):
         self._subs = pii_substrings or []
 
-    def is_pii(self, text: str, trace) -> bool:
-        trace.add("    stub match" if (hit := any(s in text for s in self._subs)) else "    no match")
-        return hit
+    def spans(self, text: str, trace) -> list[Span]:
+        out: list[Span] = []
+        for sub in self._subs:
+            start = text.find(sub)
+            while start >= 0:
+                out.append(Span(PiiLabel.PERSON, start, start + len(sub), sub, "stub", 0.9))
+                start = text.find(sub, start + 1)
+        return out
 
 
 class RecordingUnwarper:
@@ -69,7 +79,7 @@ class FakePipeline:
         self.calls.append("unwarp")
         return Image.new("RGB", image.size, (10, 20, 30))
 
-    def compute_boxes(self, image, lines=None, known_names=None, trace=None):  # noqa: ARG002
+    def compute_boxes(self, image, lines=None, known_names=None, trace=None, regions=None):  # noqa: ARG002
         self.calls.append("compute_boxes")
         if trace is not None:
             trace.add("fake pipeline: %d box(es)", len(self.boxes))

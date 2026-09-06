@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from statistics import median
 
 from backend.models import Line
+from backend.pii import RULE_LABELS, PiiLabel, Span
 
 # Anrede: any line containing a salutation word is redacted — lone ("Herrn" above
 # the address) or with a name ("Herr Mustermann", where NER only tags the single
@@ -392,84 +393,6 @@ PERSON_DETAIL = re.compile(
 _COLUMN_GAP_FACTOR = 3.0
 
 
-# --- name memory ------------------------------------------------------------ #
-# A person's surname recurs on lines nothing else catches — a subject line, a
-# Diagnose, a greeting split across OCR lines — and NER drops the single-token
-# mention (the caps guard exists for good reason). So names are harvested from
-# lines that *label* a person deterministically, and their bare recurrences are
-# redacted. Evidence stays deterministic on purpose: no classifier feedback loop.
-
-# A name-shaped token: starts with a capital, at least four letters, and may be
-# all caps — a lab prints its patient row "MUSTER, MAX", and a name only
-# harvestable in one of its two casings is half a memory. The length floor drops
-# both OCR shrapnel and most non-name capitalized words; a three-letter forename
-# ("Max") is not worth the false-positive surface, the surname is what recurs.
-_NAME_TOKEN = re.compile(r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß]{3,}\b")
-
-# Words that pass the shape test on evidence lines but are never names: the
-# labels and salutations themselves, their sentence dressing, months, and the
-# profession vocabulary that shares a letterhead line with a titled name.
-_NAME_STOPWORDS = frozenset({
-    "Sehr", "Geehrte", "Geehrter", "Geehrtes", "Herr", "Herrn", "Frau",
-    "Fräulein", "Familie", "Eheleute", "Patient", "Patientin", "Patienten",
-    "Versicherte", "Versicherter", "Versicherten", "Mitglied",
-    "Rechnungsempfänger", "Rechnungsempfängerin", "Zahlungspflichtige",
-    "Zahlungspflichtiger", "Geburtsdatum", "Geburtstag", "Geboren",
-    "Januar", "Februar", "März", "April", "Juni", "Juli", "August",
-    "September", "Oktober", "November", "Dezember",
-    "Arzt", "Ärztin", "Zahnarzt", "Zahnärztin", "Facharzt", "Fachärztin",
-    "Praxis", "Medizin", "Innere", "Allgemeinmedizin",
-})
-
-# Compared case-folded, because the tokens are not: an all-caps evidence line
-# ("PATIENT MUSTER, MAX") would otherwise harvest "PATIENT" as a name and go on
-# to redact every line mentioning a patient.
-_NAME_STOPWORDS_CF = frozenset(w.casefold() for w in _NAME_STOPWORDS)
-
-# What makes a line name *evidence*: a person label, a title, a salutation, or a
-# birthdate next to the name — marked by the abbreviation
-# ("Mustermann, Max'geb. 13.08.1964") or the star ("Muster, Andrea *13.08.1964"),
-# or bare after a "Surname,Forename" pair ("Muster,Andrea 05.03.11"). In every
-# case the name is why the date is there.
-_NAME_EVIDENCE = (PATIENT_NAME, TITLE_NAME, SALUT, BIRTH_MARK, NAME_DATE)
-
-
-def harvest_names(text: str) -> set[str]:
-    """The name tokens on a line that deterministically labels a person; empty
-    for any other line. The whole line is harvested, not just the match — OCR
-    routinely glues "Mustermann, Max" around the label in either order — and the
-    stopword list is what keeps the label vocabulary itself out."""
-    evidence = any(p.search(text) for p in _NAME_EVIDENCE) or (
-        # the spelled-out merged birthdate line: "Max Mustermann, geboren am ..."
-        BIRTH_LABEL.search(text) and DATE_RE.search(text)
-    )
-    if not evidence:
-        return set()
-    return {
-        tok for tok in _NAME_TOKEN.findall(text) if tok.casefold() not in _NAME_STOPWORDS_CF
-    }
-
-
-def mentions_name(text: str, names: set[str]) -> bool:
-    """Whether the line contains any harvested name as a whole word, in any
-    casing that still *looks* like a name.
-
-    Whole-word is what keeps "Allgemeine" from matching a Dr. Allgemein — the
-    word boundary does that work, not the letter case. Case is compared loosely
-    because one document prints the same person both ways ("Andrea Muster" in the
-    address block, "MUSTER, ANDREA" in the patient row), and a memory that holds
-    only the casing it first met is half a memory. What is still required is that
-    the occurrence *starts with a capital*: that is the line between a surname and
-    the ordinary German word it may collide with ("Klein" the person vs "klein
-    gedruckt"), and it is the reason this is not simply IGNORECASE.
-    """
-    for name in names:
-        for m in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
-            if m.group()[:1].isupper():
-                return True
-    return False
-
-
 # --- the item table --------------------------------------------------------- #
 # An invoice's body is a table of fee numbers, service texts, amounts and
 # factors, and PII does not live in it: the person and address material sits
@@ -634,3 +557,65 @@ def labeled_value_indices(lines: list[Line], table: set[int] | None = None) -> s
                 if rule.header.search(ln.text):
                     idx |= _column_below(lines, ln, rule.value, gap, table)
     return idx
+
+
+# -- the rules as spans ---------------------------------------------------- #
+def _labeled_value_label(text: str) -> PiiLabel:
+    """Which kind of labeled value a matched line holds.
+
+    :func:`labeled_value_indices` returns bare indices — it pairs a label cell
+    with a value cell geometrically and has no reason to care which of the three
+    :data:`LABELED_IDS` rules did it. The label is recovered here, after the
+    fact, by asking what the value *looks* like, in the order the rules are
+    tried: a date is a birthdate (nothing else is labeled that way once the pass
+    has already accepted it), a name-shaped cell is a person, and what is left is
+    an identifier."""
+    if BIRTH_MARK.search(text) or DATE_RE.search(text):
+        return PiiLabel.DATE_OF_BIRTH
+    if NAME_VALUE.search(text):
+        return PiiLabel.PERSON
+    return PiiLabel.ID
+
+
+def rule_spans(
+    lines: list[Line],
+    bounds: list[tuple[int, int]],
+    table: set[int] | None = None,
+) -> list[Span]:
+    """Every deterministic finding on ``lines``, as spans in *document*
+    coordinates (see :func:`backend.document.build_document` for ``bounds``).
+
+    The regexes still run **per line**, exactly as before, and only their offsets
+    are shifted. That is deliberate and is the safety belt of the whole-document
+    switch: several patterns are anchored to a whole cell (``PERSON_LABEL_CELL``,
+    ``BIRTH_LABEL_CELL``, ``NAME_VALUE`` all use ``^...$``), and running them
+    over the joined page text would silently turn them into something else.
+    ``labeled_value_indices`` and ``item_table_indices`` stay purely geometric on
+    ``Line`` boxes for the same reason; their line indices become whole-line
+    spans here.
+
+    Unlike :func:`static_rule_match`, which reports only the first rule that
+    fires, this reports **all** of them — so the trace can say a line carries
+    both an address and a company name instead of naming whichever came first in
+    the table.
+    """
+    spans: list[Span] = []
+
+    def whole_line(i: int, label: PiiLabel, source: str) -> None:
+        lo, hi = bounds[i]
+        spans.append(Span(label, lo, hi, lines[i].text, source))
+
+    for i, line in enumerate(lines):
+        if not line.text.strip():
+            continue
+        lo = bounds[i][0]
+        for name, pattern in STATIC_RULES:
+            for m in pattern.finditer(line.text):
+                spans.append(
+                    Span(RULE_LABELS[name], lo + m.start(), lo + m.end(), m.group(), f"rule {name}")
+                )
+
+    for i in labeled_value_indices(lines, table):
+        whole_line(i, _labeled_value_label(lines[i].text), "labeled-value")
+
+    return spans

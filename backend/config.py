@@ -7,9 +7,13 @@ principle as a typo'd query parameter: silently ignoring it looks like it worked
 
 The ``[engine]`` section is expressed as a friendly preset name (``native`` |
 ``onnx``) that resolves to a concrete (OCR backend, classifier) pair; either axis
-can be overridden explicitly. The two presets differ only in the OCR inference
-engine — Presidio is the only classifier, so the pair is really "which OCR" plus
-a slot kept open for a second classifier and published by ``/health``.
+can be overridden explicitly. The two presets differ only in the *inference
+engine* — Presidio is the only classifier, so the pair is really "which engine"
+plus a slot kept open for a second classifier and published by ``/health``. The
+engine names an OCR backend but is not only the OCR's: it is the one answer to
+"what runs paddle models on this machine", so ``build_pipeline`` hands the same
+resolved value to the layout detector (:mod:`backend.layout`). The layout model
+is deliberately *not* a third axis here — it has no reason to disagree.
 
 The models are frozen, so they are safe to share across threads and workers.
 """

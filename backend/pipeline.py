@@ -18,17 +18,21 @@ from collections.abc import Callable
 from PIL import Image, ImageDraw
 
 from backend.classifiers.base import Classifier
+from backend.document import build_document, drop_wrapped, spans_to_lines
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
-from backend.layout import PaddleLayoutDetector, assign_lines, draw_layout_debug, region_boxes
-from backend.rules import (
-    harvest_names,
-    item_table_indices,
-    labeled_value_indices,
-    mentions_name,
-    static_rule_match,
+from backend.layout import (
+    LayoutRegion,
+    PaddleLayoutDetector,
+    assign_lines,
+    document_order,
+    draw_layout_debug,
+    region_boxes,
 )
-from backend.trace import Trace
+from backend.harvest import harvest, name_spans
+from backend.pii import Span
+from backend.rules import item_table_indices, rule_spans
+from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
 
 
@@ -74,12 +78,21 @@ class RedactionPipeline:
         skip a second OCR pass."""
         return self._ocr.lines(image)
 
+    def regions(self, image: Image.Image) -> list[LayoutRegion]:
+        """The layout regions of ``image`` — empty when no detector is
+        configured. The sibling of :meth:`read_lines`, and there for the same
+        reason: it is the other model pass over a page, and a caller that needs
+        the regions for itself (``--debug-layout``) should not make the detector
+        run twice. Pass them back via ``regions=``."""
+        return self._layout.regions(image) if self._layout is not None else []
+
     def compute_boxes(
         self,
         image: Image.Image,
         lines: list[Line] | None = None,
         known_names: set[str] | None = None,
         trace: Trace | None = None,
+        regions: list[LayoutRegion] | None = None,
     ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
         flagged OCR line, plus — when configured — the whole-region boxes the
@@ -87,7 +100,10 @@ class RedactionPipeline:
         ones not tied to a line.
 
         ``lines`` skips the OCR call when the caller already holds
-        :meth:`read_lines` output for this exact ``image``.
+        :meth:`read_lines` output for this exact ``image``, and ``regions`` does
+        the same for :meth:`regions`. Both are the *same* image's — a page read
+        at one size and boxed at another is the one way to get a silently
+        misplaced rectangle.
 
         ``known_names`` is the name-memory accumulator: names harvested from this
         page are added *to the passed set*, so a caller looping over a document's
@@ -103,61 +119,59 @@ class RedactionPipeline:
         if lines is None:
             lines = self._ocr.lines(image)
         trace = trace or Trace()
+        if regions is None:
+            regions = self.regions(image)
+
+        # Reading order first: everything below reads the page as one text, and
+        # that text is only worth classifying if the layout put each block's
+        # lines next to their own neighbours rather than the next column's.
+        spoken = [i for i, ln in enumerate(lines) if ln.text.strip()]
+        order = [i for i in document_order(lines, regions) if lines[i].text.strip()]
+        ordered = [lines[i] for i in order]
+        text, bounds = build_document(ordered)
+
         # The item table: the deterministic rules and the name memory run there
         # as everywhere else, the classifier does not (see item_table_indices).
-        # Computed first because the labeled-value pass needs it too — its column
-        # walks stop at the table rather than chaining down into the invoice body.
+        # Computed on the *unordered* lines because it is a purely geometric
+        # pass over pixel boxes — reading order neither helps nor hinders it.
         table_idx = item_table_indices(lines)
-        if table_idx:
-            trace.add("item table: classifier off for %d line(s)", len(table_idx))
-        labeled_idx = labeled_value_indices(lines, table_idx)
+
+        # --- pass one: what each line carries on its own ------------------- #
+        # Two span sources, kept apart on purpose: inside the item table the
+        # classifier's findings are dropped and the rules' are not. A fee table
+        # is a grid of two-word service texts, which in German look exactly like
+        # a forename/surname pair to a model — while a rule that fires there
+        # (a labeled patient name) is still evidence.
+        rules_by_line = spans_to_lines(
+            rule_spans(ordered, bounds, self._table_in_order(order, table_idx)), bounds
+        )
+        model_by_line = spans_to_lines(drop_wrapped(self._classifier.spans(text, trace)), bounds)
+        hits: list[list[Span]] = [
+            list(rules_by_line[pos]) + ([] if i in table_idx else model_by_line[pos])
+            for pos, i in enumerate(order)
+        ]
+
+        # --- pass two: the names pass one named, everywhere else ----------- #
+        # Harvested from the *surviving* hits, so a model's find inside the item
+        # table cannot spread across the document the way it was just stopped
+        # from spreading down its own line. `names` is the caller's accumulator
+        # when there is one, mutated in place: a name labeled on page 1 is caught
+        # bare on page 2.
         names = known_names if known_names is not None else set()
-        for line in lines:
-            names |= harvest_names(line.text)
+        names |= harvest(ordered, hits)
+        memory_by_line = spans_to_lines(name_spans(ordered, bounds, names), bounds)
+        for pos in range(len(order)):
+            hits[pos] += memory_by_line[pos]
+
         pad = self._padding
         boxes: list[Box] = []
-        # Which lines the per-line pass flagged: `backend.layout` blackens a
-        # region whole once more than half of its lines are in here.
         redacted: set[int] = set()
-        for i, line in enumerate(lines):
-            if not line.text.strip():
-                continue
-            # Every OCR line with its pixel box, then any classifier matches
-            # (indented, added by the classifier), then the verdict.
-            trace.add(
-                "line @(%d,%d %dx%d conf=%s): %r",
-                line.left,
-                line.top,
-                line.width,
-                line.height,
-                line.conf,
-                line.text,
-            )
-            # Named and quoted under the line, the way the classifier reports its
-            # matches: the verdict says an arm fired, this says which pattern and
-            # on what — the two halves of diagnosing a box nobody expected. Only
-            # computed when a static rule can still decide, so the trace never
-            # names a rule that lost to `labeled-value`.
-            static = None if i in labeled_idx else static_rule_match(line.text)
-            if static is not None:
-                trace.add("    rule %s matched %r", *static)
-            reason = (
-                "labeled-value"
-                if i in labeled_idx
-                else "static-rule"
-                if static is not None
-                else "name-memory"
-                if mentions_name(line.text, names)
-                else "classifier"
-                if i not in table_idx and self._classifier.is_pii(line.text, trace)
-                else None
-            )
-            if reason is None and i in table_idx:
-                # Why no classifier verdict was reported for this line.
-                trace.add("    -> keep (item table)")
-            if reason is not None:
-                trace.add("    -> REDACT (%s)", reason)
+        found: dict[int, list[Span]] = {}
+        for pos, i in enumerate(order):
+            if hits[pos]:
+                found[i] = hits[pos]
                 redacted.add(i)
+                line = lines[i]
                 boxes.append(
                     Box(
                         line.left - pad,
@@ -166,20 +180,20 @@ class RedactionPipeline:
                         line.top + line.height + pad,
                     )
                 )
-        if self._layout is not None:
-            # Appended, never merged: these cover whole regions of the page,
-            # including the pixels OCR returned nothing for (a letterhead logo),
-            # and `apply_boxes` is happy to draw overlapping rectangles. The
-            # detector reads the same image the boxes are reported in, so region
-            # and line coordinates share one pixel space by construction.
-            # `why` names the rule that drew the box (a type, or the hit ratio).
-            # Deliberately not machine-readable: nothing parses this line since
-            # the replay dropped its region format, and a human debugging an
-            # unexpected box wants the ratio, not a bare token.
-            for box, why in region_boxes(lines, self._layout.regions(image), redacted, pad):
-                trace.add("region (%s) -> REDACT %s", why, box.as_list())
-                boxes.append(box)
+
+        # No gate on the detector: without one there are no regions, and
+        # `region_boxes` over none is empty.
+        region_hits = region_boxes(lines, regions, redacted, pad)
+        trace_page(trace, lines, regions, order, spoken, found, table_idx, region_hits)
+        boxes.extend(box for _, box, _ in region_hits)
         return boxes
+
+    @staticmethod
+    def _table_in_order(order: list[int], table_idx: set[int]) -> set[int]:
+        """``table_idx`` re-expressed as positions in ``order``, which is what
+        the rules see: they are handed the reordered lines, so an index into the
+        original list would point at the wrong row."""
+        return {pos for pos, i in enumerate(order) if i in table_idx}
 
     def apply_boxes(
         self,
@@ -200,7 +214,10 @@ class RedactionPipeline:
 
     # -- debug-only extra --------------------------------------------------- #
     def layout_debug_image(
-        self, image: Image.Image, lines: list[Line] | None = None
+        self,
+        image: Image.Image,
+        lines: list[Line] | None = None,
+        regions: list[LayoutRegion] | None = None,
     ) -> Image.Image | None:
         """``None`` when no layout detector is configured; otherwise ``image``
         copied with the detected regions outlined and labeled and each line
@@ -212,6 +229,7 @@ class RedactionPipeline:
             return None
         if lines is None:
             lines = self._ocr.lines(image)
+        if regions is None:
+            regions = self.regions(image)
         text_lines = [ln for ln in lines if ln.text.strip()]
-        regions = self._layout.regions(image)
         return draw_layout_debug(image, text_lines, assign_lines(text_lines, regions), regions)

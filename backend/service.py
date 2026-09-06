@@ -53,12 +53,21 @@ EXTENSION_BY_MEDIA_TYPE = {
 
 @dataclass
 class PageResult:
-    """One page: the image the boxes were found on, and the same image redacted."""
+    """One page: the image the boxes were found on, and the same image redacted.
+
+    ``layout_debug`` is the annotated copy ``--debug-layout`` asks for, and is
+    ``None`` for every other caller. It rides here rather than being drawn by a
+    second pass over the file because drawing it needs exactly what this page's
+    redaction already produced — the unwarped raster, its OCR lines, its layout
+    regions. Rendering it from those costs nothing; re-deriving them cost a
+    second unwarp, a second OCR and a second layout detection.
+    """
 
     index: int
     image: Image.Image
     boxes: list[Box]
     redacted: Image.Image
+    layout_debug: Image.Image | None = None
 
     @property
     def width(self) -> int:
@@ -93,11 +102,18 @@ def run_redaction(
     source: bytes | Image.Image,
     opts: RedactOptions,
     config: Config,
+    layout_debug: bool = False,
 ) -> Redaction:
     """Redact ``source`` — a PDF's bytes, or a single decoded image.
 
     Raises ``ValueError`` for unusable input (the rasterization guards); the caller
     maps that to a 400.
+
+    ``layout_debug`` fills :attr:`PageResult.layout_debug`. It is a plain
+    argument rather than a ``RedactOptions`` field because ``--debug-layout`` is
+    a CLI flag with no wire name, and it lands here rather than in ``cli.py``
+    for the same reason ``debug`` does: this is the one place that decodes the
+    pages, so anything produced *while* they are should be produced here.
     """
     is_pdf = isinstance(source, bytes)
     pages = (
@@ -127,11 +143,28 @@ def run_redaction(
             # convert() copies even when the mode already matches, and a page is
             # ~12 MB at 200 dpi — only pay for it when there is a conversion to do.
             image = page if page.mode == "RGB" else page.convert("RGB")
-        boxes = pipeline.compute_boxes(image, known_names=known_names, trace=trace)
+        # The page's two model passes. Only the debug render needs to name them
+        # — `compute_boxes` runs both itself otherwise, and the ordinary path is
+        # left exactly as it was.
+        lines = pipeline.read_lines(image) if layout_debug else None
+        regions = pipeline.regions(image) if layout_debug else None
+        boxes = pipeline.compute_boxes(
+            image, lines=lines, regions=regions, known_names=known_names, trace=trace
+        )
         # apply_boxes fills in place, so redact a copy — `image` is the clean page
         # the boxes refer to, and callers may want both.
         redacted = pipeline.apply_boxes(image.copy(), boxes)
-        results.append(PageResult(index=index, image=image, boxes=boxes, redacted=redacted))
+        results.append(
+            PageResult(
+                index=index,
+                image=image,
+                boxes=boxes,
+                redacted=redacted,
+                layout_debug=(
+                    pipeline.layout_debug_image(image, lines, regions) if layout_debug else None
+                ),
+            )
+        )
     return Redaction(pages=results, is_pdf=is_pdf, debug=trace.collected)
 
 

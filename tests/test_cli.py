@@ -13,8 +13,18 @@ import pytest
 
 from backend.cli import build_parser, collect_input_files, main, query_from_args
 from backend.config import Config, RedactionConfig
+from backend.layout import LayoutRegion
+from backend.models import Box, Line
 from backend.options import RedactOptions
-from tests.conftest import FakePipeline, make_image_bytes, make_pdf_bytes
+from backend.pipeline import RedactionPipeline
+from tests.conftest import (
+    FakePipeline,
+    StubClassifier,
+    StubLayoutDetector,
+    StubOCR,
+    make_image_bytes,
+    make_pdf_bytes,
+)
 
 
 @pytest.fixture
@@ -174,3 +184,41 @@ def test_a_bad_file_does_not_abort_the_batch(run_cli, tmp_path, capsys):
 def test_no_input_files_is_an_error(run_cli, tmp_path, capsys):
     assert run_cli([str(tmp_path)]) == 1
     assert "no jpg/jpeg/png/pdf files found" in capsys.readouterr().err
+
+
+class _CountingOCR(StubOCR):
+    """Counts how often the page was actually read."""
+
+    calls = 0
+
+    def lines(self, image):
+        type(self).calls += 1
+        return super().lines(image)
+
+
+class _CountingLayout(StubLayoutDetector):
+    calls = 0
+
+    def regions(self, image):
+        type(self).calls += 1
+        return super().regions(image)
+
+
+def test_debug_layout_draws_from_the_redaction_pass_instead_of_repeating_it(monkeypatch, tmp_path):
+    """``--debug-layout`` is a *view* of the pass that just ran, not a second one.
+
+    It used to re-open the file and unwarp, OCR and detect layout all over again,
+    which on a phone photo is the expensive half of the run twice over. The
+    images are drawn while the pages are, so the page is read once."""
+    _CountingOCR.calls = _CountingLayout.calls = 0
+    pipeline = RedactionPipeline(
+        ocr=_CountingOCR([Line(text="Musterstrasse 7", left=10, top=10, width=80, height=10)]),
+        classifier=StubClassifier(),
+        layout=_CountingLayout([LayoutRegion(label="text", score=0.9, box=Box(0, 0, 60, 40))]),
+    )
+    monkeypatch.setattr("backend.cli.load_config", lambda: Config())
+    monkeypatch.setattr("backend.cli.build_pipeline", lambda _cfg: pipeline)
+
+    assert main([str(write_png(tmp_path)), "--no-unwarp", "--debug-layout"]) == 0
+    assert (tmp_path / "page_layout.jpg").is_file()
+    assert (_CountingOCR.calls, _CountingLayout.calls) == (1, 1)
