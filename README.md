@@ -224,10 +224,12 @@ uv run gunicorn backend.api:app -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0
 ## REST API
 
 Two endpoints, plus `GET /health` → `{"status":"ok","engine":{"name":"onnx",
-"ocr":"onnxruntime","classifier":"presidio"}}`. The engine is fixed by `config.toml`
-(or `PII_ENGINE`) and is **not** selectable per request. All options are query
-parameters; an unknown one is a `400`, so a typo (`?unwrap=false`) cannot silently
-do nothing.
+"ocr":"onnxruntime","classifier":"presidio"},"classifiers":["presidio","guard-omni"]}`.
+The engine is fixed by `config.toml` (or `PII_ENGINE`); its `classifier` half is
+the default a request gets, and `classifiers` lists what `?classifier=` may name
+instead. Everything else about the engine — the OCR backend above all — is **not**
+selectable per request. All options are query parameters; an unknown one is a
+`400`, so a typo (`?unwrap=false`) cannot silently do nothing.
 
 ### `POST /api/redact` — find the PII and black it out
 
@@ -239,6 +241,7 @@ Body: the **raw file** — PNG, JPEG or PDF bytes, not multipart.
 | `json-output` | `true` \| `false` | `false` | return the JSON report, which embeds the file, instead of the bare file |
 | `pdf-dpi` | integer | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
+| `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which model half runs; the first request naming one loads it |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report; **requires `json-output=true`** |
 
 **By default the file comes back, the same kind you sent:**
@@ -262,6 +265,7 @@ need to know *what* was found.
 ```jsonc
 {
   "unwarped": true,                          // whether dewarping actually ran
+  "classifier": "presidio",                  // the model half that drew these boxes
   "pages": [{
     "index": 0, "width": 1654, "height": 2339,
     "boxes": [[120, 88, 410, 118]],
@@ -282,8 +286,9 @@ need to know *what* was found.
   same request without `json-output` would have returned — `application/pdf` for a
   PDF, `image/jpeg` for an image. So one call gets you both the report *and* the
   result; you never re-run the models just to fetch the file.
-- The report does not name the engine — it is fixed per process, so `GET /health`
-  is where to read it.
+- **`classifier` names the model half that actually ran** — the default, or
+  whatever `?classifier=` asked for. The rest of the engine is not in the report:
+  it is fixed per process, so `GET /health` is where to read that.
 
 **`debug=true` — why each box exists.** The report gains one more key, `debug`:
 the detection trace as plain text, the same stream `PII_LOG_LEVEL=DEBUG` writes to
@@ -452,7 +457,7 @@ along two independent axes, selected by an **engine preset** in `config.toml`:
 | `onnx` | ONNX Runtime, multi-core | Presidio — *the same classifier as `native`* |
 
 The two presets differ **only** in the inference engine: same detection,
-recognition and layout models, same Presidio classifier, same results. The engine
+recognition and layout models, same classifier, same results. The engine
 is one machine-level choice, so it drives **every** Paddle model the page passes
 through — text detection, text recognition and the layout detector alike; a page
 whose text models run on ONNX Runtime while its layout model does not would be a
@@ -461,10 +466,44 @@ fastest (~3.3× faster OCR and ~2.6× faster layout detection, at identical outp
 measured over 12 sample pages, all 194 detected regions identical in type and
 pixel box).
 Either axis can be overridden explicitly (`engine.ocr_backend` /
-`engine.classifier`) instead of naming a preset. Presidio is currently the only
-classifier — a zero-shot NER engine (GLiNER) was tried and dropped, since it was
-worse on this corpus and pulled `torch` plus ~4.6 GB of CUDA libraries CPU
-inference never uses.
+`engine.classifier`) instead of naming a preset.
+
+**The classifier is the one axis a request may choose**, with
+`?classifier=presidio|guard-omni` (`--classifier` on the CLI); `engine.classifier`
+is then the default a request gets when it does not ask, and `GET /health` lists
+what is on offer. It is per request because the two are genuinely different
+detectors, not two runtimes for one model — the OCR backend stays fixed per
+process. A worker builds a classifier the first time a request names it and keeps
+it, so the option costs nothing until it is used and the first such request pays
+a cold start.
+
+| Classifier | What it is |
+|---|---|
+| `presidio` *(default)* | spaCy German NER + custom regex recognizers |
+| `guard-omni` | `hivetrace/gliner-guard-omni`, a GLiNER2 zero-shot span model (encoder `mdeberta-v3-base`) |
+
+`guard-omni` is **not** the GLiNER that was tried and dropped here: different
+library, different vendor, different architecture. The dependency-weight
+objection from that removal does still apply — it pulls `torch` — which is why
+`pyproject.toml` pins torch to CPU wheels rather than accepting the ~4.6 GB of
+CUDA libraries the default linux/amd64 wheel bundles and this service never
+touches.
+
+`guard-omni`'s label vocabulary is a **curated subset** of GLiNER2's own, cut by
+measuring each label over the corpus (see `backend/pii.py` for what each one was
+worth). Two consequences are worth knowing: identifiers have **no model source at
+all** — telling an insurance number from an invoice number is a decision the
+rules make from the label printed beside the value, and a zero-shot extractor
+asked for `document_id` blackens both — and salutations have no counterpart in
+that vocabulary either, so the `SALUT` rule is load-bearing whichever classifier
+runs.
+
+Whichever classifier runs, **the deterministic rules run too**, and that is not a
+detail of the current default. Measured over the 48-document replay corpus, with
+the rules switched off: `guard-omni` alone loses 95 lines the shipped pipeline
+blackens, `presidio` alone loses 224. The rules answer questions that are not
+language questions — an invoice number must stay readable and an insurance number
+must not, and both are "a labeled number" to any zero-shot extractor.
 
 **`engine.det_box_thresh`** (default `0.5`, below PaddleOCR's own `0.6`) is the
 minimum detector score for a text box. It is a *mean* over the box, so a shape,

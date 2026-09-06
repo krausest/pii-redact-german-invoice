@@ -101,6 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="quality of every JPEG produced, 1-100 (default: redaction.jpeg_quality)",
     )
     opts.add_argument(
+        "--classifier",
+        metavar="NAME",
+        help="which model half to run: presidio | guard-omni (default: engine.classifier). "
+        "The first run naming one loads it, which takes a while",
+    )
+    opts.add_argument(
         "--debug",
         action="store_true",
         default=None,

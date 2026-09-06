@@ -9,16 +9,26 @@ at the time of writing; re-check on upgrade.
 
 | Package | License |
 |---|---|
+| accelerate (transitive: gliner2[local]) | Apache-2.0 |
 | fastapi | MIT |
+| gliner2[local] | Apache-2.0 |
 | gunicorn | MIT |
+| huggingface-hub (transitive: gliner2[local] → transformers; also paddlex) | Apache-2.0 |
 | onnxruntime | MIT |
 | opencv-contrib-python (transitive: paddleocr → paddlex[ocr-core]) | Apache-2.0 |
 | paddleocr | Apache-2.0 |
 | paddlepaddle | Apache-2.0 |
+| mpmath (transitive: gliner2[local] → torch → sympy) | BSD-3-Clause |
+| peft (transitive: gliner2[local]) | Apache-2.0 |
 | pillow | MIT-CMU |
 | presidio-analyzer | MIT |
 | **pymupdf** | **GNU AGPL-3.0-or-later**, dual-licensed — a commercial license is available from Artifex Software |
 | requests (transitive: paddleocr/paddlex, presidio-analyzer/spacy) | Apache-2.0 |
+| safetensors (transitive: gliner2[local]) | Apache-2.0 |
+| sympy (transitive: gliner2[local] → torch) | BSD-3-Clause |
+| tokenizers (transitive: gliner2[local] → transformers) | Apache-2.0 |
+| torch — **CPU wheels only**, pinned to the pytorch-cpu index in `pyproject.toml` | Apache-2.0 AND BSD-2/3-Clause AND BSL-1.0 AND MIT AND Apache-2.0-WITH-LLVM-exception |
+| transformers (transitive: gliner2[local]) | Apache-2.0 |
 | uvicorn[standard] (incl. httptools, websockets, watchfiles, uvloop, python-dotenv) | BSD-3-Clause |
 
 ## Python — `dev` dependency group (**not** installed in the Docker image)
@@ -59,6 +69,7 @@ presidio-analyzer, so it does ship.
 | PaddleOCR PP-OCRv6 German detection + recognition models | `PaddleOCRBackend` (both `paddle` and `onnxruntime` OCR backends) | Apache-2.0 |
 | PaddleX `doc_preprocessor` / UVDoc unwarping + doc-orientation models | `DocUnwarper` | Apache-2.0 |
 | PaddleX PP-DocLayout_plus-L layout detection model | `backend.layout.PaddleLayoutDetector` (whole-region pass) | Apache-2.0 |
+| `hivetrace/gliner-guard-omni` (GLiNER2 zero-shot NER, encoder `microsoft/mdeberta-v3-base`) | `GuardOmniClassifier` (`?classifier=guard-omni`) | Apache-2.0 |
 
 ## What license applies to the built Dockerfile image
 

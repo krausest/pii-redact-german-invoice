@@ -29,7 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 EnginePreset = Literal["native", "onnx"]
 OCRBackend = Literal["paddle", "onnxruntime"]
-ClassifierName = Literal["presidio"]
+# The model half of the engine. Unlike the OCR backend this is selectable *per
+# request* (`?classifier=`), because the two are genuinely different detectors
+# rather than two runtimes for one model — so what `[engine]` names here is the
+# default a request gets when it does not ask.
+ClassifierName = Literal["presidio", "guard-omni"]
 
 # preset name -> (ocr_backend, classifier)
 ENGINE_PRESETS: dict[str, tuple[OCRBackend, ClassifierName]] = {

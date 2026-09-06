@@ -23,7 +23,7 @@ download, so it is already present.
 from __future__ import annotations
 
 from backend.config import Config, EngineConfig
-from backend.factory import build_pipeline
+from backend.factory import build_pipeline, classifier_names, _build_classifier
 from backend.unwarp import DocUnwarper
 
 ENGINES = ("native", "onnx")
@@ -35,6 +35,16 @@ def main() -> None:
         # No try/except: a model this step cannot fetch is a broken image, and the
         # runtime is offline — better to fail the build than to fail every request.
         build_pipeline(Config(engine=EngineConfig(name=name)))
+        print(f"[warmup] done: {name}", flush=True)
+    # The classifiers are the one thing `build_pipeline` no longer constructs:
+    # they are chosen per request and built on first use, so a pipeline holds
+    # factories, not models. That laziness is right at runtime and wrong here —
+    # the image has to carry every checkpoint a request may name. guard-omni's
+    # comes from HuggingFace, which is why `HF_HUB_OFFLINE=1` at runtime is a
+    # real network guard again rather than a no-op.
+    for name in classifier_names():
+        print(f"[warmup] constructing classifier (downloads models): {name}", flush=True)
+        _build_classifier(name, Config().redaction.score_threshold)
         print(f"[warmup] done: {name}", flush=True)
     # Lazy in the pipeline (see module docstring); construction alone downloads
     # UVDoc + PP-LCNet_x1_0_doc_ori, no inference involved.

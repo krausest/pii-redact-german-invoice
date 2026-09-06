@@ -7,7 +7,7 @@ box at all because the page looks redacted.
 
 from __future__ import annotations
 
-from backend.document import build_document, drop_wrapped, spans_to_lines
+from backend.document import build_document, spans_to_lines
 from backend.models import Line
 from backend.pii import PiiLabel, Span
 
@@ -55,18 +55,3 @@ def test_a_span_reaching_a_later_line_keeps_its_tail_not_its_head():
     per_line = spans_to_lines([_span(PiiLabel.PERSON, 1, 6, "aa\nbb")], bounds)
     assert [s.text for s in per_line[0]] == ["aa"]
     assert [s.text for s in per_line[1]] == ["bb"]
-
-
-def test_a_pattern_match_that_only_exists_because_the_lines_were_joined_is_dropped():
-    """Regex whitespace matches the joining newline, so a recognizer glues the
-    tail of one line to the head of the next. Measured on the corpus: a bare
-    invoice number plus the first word below it was reported as an address."""
-    wrapped = _span(PiiLabel.ADDRESS, 0, 11, "31163\nSeite")
-    assert drop_wrapped([wrapped]) == []
-
-
-def test_a_person_may_still_wrap():
-    """The one label whose entity legitimately runs across a line break — and
-    the reason the guard is by label rather than a blanket rule."""
-    wrapped = _span(PiiLabel.PERSON, 0, 14, "Max\nMustermann")
-    assert drop_wrapped([wrapped]) == [wrapped]

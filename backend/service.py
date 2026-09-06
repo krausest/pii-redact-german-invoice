@@ -149,7 +149,12 @@ def run_redaction(
         lines = pipeline.read_lines(image) if layout_debug else None
         regions = pipeline.regions(image) if layout_debug else None
         boxes = pipeline.compute_boxes(
-            image, lines=lines, regions=regions, known_names=known_names, trace=trace
+            image,
+            lines=lines,
+            regions=regions,
+            known_names=known_names,
+            trace=trace,
+            classifier=opts.classifier,
         )
         # apply_boxes fills in place, so redact a copy — `image` is the clean page
         # the boxes refer to, and callers may want both.
@@ -212,14 +217,17 @@ def build_report(redaction: Redaction, opts: RedactOptions) -> dict[str, Any]:
     ``json-output=false`` would have returned and the two cannot drift apart: a
     PDF for a PDF, else a JPEG.
 
-    The report does not name the engine: that is fixed per process, so
-    ``GET /health`` is where to read it.
+    ``classifier`` names the model half that actually drew these boxes. The rest
+    of the engine is still absent and still read from ``GET /health``, because it
+    is still fixed per process — this one is not, and a report that hid which of
+    two models found the PII would be describing a result nobody could reproduce.
 
     ``debug`` appears only when it was asked for, so an ordinary report is
     exactly what it always was.
     """
     report: dict[str, Any] = {
         "unwarped": opts.unwarp,
+        "classifier": opts.classifier,
         "pages": [
             {
                 "index": r.index,

@@ -52,3 +52,24 @@ def test_the_layout_detector_runs_on_the_engine_the_ocr_does(monkeypatch):
     seen.clear()
     factory.build_pipeline(Config(engine=EngineConfig(name="native")))
     assert seen == {"ocr": "paddle", "layout": "paddle"}
+
+
+def test_no_classifier_is_built_until_one_is_asked_for(monkeypatch):
+    """The choice is per request, so a worker holds a factory per classifier and
+    a model only for the ones it was actually asked for. guard-omni is ~1 GB of
+    torch weights; a process that only ever serves the default must not pay for
+    the option to exist."""
+    built: list[str] = []
+    monkeypatch.setattr(factory, "_build_ocr", lambda *_a: None)
+    monkeypatch.setattr(factory, "_build_classifier", lambda name, _t: built.append(name) or name)
+    monkeypatch.setattr(factory, "_build_layout_detector", lambda *_a: None)
+
+    pipeline = factory.build_pipeline(Config())
+    assert built == []  # constructing the pipeline builds no classifier at all
+
+    assert pipeline.classifier() == "presidio"  # the process default
+    assert pipeline.classifier("guard-omni") == "guard-omni"
+    assert built == ["presidio", "guard-omni"]
+
+    pipeline.classifier("guard-omni")
+    assert built == ["presidio", "guard-omni"]  # built once, then kept

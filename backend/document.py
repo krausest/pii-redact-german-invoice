@@ -16,10 +16,10 @@ Pure functions over ``Line``/``Span``: nothing here imports a model.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from backend.models import Line
-from backend.pii import PiiLabel, Span
+from backend.pii import Span
 
 
 def build_document(lines: Sequence[Line]) -> tuple[str, list[tuple[int, int]]]:
@@ -42,32 +42,6 @@ def build_document(lines: Sequence[Line]) -> tuple[str, list[tuple[int, int]]]:
         bounds.append((pos, pos + len(line.text)))
         pos += len(line.text) + 1  # + the "\n"
     return "\n".join(parts), bounds
-
-
-# The one label whose entity may legitimately run across a line break. Everything
-# else in `PiiLabel` reaches us from a *pattern*, and a pattern describes a
-# typographic unit: a German ZIP+city, a street, a phone number and an IBAN are
-# each printed on one line by definition. A person's name is not — "Max" on one
-# line and "Mustermann" on the next is one person, and seeing that is the whole
-# reason the page is classified as one text.
-_MAY_WRAP = frozenset({PiiLabel.PERSON})
-
-
-def drop_wrapped(spans: Sequence[Span]) -> list[Span]:
-    """Discard pattern matches that only exist because two lines were joined.
-
-    Joining the page puts a ``"\\n"`` between lines, and ``\\s`` in a regex
-    matches it — so a recognizer glues the tail of one line to the head of the
-    next and reports something that is nowhere on the page. Measured on the
-    corpus this is not theoretical: ``DE_PLZ_CITY`` turned a bare invoice number
-    at a line end plus the first word of the line below it into an address three
-    times over ("12345" + "Seite", "12345" + "Geschälshührer"), each blackening
-    a line that has to stay readable.
-
-    The cost of the rule is an address genuinely broken across a wrap, which
-    then falls to the per-line street/ZIP rules that ran before and still run.
-    """
-    return [s for s in spans if s.label in _MAY_WRAP or "\n" not in s.text]
 
 
 def spans_to_lines(
@@ -99,3 +73,89 @@ def spans_to_lines(
                     )
                 )
     return per_line
+
+
+# One window's word budget, and how many lines two windows share. The overlap is
+# in *lines*, not words, because windows are cut on line boundaries: two lines
+# is enough that an entity straddling a cut is still whole in one of them.
+WINDOW_WORDS = 160
+WINDOW_OVERLAP_LINES = 2
+
+
+def make_windows(
+    texts: Sequence[str],
+    budget: int = WINDOW_WORDS,
+    overlap: int = WINDOW_OVERLAP_LINES,
+) -> list[tuple[int, int]]:
+    """Line-index windows ``[start, end)`` over ``texts``, greedily filled to
+    ``budget`` words, always taking at least one line even when it alone busts
+    the budget. Consecutive windows overlap by ``overlap`` lines."""
+    if not texts:
+        return []
+    windows: list[tuple[int, int]] = []
+    start = 0
+    while start < len(texts):
+        words, end = 0, start
+        while end < len(texts):
+            n = len(texts[end].split())
+            if end > start and words + n > budget:
+                break
+            words += n
+            end += 1
+        windows.append((start, end))
+        if end >= len(texts):
+            break
+        start = max(end - overlap, start + 1)
+    return windows
+
+
+def windowed(
+    text: str,
+    predict: Callable[[str], list[Span]],
+    budget: int = WINDOW_WORDS,
+    overlap: int = WINDOW_OVERLAP_LINES,
+) -> list[Span]:
+    """Run ``predict`` over ``text`` in line-aligned windows, in *document*
+    coordinates, deduped by ``(label, start, end)`` with the higher score kept
+    where two overlapping windows both saw a span.
+
+    **This is about cost, not truncation.** The wholetext experiment introduced
+    windowing believing mdeberta-v3-base caps at 512 positions; measured here it
+    does not — that encoder uses relative position embeddings, and a planted
+    entity at 99 % of a 1600-word document is still found in one shot. What is
+    real is the quadratic attention cost: 204 words took 0.2 s, 804 took 0.9 s,
+    1604 took 3.4 s, and 3200 did not finish inside ten minutes. Windowing turns
+    that curve linear.
+
+    On this corpus it is a no-op — the longest page is 345 words, one window —
+    which is exactly the shape wanted: it costs nothing on every real page and
+    bounds the one dense page nobody has sent yet. A single-window document is
+    returned in its own coordinates untouched, so there is no second code path.
+
+    The lines come back out of ``text`` rather than being passed in:
+    :func:`build_document` joined them with ``"\\n"`` and nothing else, so the
+    split is exact and the classifier interface stays one string wide.
+    """
+    texts = text.split("\n")
+    bounds: list[tuple[int, int]] = []
+    pos = 0
+    for line in texts:
+        bounds.append((pos, pos + len(line)))
+        pos += len(line) + 1
+
+    seen: dict[tuple[str, int, int], Span] = {}
+    for first, last in make_windows(texts, budget=budget, overlap=overlap):
+        offset = bounds[first][0]
+        for s in predict(text[offset : bounds[last - 1][1]]):
+            moved = Span(
+                label=s.label,
+                start=s.start + offset,
+                end=s.end + offset,
+                text=s.text,
+                source=s.source,
+                score=s.score,
+            )
+            key = (str(moved.label), moved.start, moved.end)
+            if key not in seen or moved.score > seen[key].score:
+                seen[key] = moved
+    return sorted(seen.values(), key=lambda s: (s.start, s.end))
