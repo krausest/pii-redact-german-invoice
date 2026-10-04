@@ -13,6 +13,7 @@ from PIL import Image
 
 from backend.layout import LayoutRegion
 from backend.models import Box, Line
+from backend.pii import PiiLabel, Span
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace
 from tests.conftest import (
@@ -37,6 +38,20 @@ def _region(label, x0, y0, x1, y1):
 
 def _page():
     return Image.new("RGB", (300, 300))
+
+
+class _AddressStub:
+    """Reports one ADDRESS span over the given substring — the shape a span
+    model produces for an address printed on two lines."""
+
+    def __init__(self, sub):
+        self._sub = sub
+
+    def spans(self, text, trace):  # noqa: ARG002
+        start = text.find(self._sub)
+        if start < 0:
+            return []
+        return [Span(PiiLabel.ADDRESS, start, start + len(self._sub), self._sub, "stub", 0.9)]
 
 
 # -- what the whole-document switch bought ---------------------------------- #
@@ -66,6 +81,22 @@ def test_the_classifier_sees_the_page_in_reading_order_not_ocr_order():
     p = _pipeline(lines, ["Herrn\nMax Muster"], padding=0, layout=StubLayoutDetector(regions))
     boxes = p.compute_boxes(_page())
     assert Box(10, 105, 90, 115) in boxes and Box(10, 135, 90, 145) in boxes
+
+
+def test_a_wrapped_span_from_the_classifier_reaches_every_line_it_crosses():
+    """Not only a name: any label a classifier reports across a wrap.
+
+    A guard that dropped every wrapped non-PERSON span used to sit here, in the
+    shared path — it is a patch for presidio's regex recognizers matching the
+    joining newline, and it now lives with them. A span model reports a two-line
+    address as one entity, and both lines have to go."""
+    lines = [_line("Musterweg 1", top=10), _line("12345 Musterhausen", top=30)]
+    p = RedactionPipeline(
+        ocr=StubOCR(lines),
+        classifier=_AddressStub("Musterweg 1\n12345 Musterhausen"),
+        padding=0,
+    )
+    assert p.compute_boxes(_page()) == [Box(10, 10, 90, 20), Box(10, 30, 90, 40)]
 
 
 # -- the two span sources are not equal ------------------------------------- #

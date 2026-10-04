@@ -508,7 +508,7 @@ def _dump(targets: list[str], out_dir: str | None) -> int:
 
     config = load_config()
     pipeline = build_pipeline(config)
-    ocr_backend, _ = config.engine.resolve()
+    ocr_backend = config.engine.ocr_backend
     for sample, out in plan:
         try:
             pages = _read_pages(sample, config)
@@ -537,7 +537,7 @@ def _check(targets: list[str], update: bool, ignore_text: bool = False) -> int:
     from backend.factory import build_classifier
 
     config = load_config()
-    _, classifier_name = config.engine.resolve()
+    classifier_name = config.engine.classifier
     pipeline = build_replay_pipeline(config, build_classifier(config))
     status = 0
     for ocr in _ocr_files(targets):

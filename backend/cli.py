@@ -1,7 +1,7 @@
 """Batch CLI: redact jpg/jpeg/png/pdf files or directories in place.
 
 Replaces the three standalone ``redact_*.py`` scripts; the engine comes from the
-config file (or ``PII_ENGINE``) and is fixed for the run.
+config file (or ``PII_OCR_BACKEND`` / ``PII_CLASSIFIER``) and is fixed for the run.
 
     uv run pii-redact Arztrechnung/
     uv run pii-redact example/GOÄ_Rechnung1.pdf other.png
@@ -99,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--jpeg-quality",
         metavar="N",
         help="quality of every JPEG produced, 1-100 (default: redaction.jpeg_quality)",
+    )
+    opts.add_argument(
+        "--classifier",
+        metavar="NAME",
+        help="which model half to run: presidio | guard-omni (default: engine.classifier). "
+        "The first run naming one loads it, which takes a while",
     )
     opts.add_argument(
         "--debug",

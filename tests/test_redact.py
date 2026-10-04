@@ -299,6 +299,8 @@ def test_typo_in_a_parameter_name_is_rejected(png_bytes):
         "pdf-dpi=5",
         "json_output=true",  # underscores are not the wire spelling
         "engine=onnx",  # fixed by config, not per request
+        "classifier=gliner",  # a real name is one of two, and this is not one
+        "classifier=",  # nor is the empty string, whatever the registry keys are
         "detect=false",  # detection always runs
         "include=boxes",
         "format=pdf",
@@ -311,13 +313,32 @@ def test_bad_parameters_are_rejected(png_bytes, query):
     assert r.status_code == 400
 
 
+def test_the_classifier_can_be_chosen_per_request_and_the_report_says_which_ran():
+    """The one axis of the engine that is *not* fixed per process. The report
+    names it because the boxes depend on it — a report that hid which of two
+    models found the PII would describe a result nobody could reproduce."""
+    client, _ = build_client()
+    with client:
+        r = client.post(
+            f"{URL}?json-output=true&classifier=guard-omni",
+            content=make_image_bytes("PNG"),
+            headers=PNG,
+        )
+    assert r.status_code == 200
+    assert r.json()["classifier"] == "guard-omni"
+
+
 # -- health ------------------------------------------------------------------ #
-def test_health_reports_the_resolved_engine():
+def test_health_reports_the_resolved_engine_and_what_a_request_may_ask_for():
+    """`engine` is the process default and its shape is published; `classifiers`
+    is the newer half — the model can be chosen per request, so a caller needs to
+    know which names are on offer without guessing."""
     client, _ = build_client(Config())
     with client:
         r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {
         "status": "ok",
-        "engine": {"name": "native", "ocr": "paddle", "classifier": "presidio"},
+        "engine": {"ocr": "onnxruntime", "classifier": "presidio"},
+        "classifiers": ["presidio", "guard-omni"],
     }

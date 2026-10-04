@@ -55,3 +55,18 @@ def test_composition_matches_redact(pipeline):
     boxes = pipeline.compute_boxes(unwrapped)
     composed = pipeline.apply_boxes(unwrapped, boxes)
     assert not _differs(full, composed)
+
+
+def test_either_classifier_can_redact_the_same_page(pipeline):
+    """The seam the shared span vocabulary was built for: a second model plugs in
+    where presidio does, and the rest of the pipeline — rules, item-table gate,
+    name memory, region pass — cannot tell the difference.
+
+    Only that both find PII is asserted, not that they agree: they are different
+    detectors, which is the whole reason there is a choice. Measured over the
+    replay corpus, guard-omni draws ~180 boxes presidio does not and misses 11 it
+    finds."""
+    with Image.open(SAMPLE) as src:
+        page = pipeline.unwarp(src)
+    assert pipeline.compute_boxes(page, classifier="presidio")
+    assert pipeline.compute_boxes(page, classifier="guard-omni")

@@ -1,19 +1,16 @@
-"""Configuration loading (TOML) and engine-preset resolution.
+"""Configuration loading (TOML) and environment overrides.
 
 Config is read once at startup from a ``config.toml`` file (see the repo root for
 the committed defaults). Every field has a default, so a missing or partial file
 still yields a usable config — but an *unknown* key is an error, on the same
 principle as a typo'd query parameter: silently ignoring it looks like it worked.
 
-The ``[engine]`` section is expressed as a friendly preset name (``native`` |
-``onnx``) that resolves to a concrete (OCR backend, classifier) pair; either axis
-can be overridden explicitly. The two presets differ only in the *inference
-engine* — Presidio is the only classifier, so the pair is really "which engine"
-plus a slot kept open for a second classifier and published by ``/health``. The
-engine names an OCR backend but is not only the OCR's: it is the one answer to
-"what runs paddle models on this machine", so ``build_pipeline`` hands the same
-resolved value to the layout detector (:mod:`backend.layout`). The layout model
-is deliberately *not* a third axis here — it has no reason to disagree.
+The ``[engine]`` section names two independent axes, combinable freely: the
+``ocr_backend`` (the inference runtime) and the default ``classifier``. The OCR
+backend is not only the OCR's: it is the one answer to "what runs paddle models
+on this machine", so ``build_pipeline`` hands the same value to the layout
+detector (:mod:`backend.layout`). The layout model is deliberately *not* a third
+axis here — it has no reason to disagree.
 
 The models are frozen, so they are safe to share across threads and workers.
 """
@@ -27,15 +24,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-EnginePreset = Literal["native", "onnx"]
 OCRBackend = Literal["paddle", "onnxruntime"]
-ClassifierName = Literal["presidio"]
-
-# preset name -> (ocr_backend, classifier)
-ENGINE_PRESETS: dict[str, tuple[OCRBackend, ClassifierName]] = {
-    "native": ("paddle", "presidio"),
-    "onnx": ("onnxruntime", "presidio"),
-}
+# The model half of the engine. Unlike the OCR backend this is selectable *per
+# request* (`?classifier=`), because the two are genuinely different detectors
+# rather than two runtimes for one model — so what `[engine]` names here is the
+# default a request gets when it does not ask.
+ClassifierName = Literal["presidio", "guard-omni"]
 
 # Frozen (immutable, hashable) and strict about unknown keys.
 _STRICT = ConfigDict(frozen=True, extra="forbid")
@@ -44,22 +38,15 @@ _STRICT = ConfigDict(frozen=True, extra="forbid")
 class EngineConfig(BaseModel):
     model_config = _STRICT
 
-    name: EnginePreset = "native"
-    # Explicit overrides; when None the preset named by ``name`` supplies them.
-    ocr_backend: OCRBackend | None = None
-    classifier: ClassifierName | None = None
+    # `onnxruntime` gives the same output as native `paddle`, ~3x faster.
+    ocr_backend: OCRBackend = "onnxruntime"
+    classifier: ClassifierName = "presidio"
     # Minimum mean detector score for a text box (PaddleOCR's own default is 0.6).
     # It is a *mean* over the box, so a long line of thin small type dilutes it:
     # a full-width imprint footer scored just under 0.6 and was not detected at
     # all — not too faint to read (its contrast matches the item table's), just
     # too thin over too wide a box. See `backend/ocr/paddle.py`.
     det_box_thresh: Annotated[float, Field(gt=0.0, le=1.0)] = 0.5
-
-    def resolve(self) -> tuple[str, str]:
-        """The concrete ``(ocr_backend, classifier)`` pair, applying any explicit
-        overrides on top of the named preset."""
-        preset_ocr, preset_clf = ENGINE_PRESETS[self.name]
-        return self.ocr_backend or preset_ocr, self.classifier or preset_clf
 
 
 class LayoutConfig(BaseModel):
@@ -137,7 +124,8 @@ class Config(BaseModel):
 # ``PII_UNWARP=yes|1|off`` all work and a typo fails at startup naming the field —
 # don't add hand-rolled parsing here.
 _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
-    "PII_ENGINE": ("engine", "name"),
+    "PII_OCR_BACKEND": ("engine", "ocr_backend"),
+    "PII_CLASSIFIER": ("engine", "classifier"),
     "PII_UNWARP": ("redaction", "unwarp"),
     "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
 }
@@ -155,7 +143,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     """Load config from TOML, filling any missing field with its default.
 
     The variables in :data:`_ENV_OVERRIDES` win over the file. Anything unusable —
-    an unknown key, an out-of-range number, an engine preset that doesn't exist, a
+    an unknown key, an out-of-range number, an OCR backend that doesn't exist, a
     value that is not a boolean — raises here, so a bad config fails at startup
     rather than on the first request.
 

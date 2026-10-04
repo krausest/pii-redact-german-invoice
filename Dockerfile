@@ -68,8 +68,8 @@ EXPOSE 8000
 # Offline is enforced, not assumed: warmup.py baked every model above, so any
 # download attempt at runtime is a missed bake — make it fail loudly.
 #
-# Three config keys are overridable per container without rebuilding or mounting a
-# config.toml: `-e PII_ENGINE=native|onnx`, `-e PII_UNWARP=false` (skip the
+# Four config keys are overridable per container without rebuilding or mounting a
+# config.toml: `-e PII_OCR_BACKEND=paddle|onnxruntime`, `-e PII_CLASSIFIER=presidio|guard-omni`, `-e PII_UNWARP=false` (skip the
 # dewarping model — much faster on flat scans and PDFs, and it is what makes a
 # CPU-only container usable) and `-e PII_REDACT_REGIONS=false` (the
 # letterhead/footer/sender-column pass). All are left unset here so the baked

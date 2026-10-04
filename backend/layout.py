@@ -121,7 +121,7 @@ class PaddleLayoutDetector:
         # measurement notes there (photos score far below scans).
         kwargs = dict(model_name=model_name, threshold=threshold, layout_nms=layout_nms)
         # `engine` is the same axis the OCR backend runs on, set the same way
-        # (backend/ocr/paddle.py) and handed down from the same resolved preset:
+        # (backend/ocr/paddle.py) and handed down from the same `engine.ocr_backend`:
         # it says which runtime executes paddle models on this machine, and a
         # page whose text models are on ONNX Runtime while its layout model is
         # not is a configuration that disagrees with itself. paddlex ships an

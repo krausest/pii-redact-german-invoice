@@ -18,10 +18,6 @@ import re
 from collections.abc import Sequence
 from typing import Protocol
 
-from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
-from presidio_analyzer.nlp_engine import NlpEngineProvider
-from presidio_analyzer.predefined_recognizers import EmailRecognizer, IbanRecognizer, CreditCardRecognizer, PhoneRecognizer
-
 from backend.rules import DE_PLZ_CITY
 from backend.pii import PRESIDIO_LABELS, PiiLabel, Span
 from backend.trace import Trace
@@ -59,6 +55,37 @@ _DOTTED_DATE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}[\s\d.\-/]*")
 _BARE_DIGITS = re.compile(r"\d+")
 
 
+# The one label whose entity may legitimately run across a line break. Every
+# other label reaches us from one of the `PatternRecognizer`s registered above,
+# and a pattern describes a typographic unit: a German ZIP+city, a street, a
+# phone number and an IBAN are each printed on one line by definition. A
+# person's name is not - "Max" on one line and "Mustermann" on the next is one
+# person, and seeing that is the whole reason the page is analyzed as one text.
+_MAY_WRAP = frozenset({PiiLabel.PERSON})
+
+
+def _drop_wrapped(spans: Sequence[Span]) -> list[Span]:
+    """Discard pattern matches that only exist because two lines were joined.
+
+    This lives here, not in the pipeline, because it is an artifact of *this*
+    classifier: the recognizers above are regexes running over the joined page
+    text, and a regex's whitespace class matches the joining newline, so one
+    glues the tail of a line to the head of the next and reports something that
+    is nowhere on the page. Measured on the corpus it is not theoretical -
+    `de_plz_city` turned a bare invoice number at a line end plus the first word
+    below it into an address three times over, each blackening a line that has
+    to stay readable.
+
+    A span model has no such failure mode, and applying this to one would throw
+    away the addresses it legitimately reports across a wrap - which is exactly
+    what happened while this sat in the shared path.
+
+    The cost of the rule is an address genuinely broken across a wrap, which
+    then falls to the per-line street/ZIP rules in `backend.rules`.
+    """
+    return [s for s in spans if s.label in _MAY_WRAP or "\n" not in s.text]
+
+
 class _Token(Protocol):
     """What :func:`_redactable` needs of a token — the structural subset of a
     spaCy ``Token``, so tests can pass a namedtuple and stay model-free. A
@@ -70,7 +97,22 @@ class _Token(Protocol):
     pos_: str
 
 
-def build_analyzer() -> AnalyzerEngine:
+def build_analyzer():
+    # Imported here, not at module scope: `presidio_analyzer` eagerly imports its
+    # HuggingFace and GLiNER recognizers, which pull transformers and torch — a
+    # second's import cost this module's pure guards below have no use for, and
+    # which the fast test suite must not pay. Same convention as
+    # `PaddleLayoutDetector` and the guard-omni adapter beside it: a module is
+    # importable for its constants without loading anyone's runtime.
+    from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
+    from presidio_analyzer.nlp_engine import NlpEngineProvider
+    from presidio_analyzer.predefined_recognizers import (
+        CreditCardRecognizer,
+        EmailRecognizer,
+        IbanRecognizer,
+        PhoneRecognizer,
+    )
+
     nlp_engine = NlpEngineProvider(
         nlp_configuration={
             "nlp_engine_name": "spacy",
@@ -347,4 +389,4 @@ class PresidioClassifier:
                         score=r.score,
                     )
                 )
-        return spans
+        return _drop_wrapped(spans)

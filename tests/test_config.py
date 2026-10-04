@@ -1,4 +1,4 @@
-"""Config loading, defaults, engine-preset resolution and env override."""
+"""Config loading, defaults and env override."""
 
 from __future__ import annotations
 
@@ -18,27 +18,21 @@ def _write(tmp_path, body: str):
 def test_missing_file_yields_defaults(tmp_path):
     cfg = load_config(tmp_path / "does_not_exist.toml")
     assert cfg == Config()
-    assert cfg.engine.name == "native"
+    assert (cfg.engine.ocr_backend, cfg.engine.classifier) == ("onnxruntime", "presidio")
     assert cfg.api.max_upload_bytes == 30 * 1024 * 1024
 
 
 def test_partial_file_fills_defaults(tmp_path):
-    cfg = load_config(_write(tmp_path, '[engine]\nname = "onnx"\n'))
-    assert cfg.engine.name == "onnx"
-    assert cfg.redaction.padding == 2  # default preserved
+    cfg = load_config(_write(tmp_path, '[engine]\nocr_backend = "paddle"\n'))
+    assert cfg.engine.ocr_backend == "paddle"
+    assert cfg.engine.classifier == "presidio"  # default preserved
+    assert cfg.redaction.padding == 2
 
 
-@pytest.mark.parametrize(
-    "name,expected",
-    [
-        ("native", ("paddle", "presidio")),
-        ("onnx", ("onnxruntime", "presidio")),
-    ],
-)
-def test_preset_resolution(name, expected):
-    from backend.config import EngineConfig
-
-    assert EngineConfig(name=name).resolve() == expected
+def test_engine_axes_combine_freely(tmp_path):
+    body = '[engine]\nocr_backend = "paddle"\nclassifier = "guard-omni"\n'
+    cfg = load_config(_write(tmp_path, body))
+    assert (cfg.engine.ocr_backend, cfg.engine.classifier) == ("paddle", "guard-omni")
 
 
 def test_det_box_thresh_default_is_below_paddles_own(tmp_path):
@@ -49,28 +43,14 @@ def test_det_box_thresh_default_is_below_paddles_own(tmp_path):
     assert cfg.engine.det_box_thresh == 0.35
 
 
-def test_explicit_override_beats_the_preset():
-    from backend.config import EngineConfig
-
-    assert EngineConfig(name="onnx", ocr_backend="paddle").resolve() == (
-        "paddle",
-        "presidio",
-    )
-
-
-def test_unknown_preset_raises():
-    from backend.config import EngineConfig
-
-    with pytest.raises(ValueError):
-        EngineConfig(name="nope").resolve()
-
-
 def test_env_engine_overrides_file(tmp_path, monkeypatch):
-    path = _write(tmp_path, '[engine]\nname = "native"\n')
-    monkeypatch.setenv("PII_ENGINE", "onnx")
+    body = '[engine]\nocr_backend = "onnxruntime"\nclassifier = "presidio"\n'
+    path = _write(tmp_path, body)
+    monkeypatch.setenv("PII_OCR_BACKEND", "paddle")
+    monkeypatch.setenv("PII_CLASSIFIER", "guard-omni")
     cfg = load_config(path)
-    assert cfg.engine.name == "onnx"
-    assert cfg.engine.resolve() == ("onnxruntime", "presidio")
+    assert (cfg.engine.ocr_backend, cfg.engine.classifier) == ("paddle", "guard-omni")
+    assert cfg.engine.det_box_thresh == 0.5  # rest of the section kept
 
 
 @pytest.mark.parametrize("env", ["PII_UNWARP", "PII_REDACT_REGIONS"])
@@ -124,7 +104,8 @@ def test_api_values_parsed(tmp_path):
         ("[surprise]\nx = 1\n", "surprise"),  # unknown section
         ("[redaction]\njpeg_quality = 500\n", "jpeg_quality"),  # out of range
         ("[redaction]\npdf_dpi = 5\n", "pdf_dpi"),
-        ('[engine]\nname = "nope"\n', "name"),  # not a preset
+        ('[engine]\nname = "onnx"\n', "name"),  # the removed preset key
+        ('[engine]\nocr_backend = "nope"\n', "ocr_backend"),  # not a backend
         ('[engine]\nclassifier = "nope"\n', "classifier"),  # not a classifier
         ("[engine]\ndet_box_thresh = 1.5\n", "det_box_thresh"),  # not a probability
         ("[api]\nworkers = 0\n", "workers"),
@@ -166,4 +147,4 @@ def test_layout_defaults():
 def test_committed_config_toml_loads():
     """The config shipped in the repo must satisfy its own schema."""
     root = Path(__file__).resolve().parent.parent
-    assert load_config(root / "config.toml").engine.resolve()
+    assert load_config(root / "config.toml").engine.ocr_backend

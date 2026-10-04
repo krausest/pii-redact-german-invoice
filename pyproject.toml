@@ -7,6 +7,12 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "de-core-news-lg",
     "fastapi>=0.115.0",
+    # guard-omni's runtime: a GLiNER2 zero-shot NER model, selectable per request
+    # as an alternative to Presidio (backend/classifiers/guard_omni.py). The
+    # `local` extra is what runs the model in-process — without it gliner2 2.x is
+    # only a client for their hosted API, and importing it fails on `torch`. That
+    # extra is what pulls torch + transformers; see the torch pin below.
+    "gliner2[local]>=2.0.0",
     "gunicorn>=23.0.0",
     "onnxruntime>=1.19.0",
     "paddleocr>=3.7.0",
@@ -46,5 +52,17 @@ markers = [
     "regression: OCR-replay snapshots; opt in with --regression (loads the classifier)",
 ]
 
+# torch, CPU-only. The default linux/amd64 wheel bundles ~4.6 GB of CUDA
+# libraries that this service never touches — it runs guard-omni on the CPU like
+# every other model here, and the image is already large. That dependency weight
+# is the reason the first GLiNER attempt was dropped, so it is pinned rather than
+# accepted. macOS resolves from PyPI, whose torch wheels are CPU-only anyway and
+# where this index has nothing to offer.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 de-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl" }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

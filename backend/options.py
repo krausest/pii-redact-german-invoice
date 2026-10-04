@@ -23,7 +23,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, ValidationError
 
-from backend.config import Config
+from backend.config import ClassifierName, Config
 
 Quality = Annotated[int, Field(ge=1, le=100)]
 Dpi = Annotated[int, Field(ge=36, le=1200)]
@@ -89,6 +89,11 @@ class RedactOptions(_QueryModel):
     json_output: bool = False
     pdf_dpi: Dpi
     jpeg_quality: Quality
+    # The model half of the detection, selectable per request because the two
+    # classifiers are different detectors rather than two runtimes for one model.
+    # The OCR backend deliberately is *not* here: that is a property of the
+    # machine, fixed per process.
+    classifier: ClassifierName
     # Not config-backed: nothing sensible would turn the trace on for every
     # request, so this one really is a class default, like `json_output`.
     debug: bool = False
@@ -97,7 +102,12 @@ class RedactOptions(_QueryModel):
     def from_query(cls, raw: Mapping[str, Any], config: Config) -> RedactOptions:
         red = config.redaction
         opts = cls._validate(
-            {"unwarp": red.unwarp, "pdf-dpi": red.pdf_dpi, "jpeg-quality": red.jpeg_quality},
+            {
+                "unwarp": red.unwarp,
+                "pdf-dpi": red.pdf_dpi,
+                "jpeg-quality": red.jpeg_quality,
+                "classifier": config.engine.classifier,
+            },
             raw,
         )
         # The file response carries no metadata at all — by design — so there is

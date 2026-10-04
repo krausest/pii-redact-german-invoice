@@ -2,11 +2,10 @@
 # delete any of these; the values below are the committed defaults.
 
 [engine]
-name = "onnx"          # native | onnx — the inference engine for every paddle
-                       # model on the page: OCR detection, recognition and layout.
-# Advanced: override either axis to unlock combinations the presets don't name.
-# ocr_backend = "paddle"   # paddle | onnxruntime
-# classifier = "presidio"  # presidio
+# The two axes combine freely.
+ocr_backend = "onnxruntime"  # paddle | onnxruntime — the inference engine for every
+                             # paddle model on the page: OCR detection, recognition, layout.
+classifier = "presidio"      # presidio | guard-omni — the default for ?classifier=
 # Minimum mean detector score for a text box; PaddleOCR's own default is 0.6.
 # Because it is a mean over the box, a full-width line of small type dilutes it —
 # an imprint footer scored just under 0.6 and was not detected at all. Raise it if

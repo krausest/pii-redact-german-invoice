@@ -39,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from backend.config import Config, load_config
-from backend.factory import build_pipeline, resolve_engine
+from backend.factory import build_pipeline, classifier_names, resolve_engine
 from backend.models import Box
 from backend.options import AssembleBody, AssembleOptions, RedactOptions
 from backend.pipeline import RedactionPipeline
@@ -215,7 +215,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     # -- routes -------------------------------------------------------------- #
     @app.get("/health")
     async def health(config: Config = Depends(get_config)):
-        return {"status": "ok", "engine": resolve_engine(config)}
+        # `engine` is the process default; `classifiers` is what a request may
+        # name instead with `?classifier=`. Additive on purpose — the engine
+        # block is a published shape and readers of it should not have to change.
+        return {
+            "status": "ok",
+            "engine": resolve_engine(config),
+            "classifiers": list(classifier_names()),
+        }
 
     @app.post("/api/redact", description=REDACT_DESCRIPTION)
     async def redact(

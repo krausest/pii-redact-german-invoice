@@ -13,12 +13,13 @@ them to run.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw
 
 from backend.classifiers.base import Classifier
-from backend.document import build_document, drop_wrapped, spans_to_lines
+from backend.document import build_document, spans_to_lines
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
 from backend.layout import (
@@ -40,16 +41,29 @@ class RedactionPipeline:
     def __init__(
         self,
         ocr: OCRBackend,
-        classifier: Classifier,
+        classifier: Classifier | None = None,
         unwarper: DocUnwarper | None = None,
         fill: tuple[int, int, int] = (0, 0, 0),
         padding: int = 2,
         unwarp_enabled: bool = True,
         unwarper_factory: Callable[[], DocUnwarper] | None = None,
         layout: PaddleLayoutDetector | None = None,
+        classifier_factories: dict[str, Callable[[], Classifier]] | None = None,
+        default_classifier: str | None = None,
     ) -> None:
         self._ocr = ocr
-        self._classifier = classifier
+        # Two ways in, one store. `classifier=` is the direct one — a test hands
+        # a stub, `backend.replay` hands the one classifier it wants — and it
+        # registers under the name a request would ask for, or under "" when
+        # nobody named it. `classifier_factories=` is what `build_pipeline`
+        # passes: a classifier per selectable name, none of them built yet,
+        # because a worker that is never asked for guard-omni must not pay a
+        # gigabyte of weights for the option.
+        self._factories = dict(classifier_factories or {})
+        self._classifiers: dict[str, Classifier] = {}
+        self._default = default_classifier or ""
+        if classifier is not None:
+            self._classifiers[self._default] = classifier
         self._unwarper = unwarper
         self._unwarper_factory = unwarper_factory
         self._fill = fill
@@ -59,6 +73,11 @@ class RedactionPipeline:
         # both "no model" and "don't run it", so there is no second flag to
         # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
         self._layout = layout
+        # Guards both lazy model builds below. The unwarper's was an unguarded
+        # race, safe only because `api.max_concurrent_per_worker` defaults to 1;
+        # a second one of the same kind would be repeating a known bug rather
+        # than deciding anything, and building a model twice wastes a gigabyte.
+        self._build_lock = threading.Lock()
 
     # -- primitives -------------------------------------------------------- #
     def unwarp(self, image: Image.Image) -> Image.Image:
@@ -66,10 +85,40 @@ class RedactionPipeline:
         loads a model), so a process that is only ever asked for ``unwarp=false``
         never pays for it."""
         if self._unwarper is None:
-            if self._unwarper_factory is None:
-                raise RuntimeError("unwarp requested but no DocUnwarper is configured")
-            self._unwarper = self._unwarper_factory()
+            with self._build_lock:
+                if self._unwarper is None:
+                    if self._unwarper_factory is None:
+                        raise RuntimeError("unwarp requested but no DocUnwarper is configured")
+                    self._unwarper = self._unwarper_factory()
         return self._unwarper.unwarp(image.convert("RGB"))
+
+    def classifier(self, name: str | None = None) -> Classifier:
+        """The classifier called ``name`` (``None`` = this process's default),
+        built on first use like the unwarper and kept for the process.
+
+        The cost of the lazy build is a cold start on the first request that
+        names a model nobody has asked for yet; what it buys is that selecting a
+        classifier per request does not mean every worker holding every model.
+
+        A pipeline built with a single ``classifier=`` and no factories ignores
+        the name: there is nothing to choose between, so the name is not a
+        choice. That is what `backend.replay` and every test double are — they
+        hand over one classifier on purpose, and refusing the request's default
+        name would only mean repeating it at each of those call sites.
+        """
+        if not self._factories and len(self._classifiers) == 1:
+            return next(iter(self._classifiers.values()))
+        key = self._default if name is None else name
+        found = self._classifiers.get(key)
+        if found is not None:
+            return found
+        with self._build_lock:
+            if key not in self._classifiers:
+                factory = self._factories.get(key)
+                if factory is None:
+                    raise RuntimeError(f"no classifier configured under {key!r}")
+                self._classifiers[key] = factory()
+        return self._classifiers[key]
 
     def read_lines(self, image: Image.Image) -> list[Line]:
         """The OCR lines of ``image`` — the text ``compute_boxes`` classifies.
@@ -93,6 +142,7 @@ class RedactionPipeline:
         known_names: set[str] | None = None,
         trace: Trace | None = None,
         regions: list[LayoutRegion] | None = None,
+        classifier: str | None = None,
     ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
         flagged OCR line, plus — when configured — the whole-region boxes the
@@ -111,6 +161,12 @@ class RedactionPipeline:
         page 2. The carry is forward-only — a name first seen on page 2 does not
         re-redact page 1 — which suffices because the labeled occurrence leads.
         ``None`` keeps the memory page-local.
+
+        ``classifier`` names which model half to run (``None`` = the process
+        default). It is the one option here that selects a *model*, which is why
+        it arrives as a name rather than an object: the pipeline owns the
+        registry and builds on first use, so a caller can offer the choice
+        without every worker holding every model.
 
         ``trace`` collects the per-line commentary — why each box exists — for a
         caller that was asked for it (``?debug=true``). Omitting it still logs
@@ -145,7 +201,8 @@ class RedactionPipeline:
         rules_by_line = spans_to_lines(
             rule_spans(ordered, bounds, self._table_in_order(order, table_idx)), bounds
         )
-        model_by_line = spans_to_lines(drop_wrapped(self._classifier.spans(text, trace)), bounds)
+        model = self.classifier(classifier)
+        model_by_line = spans_to_lines(model.spans(text, trace), bounds)
         hits: list[list[Span]] = [
             list(rules_by_line[pos]) + ([] if i in table_idx else model_by_line[pos])
             for pos, i in enumerate(order)

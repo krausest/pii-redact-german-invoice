@@ -1,4 +1,4 @@
-import type { Box, OutputFormat, Page } from './types'
+import type { Box, Dpi, OutputFormat, Page } from './types'
 
 /**
  * Two endpoints, one job each. `/api/redact` runs the models and reports what it
@@ -7,6 +7,7 @@ import type { Box, OutputFormat, Page } from './types'
  */
 const REDACT_URL = '/api/redact'
 const ASSEMBLE_URL = '/api/assemble'
+const HEALTH_URL = '/health'
 
 export class ApiError extends Error {
   status: number
@@ -37,12 +38,27 @@ interface ReportPage {
   image: { content_type: string; data: string }
 }
 
-/** The two analysis-time options the UI exposes. Both change the pixels boxes live in. */
+/** The analysis-time options the UI exposes. Each one re-runs detection. */
 export interface AnalyzeOptions {
   /** Rasterization DPI for PDF input; image input is used as-is. */
-  dpi: number
+  dpi: Dpi
   /** Flatten a photographed page before OCR. */
   unwarp: boolean
+  /** Which model detects PII; `null` until `/health` named the server default. */
+  classifier: string | null
+}
+
+/** What the server offers: its default classifier and every one a request may name. */
+export interface Classifiers {
+  default: string
+  available: string[]
+}
+
+export async function fetchClassifiers(): Promise<Classifiers> {
+  const res = await fetch(HEALTH_URL)
+  if (!res.ok) throw await toError(res)
+  const data = (await res.json()) as { engine: { classifier: string }; classifiers: string[] }
+  return { default: data.engine.classifier, available: data.classifiers }
 }
 
 /**
@@ -87,6 +103,7 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
     'pdf-dpi': String(opts.dpi),
     unwarp: String(opts.unwarp),
   })
+  if (opts.classifier) params.set('classifier', opts.classifier)
   if (debug) params.set('debug', 'true')
   const res = await fetch(`${REDACT_URL}?${params}`, {
     method: 'POST',

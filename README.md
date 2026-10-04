@@ -135,12 +135,12 @@ origin. (`uv run uvicorn backend.api:app --port 8000` works too for a single wor
 ### CLI (batch)
 
 ```bash
-# Redact files or directories in place (uses engine.name from config.toml)
+# Redact files or directories in place (uses [engine] from config.toml)
 uv run pii-redact example/GOÄ_Rechnung1.pdf
 uv run pii-redact example/            # every jpg/jpeg/png/pdf in the folder
 
 # Override the engine per run
-PII_ENGINE=onnx uv run pii-redact example/
+PII_OCR_BACKEND=paddle uv run pii-redact example/
 ```
 
 Output is written next to each input: a PDF comes back as `<name>_redacted.pdf`,
@@ -188,7 +188,7 @@ docker run --rm -p 8000:8000 pii-redact
 - Multi-stage build: a Node stage builds the SPA; a `python:3.13-slim` stage runs
   the service. Only runtime deps are installed (`uv sync --no-default-groups` — no
   pytest, no notebook tooling).
-- **Engines**: the image ships **native + onnx**, which is every engine there is.
+- **Engines**: the image ships both OCR backends (`paddle` + `onnxruntime`) and every classifier.
 - A build-time warmup ([docker/warmup.py](docker/warmup.py)) bakes the Paddle
   (native + ONNX) and UVDoc/doc-orientation models into the image (the spaCy model is
   a pip package). Runtime is offline — verify by running with **no network** and
@@ -199,11 +199,12 @@ docker run --rm -p 8000:8000 pii-redact
   ```
 - Tune workers with `-e WEB_CONCURRENCY=N` (default 1 — each worker loads the full
   model set into RAM; scale via container replicas, needs ~4 GB RAM each).
-- Three config keys are overridable per container, without rebuilding or mounting a
+- Four config keys are overridable per container, without rebuilding or mounting a
   `config.toml`:
   ```bash
   docker run --rm -p 8000:8000 \
-      -e PII_ENGINE=native -e PII_UNWARP=false -e PII_REDACT_REGIONS=false pii-redact
+      -e PII_OCR_BACKEND=paddle -e PII_CLASSIFIER=presidio \
+      -e PII_UNWARP=false -e PII_REDACT_REGIONS=false pii-redact
   ```
   The two booleans accept `true|false|1|0|yes|no|on|off`; anything else fails at
   startup rather than being silently ignored. For any other key, mount a file and
@@ -223,11 +224,13 @@ uv run gunicorn backend.api:app -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0
 
 ## REST API
 
-Two endpoints, plus `GET /health` → `{"status":"ok","engine":{"name":"onnx",
-"ocr":"onnxruntime","classifier":"presidio"}}`. The engine is fixed by `config.toml`
-(or `PII_ENGINE`) and is **not** selectable per request. All options are query
-parameters; an unknown one is a `400`, so a typo (`?unwrap=false`) cannot silently
-do nothing.
+Two endpoints, plus `GET /health` → `{"status":"ok","engine":{"ocr":"onnxruntime",
+"classifier":"presidio"},"classifiers":["presidio","guard-omni"]}`.
+The engine is fixed by `config.toml` (or `PII_OCR_BACKEND` / `PII_CLASSIFIER`); its `classifier` half is
+the default a request gets, and `classifiers` lists what `?classifier=` may name
+instead. Everything else about the engine — the OCR backend above all — is **not**
+selectable per request. All options are query parameters; an unknown one is a
+`400`, so a typo (`?unwrap=false`) cannot silently do nothing.
 
 ### `POST /api/redact` — find the PII and black it out
 
@@ -239,6 +242,7 @@ Body: the **raw file** — PNG, JPEG or PDF bytes, not multipart.
 | `json-output` | `true` \| `false` | `false` | return the JSON report, which embeds the file, instead of the bare file |
 | `pdf-dpi` | integer | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
+| `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which model half runs; the first request naming one loads it |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report; **requires `json-output=true`** |
 
 **By default the file comes back, the same kind you sent:**
@@ -262,6 +266,7 @@ need to know *what* was found.
 ```jsonc
 {
   "unwarped": true,                          // whether dewarping actually ran
+  "classifier": "presidio",                  // the model half that drew these boxes
   "pages": [{
     "index": 0, "width": 1654, "height": 2339,
     "boxes": [[120, 88, 410, 118]],
@@ -282,8 +287,9 @@ need to know *what* was found.
   same request without `json-output` would have returned — `application/pdf` for a
   PDF, `image/jpeg` for an image. So one call gets you both the report *and* the
   result; you never re-run the models just to fetch the file.
-- The report does not name the engine — it is fixed per process, so `GET /health`
-  is where to read it.
+- **`classifier` names the model half that actually ran** — the default, or
+  whatever `?classifier=` asked for. The rest of the engine is not in the report:
+  it is fixed per process, so `GET /health` is where to read that.
 
 **`debug=true` — why each box exists.** The report gains one more key, `debug`:
 the detection trace as plain text, the same stream `PII_LOG_LEVEL=DEBUG` writes to
@@ -357,13 +363,14 @@ as are malformed bodies and bad parameters. Errors are `{"detail": "…"}`.
 ## Configuration
 
 All knobs live in [`config.toml`](config.toml) (engine, redaction fill/padding,
-upload limits, worker count). Five environment variables override it, for
+upload limits, worker count). Six environment variables override it, for
 containers where editing the file is awkward:
 
 | Variable | Overrides |
 |---|---|
 | `PII_CONFIG` | the path to the config file itself |
-| `PII_ENGINE` | `[engine].name` |
+| `PII_OCR_BACKEND` | `[engine].ocr_backend` |
+| `PII_CLASSIFIER` | `[engine].classifier` |
 | `PII_UNWARP` | `[redaction].unwarp` |
 | `PII_REDACT_REGIONS` | `[redaction].redact_regions` |
 
@@ -440,31 +447,63 @@ query parameter, so it is fixed per process like the engine. The boxes it produc
 are ordinary boxes: they appear in the JSON report and are editable (and deletable)
 in the web UI like any other.
 
-### Engine presets
+### Engine
 
 A single pipeline (unwarp → OCR → read the page in layout order → classify → draw
-a box) is configured
-along two independent axes, selected by an **engine preset** in `config.toml`:
+a box) is configured along two independent axes in `config.toml`'s `[engine]`,
+which combine freely:
 
-| Preset (`engine.name`) | Inference engine | PII classifier |
+| Key | Values | Default |
 |---|---|---|
-| `native` *(default)* | Paddle native | Presidio (spaCy NER + custom regex recognizers) |
-| `onnx` | ONNX Runtime, multi-core | Presidio — *the same classifier as `native`* |
+| `ocr_backend` | `paddle` \| `onnxruntime` | `onnxruntime` |
+| `classifier` | `presidio` \| `guard-omni` | `presidio` |
 
-The two presets differ **only** in the inference engine: same detection,
-recognition and layout models, same Presidio classifier, same results. The engine
+The two OCR backends differ **only** in the inference runtime: same detection,
+recognition and layout models, same results. The backend
 is one machine-level choice, so it drives **every** Paddle model the page passes
 through — text detection, text recognition and the layout detector alike; a page
 whose text models run on ONNX Runtime while its layout model does not would be a
-configuration disagreeing with itself. `native` is the baseline; `onnx` is the
+configuration disagreeing with itself. `paddle` is the baseline; `onnxruntime` is the
 fastest (~3.3× faster OCR and ~2.6× faster layout detection, at identical output —
 measured over 12 sample pages, all 194 detected regions identical in type and
 pixel box).
-Either axis can be overridden explicitly (`engine.ocr_backend` /
-`engine.classifier`) instead of naming a preset. Presidio is currently the only
-classifier — a zero-shot NER engine (GLiNER) was tried and dropped, since it was
-worse on this corpus and pulled `torch` plus ~4.6 GB of CUDA libraries CPU
-inference never uses.
+
+**The classifier is the one axis a request may choose**, with
+`?classifier=presidio|guard-omni` (`--classifier` on the CLI); `engine.classifier`
+is then the default a request gets when it does not ask, and `GET /health` lists
+what is on offer. It is per request because the two are genuinely different
+detectors, not two runtimes for one model — the OCR backend stays fixed per
+process. A worker builds a classifier the first time a request names it and keeps
+it, so the option costs nothing until it is used and the first such request pays
+a cold start.
+
+| Classifier | What it is |
+|---|---|
+| `presidio` *(default)* | spaCy German NER + custom regex recognizers |
+| `guard-omni` | `hivetrace/gliner-guard-omni`, a GLiNER2 zero-shot span model (encoder `mdeberta-v3-base`) |
+
+`guard-omni` is **not** the GLiNER that was tried and dropped here: different
+library, different vendor, different architecture. The dependency-weight
+objection from that removal does still apply — it pulls `torch` — which is why
+`pyproject.toml` pins torch to CPU wheels rather than accepting the ~4.6 GB of
+CUDA libraries the default linux/amd64 wheel bundles and this service never
+touches.
+
+`guard-omni`'s label vocabulary is a **curated subset** of GLiNER2's own, cut by
+measuring each label over the corpus (see `backend/pii.py` for what each one was
+worth). Two consequences are worth knowing: identifiers have **no model source at
+all** — telling an insurance number from an invoice number is a decision the
+rules make from the label printed beside the value, and a zero-shot extractor
+asked for `document_id` blackens both — and salutations have no counterpart in
+that vocabulary either, so the `SALUT` rule is load-bearing whichever classifier
+runs.
+
+Whichever classifier runs, **the deterministic rules run too**, and that is not a
+detail of the current default. Measured over the 48-document replay corpus, with
+the rules switched off: `guard-omni` alone loses 95 lines the shipped pipeline
+blackens, `presidio` alone loses 224. The rules answer questions that are not
+language questions — an invoice number must stay readable and an insurance number
+must not, and both are "a labeled number" to any zero-shot extractor.
 
 **`engine.det_box_thresh`** (default `0.5`, below PaddleOCR's own `0.6`) is the
 minimum detector score for a text box. It is a *mean* over the box, so a shape,
@@ -705,10 +744,10 @@ backend/            the whole Python package — pipeline, CLI and REST service
   api.py            FastAPI app: request reading, response shaping, static SPA
   cli.py            batch CLI (flags mirror the /api/redact query parameters)
   options.py        pydantic validation for query options and the assemble body
-  config.py         config.toml schema + engine preset resolution
+  config.py         config.toml schema + env overrides
   rules.py          deterministic German patterns (salutation, street, birthdate)
   layout.py         PP-DocLayout regions: whole-region boxes (not line-derived)
-  ocr/ classifiers/ the two swappable axes behind an engine preset
+  ocr/ classifiers/ the two swappable engine axes
 frontend/           Svelte 5 + Vite SPA, calls the REST API directly
 tests/              fast tests stub the models; `-m slow` runs the real ones
 docker/warmup.py    bakes the models into the image at build time
