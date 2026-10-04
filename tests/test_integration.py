@@ -1,6 +1,6 @@
 """End-to-end redaction with real models. Opt-in: `pytest -m slow`.
 
-Loads the default (native) engine and runs on example/GOÄ_Rechnung1.png.
+Loads the default engine, with unwarping on, and runs on example/GOÄ_Rechnung1.png.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageChops
 
-from backend.config import Config
+from backend.config import Config, RedactionConfig
 from backend.factory import build_pipeline
 
 SAMPLE = Path(__file__).resolve().parent.parent / "example" / "GOÄ_Rechnung1.png"
@@ -23,7 +23,9 @@ pytestmark = pytest.mark.slow
 def pipeline():
     if not SAMPLE.is_file():
         pytest.skip(f"sample image not found: {SAMPLE}")
-    return build_pipeline(Config())
+    # Unwarp on explicitly: the default is off, and the composition test below
+    # pins redact() against unwarp -> compute_boxes -> apply_boxes.
+    return build_pipeline(Config(redaction=RedactionConfig(unwarp=True)))
 
 
 def _differs(a: Image.Image, b: Image.Image) -> bool:
