@@ -8,9 +8,10 @@
   import PageEditor from './lib/PageEditor.svelte'
   import LanguageSelect from './lib/LanguageSelect.svelte'
   import { i18n, t } from './lib/i18n.svelte'
-  import { analyze, fetchDebugLog, render, ApiError } from './lib/api'
+  import { analyze, fetchClassifiers, fetchDebugLog, render, ApiError } from './lib/api'
+  import type { AnalyzeOptions } from './lib/api'
   import { DEFAULT_DPI, DEFAULT_UNWARP } from './lib/types'
-  import type { Box, Dpi, OutputFormat, Page, Status, Tool } from './lib/types'
+  import type { Box, OutputFormat, Page, Status, Tool } from './lib/types'
   import { version as appVersion } from '../package.json'
 
   let status = $state<Status>('idle')
@@ -27,12 +28,17 @@
   /** Kept so a settings change can re-analyze without asking for the file again. */
   let file = $state<File | null>(null)
 
-  let dpi = $state<Dpi>(DEFAULT_DPI)
-  let unwarp = $state(DEFAULT_UNWARP)
+  let options = $state<AnalyzeOptions>({
+    dpi: DEFAULT_DPI,
+    unwarp: DEFAULT_UNWARP,
+    classifier: null,
+  })
+  /** Empty until `/health` answers; then the select appears if there is a choice. */
+  let classifiers = $state<string[]>([])
   /** Sticky: any hand edit since the last analyze, so we can warn before discarding them. */
   let boxesEdited = $state(false)
   /** A settings change waiting on the confirm dialog. */
-  let pending = $state<{ dpi: Dpi; unwarp: boolean } | null>(null)
+  let pending = $state<AnalyzeOptions | null>(null)
 
   /** The detection trace, once fetched; null while the dialog is closed. */
   let debugLog = $state<string | null>(null)
@@ -41,6 +47,15 @@
   const busy = $derived(status === 'analyzing' || rendering)
   const page = $derived(pages[current] ?? null)
   const m = $derived(t())
+
+  // The server's default, not a hard-coded one: the config picks it. A failed
+  // lookup only hides the select — requests then omit the parameter.
+  fetchClassifiers()
+    .then((c) => {
+      classifiers = c.available
+      options.classifier ??= c.default
+    })
+    .catch(() => {})
 
   // index.html carries `lang="en"` and the English title for the pre-mount moment;
   // once we know the locale, the document shell follows it.
@@ -66,7 +81,7 @@
     boxesEdited = false
     status = 'analyzing'
     try {
-      pages = await analyze(source, { dpi, unwarp })
+      pages = await analyze(source, options)
       status = 'editing'
     } catch (e) {
       // An ApiError carries the backend's own English `detail`, shown as-is.
@@ -81,11 +96,15 @@
    * A settings change is only meaningful if detection runs again, so it re-analyzes —
    * after asking, if that would throw away hand-drawn or hand-deleted boxes.
    */
-  function requestSettings(next: { dpi: Dpi; unwarp: boolean }) {
-    if (next.dpi === dpi && next.unwarp === unwarp) return
+  function requestSettings(next: AnalyzeOptions) {
+    if (
+      next.dpi === options.dpi &&
+      next.unwarp === options.unwarp &&
+      next.classifier === options.classifier
+    )
+      return
     if (status !== 'editing' || !file) {
-      dpi = next.dpi
-      unwarp = next.unwarp
+      options = next
       return
     }
     if (boxesEdited) {
@@ -95,9 +114,8 @@
     applySettings(next)
   }
 
-  function applySettings(next: { dpi: Dpi; unwarp: boolean }) {
-    dpi = next.dpi
-    unwarp = next.unwarp
+  function applySettings(next: AnalyzeOptions) {
+    options = next
     if (file) runAnalyze(file)
   }
 
@@ -144,7 +162,7 @@
       const blob = await render(
         pages.map((p) => ({ image: p.image, boxes: p.boxes })),
         format,
-        dpi,
+        options.dpi,
       )
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -170,7 +188,7 @@
     debugBusy = true
     errorMsg = null
     try {
-      debugLog = await fetchDebugLog(file, { dpi, unwarp })
+      debugLog = await fetchDebugLog(file, options)
     } catch (e) {
       errorMsg = e instanceof ApiError ? e.message : m.errors.debugFailed
     } finally {
@@ -221,10 +239,9 @@
   {#if status === 'idle'}
     <FileDrop onselect={onSelectFile} onerror={(m) => (errorMsg = m)} disabled={busy} />
     <Settings
-      {dpi}
-      {unwarp}
-      onDpiChange={(d) => requestSettings({ dpi: d, unwarp })}
-      onUnwarpChange={(u) => requestSettings({ dpi, unwarp: u })}
+      {options}
+      {classifiers}
+      onChange={requestSettings}
       disabled={busy}
     />
   {:else}
@@ -237,11 +254,10 @@
       {busy}
       {rendering}
       downloadLabel={inputKind === 'pdf' ? m.toolbar.downloadPdf : m.toolbar.downloadImage}
-      {dpi}
-      {unwarp}
+      {options}
+      {classifiers}
       dpiDisabled={inputKind === 'image'}
-      onDpiChange={(d) => requestSettings({ dpi: d, unwarp })}
-      onUnwarpChange={(u) => requestSettings({ dpi, unwarp: u })}
+      onOptionsChange={requestSettings}
       onDelete={deleteSelected}
       onDownload={download}
       onSelectFile={onSelectFile}

@@ -46,6 +46,8 @@ export const de: Messages = {
     resolutionDisabledTitle: 'Die Auflösung gilt nur für PDF-Dateien',
     unwarp: 'Entzerren',
     unwarpTitle: 'Fotografierte Seite vor der Texterkennung begradigen',
+    classifier: 'Modell',
+    classifierTitle: 'Das Modell, das personenbezogene Daten im erkannten Text findet',
     language: 'Sprache',
   },
   dialog: {

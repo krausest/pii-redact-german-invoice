@@ -51,6 +51,8 @@ export const en = {
     resolutionDisabledTitle: 'Resolution applies to PDF input only',
     unwarp: 'Unwarp',
     unwarpTitle: 'Flatten a photographed page before detecting text',
+    classifier: 'Model',
+    classifierTitle: 'The model that detects PII in the recognized text',
     language: 'Language',
   },
   dialog: {

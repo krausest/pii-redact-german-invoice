@@ -2,8 +2,9 @@
   import Icon from './icons/Icon.svelte'
   import FileDrop from './FileDrop.svelte'
   import Settings from './Settings.svelte'
+  import type { AnalyzeOptions } from './api'
   import { t } from './i18n.svelte'
-  import type { Dpi, Tool } from './types'
+  import type { Tool } from './types'
 
   let {
     tool = $bindable(),
@@ -14,11 +15,10 @@
     busy = false,
     rendering = false,
     downloadLabel,
-    dpi,
-    unwarp,
+    options,
+    classifiers = [],
     dpiDisabled = false,
-    onDpiChange,
-    onUnwarpChange,
+    onOptionsChange,
     onDelete,
     onDownload,
     onSelectFile,
@@ -33,11 +33,10 @@
     rendering?: boolean
     /** Required, not defaulted — a default would bake English into the component. */
     downloadLabel: string
-    dpi: Dpi
-    unwarp: boolean
+    options: AnalyzeOptions
+    classifiers?: string[]
     dpiDisabled?: boolean
-    onDpiChange: (dpi: Dpi) => void
-    onUnwarpChange: (unwarp: boolean) => void
+    onOptionsChange: (next: AnalyzeOptions) => void
     onDelete: () => void
     onDownload: () => void
     onSelectFile: (file: File) => void
@@ -86,11 +85,10 @@
 
   <Settings
     variant="inline"
-    {dpi}
-    {unwarp}
+    {options}
+    {classifiers}
     {dpiDisabled}
-    {onDpiChange}
-    {onUnwarpChange}
+    onChange={onOptionsChange}
     disabled={busy}
   />
 

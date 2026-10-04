@@ -1,20 +1,20 @@
 <script lang="ts">
+  import type { AnalyzeOptions } from './api'
   import { t } from './i18n.svelte'
   import { DPI_CHOICES, type Dpi } from './types'
 
   let {
-    dpi,
-    unwarp,
-    onDpiChange,
-    onUnwarpChange,
+    options,
+    classifiers = [],
+    onChange,
     disabled = false,
     dpiDisabled = false,
     variant = 'panel',
   }: {
-    dpi: Dpi
-    unwarp: boolean
-    onDpiChange: (dpi: Dpi) => void
-    onUnwarpChange: (unwarp: boolean) => void
+    options: AnalyzeOptions
+    /** What `/health` offers; the select is hidden unless there is a choice. */
+    classifiers?: string[]
+    onChange: (next: AnalyzeOptions) => void
     disabled?: boolean
     /** DPI only affects PDF input, so it is greyed out once an image is loaded. */
     dpiDisabled?: boolean
@@ -29,13 +29,18 @@
   // right after the callback gives the new value if the parent took it, the old one
   // if it deferred — either way the element ends up showing the truth.
   function pickDpi(el: HTMLSelectElement) {
-    onDpiChange(Number(el.value) as Dpi)
-    el.value = String(dpi)
+    onChange({ ...options, dpi: Number(el.value) as Dpi })
+    el.value = String(options.dpi)
   }
 
   function pickUnwarp(el: HTMLInputElement) {
-    onUnwarpChange(el.checked)
-    el.checked = unwarp
+    onChange({ ...options, unwarp: el.checked })
+    el.checked = options.unwarp
+  }
+
+  function pickClassifier(el: HTMLSelectElement) {
+    onChange({ ...options, classifier: el.value })
+    el.value = options.classifier ?? ''
   }
 </script>
 
@@ -44,7 +49,7 @@
     <!-- The options read "300 dpi", so the toolbar drops the caption to stay on one line. -->
     {#if variant === 'panel'}<span class="caption">{m.settings.resolution}</span>{/if}
     <select
-      value={String(dpi)}
+      value={String(options.dpi)}
       disabled={disabled || dpiDisabled}
       aria-label={m.settings.resolution}
       title={dpiDisabled ? m.settings.resolutionDisabledTitle : m.settings.resolutionTitle}
@@ -59,13 +64,31 @@
   <label class="check" class:disabled>
     <input
       type="checkbox"
-      checked={unwarp}
+      checked={options.unwarp}
       {disabled}
       title={m.settings.unwarpTitle}
       onchange={(e) => pickUnwarp(e.currentTarget)}
     />
     <span class="caption">{m.settings.unwarp}</span>
   </label>
+
+  {#if classifiers.length > 1}
+    <label class:disabled>
+      {#if variant === 'panel'}<span class="caption">{m.settings.classifier}</span>{/if}
+      <!-- Model names, not prose: shown as the API spells them, in every locale. -->
+      <select
+        value={options.classifier ?? ''}
+        {disabled}
+        aria-label={m.settings.classifier}
+        title={m.settings.classifierTitle}
+        onchange={(e) => pickClassifier(e.currentTarget)}
+      >
+        {#each classifiers as name}
+          <option value={name}>{name}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
 </div>
 
 <style>
