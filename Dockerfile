@@ -39,6 +39,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
     PADDLE_PDX_CACHE_HOME=/app/.paddle_cache \
+    HF_HOME=/app/.hf_cache \
     PII_STATIC_DIR=/app/static
 
 # --- Dependency layer (cached across source changes) ---
@@ -55,8 +56,8 @@ RUN uv sync --frozen --no-default-groups
 
 # --- Bake every model into the image (offline runtime) ---
 # HF_HUB_OFFLINE=0 is set for this step only so the models may download; the ENV
-# below forces offline at runtime. Populates /app/.paddle_cache. Nothing reaches
-# HuggingFace any more, so the offline flags are now a plain network guard.
+# below forces offline at runtime. Populates /app/.paddle_cache and, for guard-omni,
+# /app/.hf_cache — under /app, not root's home, so the runtime user can read it.
 # `--no-sync`: don't let `uv run` re-sync (which would re-add the dev group).
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 uv run --no-sync python warmup.py
 

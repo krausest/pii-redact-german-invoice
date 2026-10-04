@@ -81,7 +81,7 @@ class RedactionConfig(BaseModel):
     fill: tuple[int, int, int] = (0, 0, 0)
     padding: Annotated[int, Field(ge=0)] = 2
     score_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.4
-    unwarp: bool = True
+    unwarp: bool = False
     # PDF rasterization DPI, max pages accepted, and JPEG quality for the rendered
     # output (visually lossless at ~90, much smaller than PNG). The bounds are the
     # same ones the matching query parameters are held to.
@@ -102,10 +102,6 @@ class ApiConfig(BaseModel):
     max_upload_bytes: Annotated[int, Field(ge=1)] = 30 * 1024 * 1024
     input_content_types: tuple[str, ...] = ("image/png", "image/jpeg", "application/pdf")
     max_image_pixels: Annotated[int, Field(ge=1)] = 40_000_000
-    host: str = "0.0.0.0"
-    port: Annotated[int, Field(ge=1, le=65535)] = 8000
-    workers: Annotated[int, Field(ge=1)] = 2
-    request_timeout_s: Annotated[int, Field(ge=1)] = 120
     max_concurrent_per_worker: Annotated[int, Field(ge=1)] = 1
 
 

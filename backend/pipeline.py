@@ -45,7 +45,7 @@ class RedactionPipeline:
         unwarper: DocUnwarper | None = None,
         fill: tuple[int, int, int] = (0, 0, 0),
         padding: int = 2,
-        unwarp_enabled: bool = True,
+        unwarp_enabled: bool = False,
         unwarper_factory: Callable[[], DocUnwarper] | None = None,
         layout: PaddleLayoutDetector | None = None,
         classifier_factories: dict[str, Callable[[], Classifier]] | None = None,

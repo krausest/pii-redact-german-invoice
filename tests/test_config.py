@@ -91,9 +91,10 @@ def test_env_rejects_a_non_boolean(tmp_path, monkeypatch, env):
 
 
 def test_api_values_parsed(tmp_path):
-    cfg = load_config(_write(tmp_path, "[api]\nmax_upload_bytes = 123\nworkers = 4\n"))
+    body = "[api]\nmax_upload_bytes = 123\nmax_concurrent_per_worker = 4\n"
+    cfg = load_config(_write(tmp_path, body))
     assert cfg.api.max_upload_bytes == 123
-    assert cfg.api.workers == 4
+    assert cfg.api.max_concurrent_per_worker == 4
 
 
 # -- a bad config fails at load, not on the first request -------------------- #
@@ -108,7 +109,8 @@ def test_api_values_parsed(tmp_path):
         ('[engine]\nocr_backend = "nope"\n', "ocr_backend"),  # not a backend
         ('[engine]\nclassifier = "nope"\n', "classifier"),  # not a classifier
         ("[engine]\ndet_box_thresh = 1.5\n", "det_box_thresh"),  # not a probability
-        ("[api]\nworkers = 0\n", "workers"),
+        ("[api]\nmax_concurrent_per_worker = 0\n", "max_concurrent_per_worker"),
+        ("[api]\nworkers = 2\n", "workers"),  # removed key: set -w on gunicorn
         ("[redaction.layout]\nthreshold = 0.0\n", "threshold"),  # not a probability
         ("[redaction.layout]\nthreshold = 1.5\n", "threshold"),
         ("[redaction.layout]\nmodel = \"x\"\n", "model"),  # typo

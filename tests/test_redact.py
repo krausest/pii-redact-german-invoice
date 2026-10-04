@@ -137,7 +137,7 @@ def test_png_in_jpeg_out(png_bytes):
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("image/jpeg")
     assert Image.open(io.BytesIO(r.content)).format == "JPEG"
-    assert fake.calls == ["unwarp", "compute_boxes", "apply_boxes"]
+    assert fake.calls == ["compute_boxes", "apply_boxes"]  # unwarp is off by default
 
 
 def test_jpeg_in_jpeg_out(jpeg_bytes):
@@ -174,13 +174,12 @@ def test_file_response_carries_no_metadata(png_bytes):
     assert not [h for h in r.headers if h.lower().startswith("x-redact")]
 
 
-def test_unwarp_false_skips_unwarping(png_bytes):
+def test_unwarp_true_unwarps_first(png_bytes):
     client, fake = build_client()
     with client:
-        r = client.post(f"{URL}?unwarp=false", content=png_bytes, headers=PNG)
+        r = client.post(f"{URL}?unwarp=true", content=png_bytes, headers=PNG)
     assert r.status_code == 200
-    assert "unwarp" not in fake.calls
-    assert "compute_boxes" in fake.calls  # detection always runs
+    assert fake.calls == ["unwarp", "compute_boxes", "apply_boxes"]
 
 
 # -- the JSON report --------------------------------------------------------- #
@@ -191,7 +190,7 @@ def test_json_report_shape(png_bytes):
     assert r.status_code == 200
     body = r.json()
     assert "engine" not in body  # the engine is fixed per process — read it from /health
-    assert body["unwarped"] is True
+    assert body["unwarped"] is False
     assert body["redacted"]["content_type"] == "image/jpeg"  # image in, image out
     page = body["pages"][0]
     assert page["index"] == 0
