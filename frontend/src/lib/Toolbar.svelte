@@ -21,7 +21,11 @@
     onOptionsChange,
     onDelete,
     onDownload,
-    onSelectFile,
+    onDownloadAll,
+    downloadAllReady = false,
+    zipping = false,
+    uploadDisabled = false,
+    onSelectFiles,
     onFileError,
   }: {
     tool: Tool
@@ -39,7 +43,14 @@
     onOptionsChange: (next: AnalyzeOptions) => void
     onDelete: () => void
     onDownload: () => void
-    onSelectFile: (file: File) => void
+    /** Absent with a single document: the ZIP button only exists for a batch. */
+    onDownloadAll?: () => void
+    /** Every document analyzed — a ZIP of a half-finished batch would be a surprise. */
+    downloadAllReady?: boolean
+    zipping?: boolean
+    /** Adding files stays possible while the queue runs; only a download blocks it. */
+    uploadDisabled?: boolean
+    onSelectFiles: (files: File[]) => void
     onFileError?: (message: string) => void
   } = $props()
 
@@ -94,7 +105,7 @@
 
   <div class="spacer"></div>
 
-  <FileDrop variant="inline" onselect={onSelectFile} onerror={onFileError} disabled={busy} />
+  <FileDrop variant="inline" onselect={onSelectFiles} onerror={onFileError} disabled={uploadDisabled} />
 
   <button class="primary" onclick={onDownload} disabled={busy} title={downloadLabel} aria-label={downloadLabel}>
     {#if rendering}
@@ -104,6 +115,23 @@
     {/if}
     {rendering ? m.toolbar.rendering : m.toolbar.download}
   </button>
+
+  {#if onDownloadAll}
+    <button
+      class="primary"
+      onclick={onDownloadAll}
+      disabled={!downloadAllReady || zipping || rendering}
+      title={downloadAllReady ? m.toolbar.downloadAllTitle : m.toolbar.downloadAllWaiting}
+      aria-label={m.toolbar.downloadAllTitle}
+    >
+      {#if zipping}
+        <span class="spinner" aria-hidden="true"></span>
+      {:else}
+        <Icon name="download" size={16} />
+      {/if}
+      {m.toolbar.downloadAll}
+    </button>
+  {/if}
 </div>
 
 <style>

@@ -45,6 +45,12 @@ presidio-analyzer, so it does ship.
 | pytest | MIT |
 | requests | Apache-2.0 |
 
+## JavaScript — `frontend/` runtime (bundled into the shipped static assets)
+
+| Package | License |
+|---|---|
+| fflate | MIT |
+
 ## JavaScript — `frontend/` (build-time only; only the compiled static assets ship, not the source deps)
 
 | Package | License |

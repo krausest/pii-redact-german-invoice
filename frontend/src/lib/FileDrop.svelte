@@ -1,7 +1,8 @@
 <script lang="ts">
   import Icon from './icons/Icon.svelte'
   import { t } from './i18n.svelte'
-  import { ACCEPT_ATTR, pickUpload, type UploadError } from './upload'
+  import { ACCEPT_ATTR, type UploadError } from './upload'
+  import { expandUpload } from './zip'
 
   let {
     onselect,
@@ -9,7 +10,8 @@
     disabled = false,
     variant = 'panel',
   }: {
-    onselect: (file: File) => void
+    /** Every document of the drop, ZIPs unpacked; never called with a partial batch. */
+    onselect: (files: File[]) => void
     onerror?: (message: string) => void
     disabled?: boolean
     /** `panel`: full-width idle target. `inline`: toolbar-sized "new upload" control. */
@@ -24,23 +26,32 @@
   const ERROR_MESSAGES: Record<UploadError, () => string> = {
     'unsupported-type': () => m.errors.unsupportedType,
     'too-large': () => m.errors.tooLarge,
+    'bad-zip': () => m.errors.badZip,
+    'empty-zip': () => m.errors.emptyZip,
   }
 
-  function pick(file: File | undefined | null) {
-    // The validator reports a reason; the sentence is picked here, so the parent
+  async function pick(list: FileList | undefined | null) {
+    const input = Array.from(list ?? [])
+    if (!input.length || disabled) return
+    // The validators report reasons; the sentence is picked here, so the parent
     // keeps receiving a ready-to-render message.
-    pickUpload(file, {
-      disabled,
-      onSelect: onselect,
-      onError: (err) => onerror?.(ERROR_MESSAGES[err]()),
-    })
+    const result = await expandUpload(input)
+    if ('files' in result) {
+      onselect(result.files)
+    } else if (result.rejected.length === 1 && input.length === 1) {
+      onerror?.(ERROR_MESSAGES[result.rejected[0].error]())
+    } else {
+      onerror?.(
+        m.errors.rejected(result.rejected.map((r) => `${r.name} (${ERROR_MESSAGES[r.error]()})`)),
+      )
+    }
   }
 
   function onDrop(e: DragEvent) {
     e.preventDefault()
     dragging = false
     if (disabled) return
-    pick(e.dataTransfer?.files?.[0])
+    pick(e.dataTransfer?.files)
   }
 
   function onDragOver(e: DragEvent) {
@@ -50,7 +61,7 @@
 
   function onChange(e: Event) {
     const target = e.target as HTMLInputElement
-    pick(target.files?.[0])
+    pick(target.files)
     target.value = '' // allow re-selecting the same file
   }
 </script>
@@ -74,7 +85,7 @@
   ondragover={onDragOver}
   ondragleave={() => (dragging = false)}
 >
-  <input bind:this={inputEl} type="file" accept={ACCEPT_ATTR} hidden onchange={onChange} {disabled} />
+  <input bind:this={inputEl} type="file" accept={ACCEPT_ATTR} multiple hidden onchange={onChange} {disabled} />
   {#if variant === 'panel'}
     <span class="icon-wrap">
       <Icon name="upload" size={40} />

@@ -80,6 +80,16 @@ The Svelte SPA in [`frontend/`](frontend/) calls the REST API. Run it two ways.
 > document is loaded re-runs detection, asking first if boxes were edited by hand.
 
 > [!TIP]
+> **Several documents at once.** Drop or select several files, or a ZIP of them
+> (subfolders kept, `__MACOSX`/dotfiles ignored). A ZIP or drop holding anything
+> that is not a PNG, JPEG or PDF within the size limit is rejected as a whole. The
+> documents are analyzed one after another right after the upload; a list beside
+> the editor shows their progress, and every finished one opens instantly. Settings
+> apply to the document on screen; *ZIP* downloads every finished document. All of
+> it is held in the browser tab only — the server stays stateless, and a reload
+> loses the batch (the browser warns first).
+
+> [!TIP]
 > **Debug log.** The footer's *Debug log* button re-runs detection on the loaded
 > document with [`debug=true`](#post-apiredact--find-the-pii-and-black-it-out) and
 > shows the trace — why every box was suggested, and what was considered and

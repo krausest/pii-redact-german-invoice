@@ -1,4 +1,3 @@
-export type Status = 'idle' | 'analyzing' | 'editing'
 export type Tool = 'select' | 'draw'
 /** What /api/assemble can produce. */
 export type OutputFormat = 'pdf' | 'jpeg'
