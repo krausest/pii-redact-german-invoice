@@ -44,8 +44,8 @@ export const en = {
     dropStrong: 'Drag & drop',
     dropAfter: ' PNG, JPEG, PDF or ZIP files here',
     orClick: 'or click to choose files',
-    newUpload: 'Add files',
-    inlineTitle: 'Add files — click or drop',
+    newUpload: 'New upload',
+    inlineTitle: 'Replace the current documents — click or drop',
   },
   settings: {
     group: 'Analysis settings',
@@ -65,11 +65,15 @@ export const en = {
     reanalyze: 'Re-analyze',
     cancel: 'Cancel',
     discardAllTitle: 'Discard all documents?',
-    discardAllMessage: 'Every loaded document and every box you edited by hand will be lost.',
+    discardAllMessage: 'Some documents have not been downloaded since their last change. They will be lost.',
     discardAllConfirm: 'Discard all',
     removeTitle: 'Remove this document?',
-    removeMessage: (name: string) => `The boxes you edited by hand in ${name} will be lost.`,
+    removeMessage: (name: string) => `${name} has not been downloaded since its last change. It will be lost.`,
     removeConfirm: 'Remove',
+    replaceTitle: 'Replace the current documents?',
+    replaceMessage: (n: number) =>
+      `${n} document${n === 1 ? ' has' : 's have'} not been downloaded since ${n === 1 ? 'its' : 'their'} last change and will be lost.`,
+    replaceConfirm: 'Replace',
   },
   docs: {
     list: 'Documents',

@@ -39,8 +39,8 @@ export const de: Messages = {
     dropStrong: 'hierher ziehen',
     dropAfter: '',
     orClick: 'oder klicken, um Dateien auszuwählen',
-    newUpload: 'Dateien hinzufügen',
-    inlineTitle: 'Dateien hinzufügen — klicken oder hierher ziehen',
+    newUpload: 'Neuer Upload',
+    inlineTitle: 'Aktuelle Dokumente ersetzen — klicken oder hierher ziehen',
   },
   settings: {
     group: 'Analyse-Einstellungen',
@@ -60,11 +60,15 @@ export const de: Messages = {
     reanalyze: 'Neu analysieren',
     cancel: 'Abbrechen',
     discardAllTitle: 'Alle Dokumente verwerfen?',
-    discardAllMessage: 'Alle geladenen Dokumente und alle von Hand bearbeiteten Markierungen gehen verloren.',
+    discardAllMessage: 'Einige Dokumente wurden seit der letzten Änderung nicht heruntergeladen. Sie gehen verloren.',
     discardAllConfirm: 'Alle verwerfen',
     removeTitle: 'Dokument entfernen?',
-    removeMessage: (name: string) => `Die von Hand bearbeiteten Markierungen in ${name} gehen verloren.`,
+    removeMessage: (name: string) => `${name} wurde seit der letzten Änderung nicht heruntergeladen und geht verloren.`,
     removeConfirm: 'Entfernen',
+    replaceTitle: 'Aktuelle Dokumente ersetzen?',
+    replaceMessage: (n: number) =>
+      `${n} Dokument${n === 1 ? ' wurde' : 'e wurden'} seit der letzten Änderung nicht heruntergeladen und ${n === 1 ? 'geht' : 'gehen'} verloren.`,
+    replaceConfirm: 'Ersetzen',
   },
   docs: {
     list: 'Dokumente',

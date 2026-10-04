@@ -19,7 +19,12 @@ the server stores nothing.
 Resolution, dewarping and classifier are set per document; changing one re-runs
 the analysis for that document (asking first if boxes were edited). The footer's
 *Debug log* re-runs detection with `debug=true` and shows the trace without
-touching your edits. Nothing survives a reload; the browser warns before leaving.
+touching your edits.
+
+*New upload* replaces the loaded documents. Nothing survives a reload either. The
+app asks before replacing, removing or discarding — and the browser warns before
+leaving — only while a document would be lost: still being analyzed, or not
+downloaded (alone or in a ZIP) since its last change.
 
 ## Code map
 

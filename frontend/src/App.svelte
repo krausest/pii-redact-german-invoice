@@ -11,7 +11,7 @@
   import { i18n, t } from './lib/i18n.svelte'
   import { fetchClassifiers, fetchDebugLog, render, ApiError } from './lib/api'
   import type { AnalyzeOptions } from './lib/api'
-  import { Documents, type Doc } from './lib/documents.svelte'
+  import { Documents, isUnsaved, type Doc } from './lib/documents.svelte'
   import { zipFiles } from './lib/zip'
   import { DEFAULT_DPI, DEFAULT_UNWARP } from './lib/types'
   import type { Box, OutputFormat, Tool } from './lib/types'
@@ -42,6 +42,7 @@
     | { kind: 'settings'; id: number; options: AnalyzeOptions }
     | { kind: 'remove'; id: number }
     | { kind: 'discard-all' }
+    | { kind: 'replace'; files: File[] }
   let confirm = $state<Confirm | null>(null)
 
   /** The detection trace, once fetched; null while the dialog is closed. */
@@ -56,6 +57,8 @@
   const busy = $derived(doc?.status !== 'ready' || rendering || zipping)
   const allSettled = $derived(store.docs.every((d) => d.status === 'ready' || d.status === 'error'))
   const anyReady = $derived(store.docs.some((d) => d.status === 'ready'))
+  /** What discarding the batch would lose — the one rule behind every confirmation. */
+  const unsaved = $derived(store.docs.filter(isUnsaved))
 
   // The server's default, not a hard-coded one: the config picks it. A failed
   // lookup only hides the select — requests then omit the parameter.
@@ -73,9 +76,9 @@
     document.title = m.app.documentTitle
   })
 
-  // Nothing survives a reload — the documents exist only in this tab.
+  // Nothing survives a reload — warn while anything would be lost.
   $effect(() => {
-    if (!store.docs.length) return
+    if (!unsaved.length) return
     const warn = (e: BeforeUnloadEvent) => e.preventDefault()
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
@@ -106,6 +109,24 @@
     if (wasIdle) focusToolbar()
   }
 
+  /** "New upload" starts over — asking first if that loses anything. */
+  function requestReplace(files: File[]) {
+    if (unsaved.length) confirm = { kind: 'replace', files }
+    else replaceAll(files)
+  }
+
+  function replaceAll(files: File[]) {
+    store.clear()
+    selectDoc(null)
+    debugLog = null
+    onSelectFiles(files)
+  }
+
+  function requestDiscardAll() {
+    if (unsaved.length) confirm = { kind: 'discard-all' }
+    else reset()
+  }
+
   function sameOptions(a: AnalyzeOptions, b: AnalyzeOptions) {
     return a.dpi === b.dpi && a.unwarp === b.unwarp && a.classifier === b.classifier
   }
@@ -133,7 +154,8 @@
   }
 
   function requestRemove(id: number) {
-    if (store.get(id)?.boxesEdited) confirm = { kind: 'remove', id }
+    const d = store.get(id)
+    if (d && isUnsaved(d)) confirm = { kind: 'remove', id }
     else removeDoc(id)
   }
 
@@ -153,12 +175,20 @@
     if (next?.kind === 'settings') applySettings(next.id, next.options)
     else if (next?.kind === 'remove') removeDoc(next.id)
     else if (next?.kind === 'discard-all') reset()
+    else if (next?.kind === 'replace') replaceAll(next.files)
   }
 
   const confirmText = $derived.by(() => {
     if (confirm?.kind === 'remove') {
       const name = store.get(confirm.id)?.name ?? ''
       return { title: m.dialog.removeTitle, message: m.dialog.removeMessage(name), label: m.dialog.removeConfirm }
+    }
+    if (confirm?.kind === 'replace') {
+      return {
+        title: m.dialog.replaceTitle,
+        message: m.dialog.replaceMessage(unsaved.length),
+        label: m.dialog.replaceConfirm,
+      }
     }
     if (confirm?.kind === 'discard-all') {
       return { title: m.dialog.discardAllTitle, message: m.dialog.discardAllMessage, label: m.dialog.discardAllConfirm }
@@ -182,6 +212,7 @@
     selected = page.boxes.length - 1
     tool = 'select'
     doc.boxesEdited = true
+    doc.downloaded = false
   }
 
   function deleteSelected() {
@@ -189,6 +220,7 @@
     page.boxes.splice(selected, 1)
     selected = null
     doc.boxesEdited = true
+    doc.downloaded = false
   }
 
   function goto(index: number) {
@@ -221,7 +253,9 @@
     rendering = true
     errorMsg = null
     try {
-      save(await renderDoc(doc), outputName(doc).split('/').pop()!)
+      const target = doc
+      save(await renderDoc(target), outputName(target).split('/').pop()!)
+      target.downloaded = true
     } catch (e) {
       errorMsg = e instanceof ApiError ? e.message : m.errors.renderFailed
     } finally {
@@ -237,6 +271,7 @@
     zipping = true
     errorMsg = null
     const entries: { path: string; blob: Blob }[] = []
+    const included: Doc[] = []
     const used = new Set<string>()
     let skipped = 0
     try {
@@ -252,11 +287,15 @@
           for (let n = 2; used.has(path); n++) path = outputName(d).replace(/(\.[^.]+)$/, ` (${n})$1`)
           used.add(path)
           entries.push({ path, blob })
+          included.push(d)
         } catch {
           skipped++
         }
       }
-      if (entries.length) save(await zipFiles(entries), 'redacted-documents.zip')
+      if (entries.length) {
+        save(await zipFiles(entries), 'redacted-documents.zip')
+        for (const d of included) d.downloaded = true
+      }
       if (skipped) errorMsg = m.errors.zipSkipped(skipped)
     } catch {
       errorMsg = m.errors.zipFailed
@@ -298,11 +337,10 @@
     // and would otherwise reset the document sitting behind it.
     if (confirm || debugLog !== null) return
     if (!store.docs.length) return
-    // A batch is minutes of analysis: one stray Escape must not throw it away, so
-    // only a single document resets this way — a batch has "Discard all".
-    if (e.key === 'Escape' && !batch && !rendering) {
+    // Same rule as "Discard all": asks first if anything would be lost.
+    if (e.key === 'Escape' && !rendering && !zipping) {
       e.preventDefault()
-      reset()
+      requestDiscardAll()
       return
     }
     if (busy) return
@@ -332,7 +370,7 @@
           {selectedId}
           onselect={selectDoc}
           onremove={requestRemove}
-          ondiscardAll={() => (confirm = { kind: 'discard-all' })}
+          ondiscardAll={requestDiscardAll}
           disabled={zipping}
         />
       {/if}
@@ -356,7 +394,7 @@
           downloadAllReady={allSettled && anyReady}
           {zipping}
           uploadDisabled={rendering || zipping}
-          onSelectFiles={onSelectFiles}
+          onSelectFiles={requestReplace}
           onFileError={(msg) => (errorMsg = msg)}
         />
         {#if doc.status === 'queued' || doc.status === 'analyzing'}

@@ -19,6 +19,14 @@ export interface Doc {
   current: number
   /** Sticky: any hand edit since the last analysis, so discarding it asks first. */
   boxesEdited: boolean
+  /** Saved (alone or in a ZIP) since the last change. */
+  downloaded: boolean
+}
+
+/** Discarding it would lose work: analysis in progress, or a result not downloaded. */
+export function isUnsaved(d: Doc): boolean {
+  if (d.status === 'queued' || d.status === 'analyzing') return true
+  return d.status === 'ready' && !d.downloaded
 }
 
 /**
@@ -52,6 +60,7 @@ export class Documents {
         pages: [],
         current: 0,
         boxesEdited: false,
+        downloaded: false,
       })
       this.#queue.push(id)
       ids.push(id)
@@ -70,6 +79,7 @@ export class Documents {
     doc.pages = []
     doc.current = 0
     doc.boxesEdited = false
+    doc.downloaded = false
     this.#queue = [id, ...this.#queue.filter((q) => q !== id)]
     this.#pump()
   }
