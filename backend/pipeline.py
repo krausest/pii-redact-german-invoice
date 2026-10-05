@@ -72,7 +72,6 @@ class RedactionPipeline:
         layout: PaddleLayoutDetector | None = None,
         classifier_factories: dict[str, Callable[[], Classifier]] | None = None,
         default_classifier: str | None = None,
-        region_ratio: float = 0.4,
     ) -> None:
         self._ocr = ocr
         # Two ways in, one store. `classifier=` is the direct one — a test hands
@@ -96,8 +95,6 @@ class RedactionPipeline:
         # both "no model" and "don't run it", so there is no second flag to
         # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
         self._layout = layout
-        # Process default for the whole-region ratio rule; a call may override it.
-        self._region_ratio = region_ratio
         # Guards both lazy model builds below. The unwarper's was an unguarded
         # race, safe only because `api.max_concurrent_per_worker` defaults to 1;
         # a second one of the same kind would be repeating a known bug rather
@@ -168,7 +165,6 @@ class RedactionPipeline:
         trace: Trace | None = None,
         regions: list[LayoutRegion] | None = None,
         classifier: str | None = None,
-        region_ratio: float | None = None,
     ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
         flagged OCR line, plus — when configured — the whole-region boxes the
@@ -193,9 +189,6 @@ class RedactionPipeline:
         it arrives as a name rather than an object: the pipeline owns the
         registry and builds on first use, so a caller can offer the choice
         without every worker holding every model.
-
-        ``region_ratio`` overrides the process default for the whole-region
-        ratio rule (see :func:`backend.layout.region_boxes`); 1.0 switches it off.
 
         ``trace`` collects the per-line commentary — why each box exists — for a
         caller that was asked for it (``?debug=true``). Omitting it still logs
@@ -285,8 +278,7 @@ class RedactionPipeline:
 
         # No gate on the detector: without one there are no regions, and
         # `region_boxes` over none is empty.
-        ratio = self._region_ratio if region_ratio is None else region_ratio
-        region_hits = region_boxes(lines, regions, redacted, pad, ratio, set(keep))
+        region_hits = region_boxes(lines, regions, redacted, pad, set(keep))
         signatures = signature_boxes(lines, image.width, pad)
         trace_page(
             trace, lines, regions, order, spoken, found, keep, region_hits, signatures, notes
@@ -337,7 +329,7 @@ class RedactionPipeline:
         copied with the detected regions outlined and labeled and each line
         group's bounding box drawn — what ``--debug-layout`` writes to
         ``<stem>_layout.jpg``. It shows what the detector *saw*, not which
-        regions the majority rule then blackened; only ``backend/cli.py``
+        regions then got blackened; only ``backend/cli.py``
         calls it."""
         if self._layout is None:
             return None

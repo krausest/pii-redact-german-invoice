@@ -11,20 +11,11 @@ anything.
 
 Here a trained layout detector (PP-DocLayout, via the already-installed
 ``paddleocr.LayoutDetection`` — no new dependency) finds typed regions
-(``text``/``table``/``header``/``footer``/``image``/``seal``/…) and two rules
-turn them into boxes:
-
-* a region whose *type* is page furniture or a graphic
-  (:data:`_ALWAYS_BLACKEN`) is blackened whole, whatever it holds. ``image`` is
-  what pays for the QR/DataMatrix pass being switched off on this branch: a
-  Girocode is a graphic, and the detector sees graphics.
-* every other region is blackened whole once *more than* ``ratio`` of its OCR
-  lines were flagged by the per-line pass (``region_ratio`` in the config,
-  ``?region-ratio=`` per request; 1.0 switches this rule off). This is the generic replacement for block growth: a recipient address
-  block is a ``text`` region whose street and ZIP+city lines already match a
-  static rule, so those hits carry the c/o line, the company name and the
-  garbled name line with them — no gap factor anywhere, and it works the same
-  for a sender column, which is what let ``regions.py`` go entirely.
+(``text``/``table``/``header``/``footer``/``image``/``seal``/…). A region whose
+*type* is page furniture or a graphic (:data:`_ALWAYS_BLACKEN`) is blackened
+whole, whatever it holds; every other region only shapes the reading order.
+``image`` is what pays for the QR/DataMatrix pass being switched off on this
+branch: a Girocode is a graphic, and the detector sees graphics.
 
 Only :class:`PaddleLayoutDetector` touches the model; everything else here is
 pure functions over ``LayoutRegion``/``Line``, so the fast suite never loads
@@ -40,13 +31,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 from backend.models import Box, Line
 
-# Blackened on sight, whatever they contain. The ratio rule below could never
-# reach `image` or `seal` anyway — a logo and a practice stamp are pixels, they
-# hold no OCR line, and 0 of 0 clears no bar — so for those two the type is the
-# only evidence there is. `footer` is here because the imprint carries the
-# sender's identity. `header` is not: the detector draws it around the whole
-# letterhead, specialty and practice name included, so it goes by the ratio rule.
-_ALWAYS_BLACKEN = frozenset({"image", "seal", "footer", "aside_text"})
+# Blackened on sight, whatever they contain. A logo and a practice stamp are
+# pixels holding no OCR line, so for those the type is the only evidence there
+# is. `footer` is here because the imprint carries the sender's identity;
+# `footnote` is the detector's other name for that same fine print at the foot
+# of a page. `header` is not: the detector draws it around the whole letterhead,
+# specialty and practice name included.
+_ALWAYS_BLACKEN = frozenset({"image", "seal", "footer", "footnote", "aside_text"})
 
 # Graphics are blackened without holes: a stamp prints the doctor's name and
 # address around the specialty, and punching out a kept line would show them.
@@ -180,8 +171,7 @@ def lines_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list
 def assign_lines(lines: list[Line], regions: list[LayoutRegion]) -> list[list[int]]:
     """Full partition of line indices into groups: one group per region that
     claimed at least one line (in ``regions`` order), then one singleton per
-    line no region contains. Only the debug view needs the partition —
-    :func:`region_boxes` works off :func:`lines_by_region` directly."""
+    line no region contains. Only the debug view needs the partition."""
     per_region = lines_by_region(lines, regions)
     claimed = {i for group in per_region for i in group}
     return [g for g in per_region if g] + [[i] for i in range(len(lines)) if i not in claimed]
@@ -337,13 +327,10 @@ def region_boxes(
     regions: list[LayoutRegion],
     redacted: set[int],
     padding: int,
-    ratio: float,
     keep: set[int] | None = None,
 ) -> list[tuple[int, Box, str]]:
-    """Whole-region boxes as ``(region index, box, why)``.
-
-    A non-furniture region qualifies when *more than* ``ratio`` of its lines are
-    redacted — strictly, so ``ratio=1.0`` disables the rule.
+    """Whole-region boxes as ``(region index, box, why)``, one region of
+    :data:`_ALWAYS_BLACKEN` type at a time.
 
     ``keep`` holds the lines that must stay readable; they are cut out of every
     region box but a graphic's, so one region may yield several boxes.
@@ -352,13 +339,7 @@ def region_boxes(
     itself is padded outwards and so no longer equals the region's own box.
 
     ``redacted`` holds the indices into ``lines`` that the per-line pass
-    flagged. Blank lines are not counted toward the ratio: OCR emits them,
-    nothing can ever redact one, so counting them would only dilute a block
-    below the threshold.
-
-    ``table`` takes part in the ratio rule like any other region; what keeps
-    the item rows readable on a page where enough of them carry a patient name
-    is that the pipeline passes them in ``keep``.
+    flagged: a kept line that was redacted all the same is not cut out.
     """
     holes = [
         Box(ln.left, ln.top, ln.left + ln.width, ln.top + ln.height)
@@ -367,21 +348,12 @@ def region_boxes(
     ]
     out: list[tuple[int, Box, str]] = []
 
-    def blacken(r: int, region: LayoutRegion, why: str) -> None:
+    for r, region in enumerate(regions):
+        if region.label not in _ALWAYS_BLACKEN:
+            continue
         box = _padded(region.box, padding)
         parts = [box] if region.label in _NO_HOLES else subtract(box, holes)
-        out.extend((r, part, why) for part in parts)
-
-    for r, (region, idx) in enumerate(zip(regions, lines_by_region(lines, regions))):
-        if region.label in _ALWAYS_BLACKEN:
-            blacken(r, region, region.label)
-            continue
-        counted = [i for i in idx if lines[i].text.strip()]
-        if not counted:
-            continue
-        hits = sum(1 for i in counted if i in redacted)
-        if hits > ratio * len(counted):
-            blacken(r, region, f"{region.label} {hits}/{len(counted)} lines")
+        out.extend((r, part, region.label) for part in parts)
     return out
 
 

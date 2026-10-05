@@ -18,8 +18,7 @@ the server stores nothing.
 4. **Download:** `POST /api/assemble` turns the pages and kept boxes into the final
    PDF or JPEG — per document, or all finished documents as one ZIP.
 
-Resolution, dewarping, *Whole blocks* (the region ratio rule, off sends
-`region-ratio=1`) and classifier are set per document; changing one re-runs
+Resolution, dewarping and classifier are set per document; changing one re-runs
 the analysis for that document (asking first if boxes were edited). The footer's
 *Debug log* re-runs detection with `debug=true` and shows the trace without
 touching your edits.

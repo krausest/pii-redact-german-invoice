@@ -337,12 +337,11 @@ def test_the_classifier_can_be_chosen_per_request_and_the_report_says_which_ran(
     assert r.json()["classifier"] == "guard-omni"
 
 
-def test_region_ratio_reaches_the_pipeline(png_bytes):
-    client, fake = build_client()
+def test_the_removed_region_ratio_is_an_unknown_parameter(png_bytes):
+    client, _ = build_client()
     with client:
         r = client.post(f"{URL}?region-ratio=1", content=png_bytes, headers=PNG)
-    assert r.status_code == 200
-    assert fake.region_ratio == 1.0
+    assert r.status_code == 400
 
 
 # -- health ------------------------------------------------------------------ #

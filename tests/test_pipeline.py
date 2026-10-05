@@ -174,18 +174,6 @@ def test_a_graphic_region_is_blackened_although_it_holds_no_text():
     assert Box(0, 0, 100, 30) in p.compute_boxes(_page())
 
 
-def test_a_region_goes_whole_once_enough_of_its_lines_are_flagged():
-    """What covers the lines *between* the hits — a c/o line, a company
-    recipient, a name line OCR garbled."""
-    lines = [
-        _line("Muster GmbH", top=10),
-        _line("Musterstrasse 7", top=25),
-        _line("c/o irgendwer", top=40),
-    ]
-    p = _pipeline(lines, [], padding=0, layout=StubLayoutDetector([_region("text", 5, 5, 95, 55)]))
-    assert p.compute_boxes(_page())[-1] == Box(5, 5, 95, 55)
-
-
 def test_regions_are_off_without_a_detector():
     lines = [_line("Muster GmbH", top=10)]
     assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 10, 90, 20)]
@@ -200,11 +188,11 @@ def test_the_clearing_house_keeps_its_name_but_not_its_address():
     assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 30, 90, 40)]
 
 
-def test_a_specialty_line_survives_the_letterhead():
-    """The header goes black around it, and neither the model nor the name
+def test_a_specialty_line_survives_the_imprint():
+    """The footer goes black around it, and neither the model nor the name
     memory reaches it."""
     lines = [_line("Dr. med. Andrea Muster", top=10), _line("Fachärztin für Orthopädie", top=30)]
-    regions = [_region("header", 0, 0, 100, 50)]
+    regions = [_region("footer", 0, 0, 100, 50)]
     p = _pipeline(lines, ["Orthopädie"], padding=0, layout=StubLayoutDetector(regions))
     boxes = p.compute_boxes(_page())
     assert Box(10, 30, 90, 40) not in boxes

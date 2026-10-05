@@ -47,7 +47,6 @@ Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
 | `pdf-dpi` | 36–1200 | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
 | `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it |
-| `region-ratio` | 0–1 | `redaction.layout.region_ratio` | blacken a whole text/table block once *more than* this share of its lines is redacted; `1` switches that off ([details](Redaction.md#layout-regions)) |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report — **requires `json-output=true`** |
 
 ### File response (default)
@@ -109,8 +108,11 @@ line's fate depends on the block it was read in:
   line @(134,175 234x28 conf=99.40): 'Herrn'
       SALUTATION 'Herrn' [rule SALUT 1.00]
       -> REDACT
-  -> region REDACT (text 4/4 lines)
+  -> region keep
 ```
+
+A region of a blackened-whole type (`footer`, `image`, …) ends with
+`-> region REDACT (footer)` instead.
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,

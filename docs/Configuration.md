@@ -21,8 +21,8 @@ process with a message naming the field. A typo is an error, not a no-op.
 The overriding variables are validated like the file. Booleans accept
 `true|false|1|0|yes|no|on|off`.
 
-**Defaults vs. absolute values.** `unwarp`, `classifier`, `pdf_dpi`,
-`jpeg_quality` and `region_ratio` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
+**Defaults vs. absolute values.** `unwarp`, `classifier`, `pdf_dpi`
+and `jpeg_quality` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
 (`--unwarp`) that names the option wins. `ocr_backend`, `det_box_thresh`,
 `redact_regions` and everything under `[api]` are fixed per process.
 
@@ -61,7 +61,6 @@ The layout detector behind the region pass ([details](Redaction.md#layout-region
 | `model_name` | `PP-DocLayout_plus-L` | detector checkpoint; other PP-DocLayout variants swap in by name |
 | `threshold` | `0.35` | minimum detection confidence — below the model's 0.5 because photos score low |
 | `layout_nms` | `true` | drop near-duplicate overlapping detections |
-| `region_ratio` | `0.4` | blacken a whole text/table block once *more than* this share of its lines is redacted; `1.0` switches that off (default for `?region-ratio=`) |
 
 ## `[api]`
 

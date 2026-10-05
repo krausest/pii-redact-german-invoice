@@ -155,7 +155,6 @@ def run_redaction(
             known_names=known_names,
             trace=trace,
             classifier=opts.classifier,
-            region_ratio=opts.region_ratio,
         )
         # apply_boxes fills in place, so redact a copy — `image` is the clean page
         # the boxes refer to, and callers may want both.

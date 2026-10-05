@@ -33,7 +33,6 @@
     dpi: DEFAULT_DPI,
     unwarp: DEFAULT_UNWARP,
     classifier: null,
-    wholeRegions: true,
   })
   /** Empty until `/health` answers; then the select appears if there is a choice. */
   let classifiers = $state<string[]>([])
@@ -132,8 +131,7 @@
     return (
       a.dpi === b.dpi &&
       a.unwarp === b.unwarp &&
-      a.classifier === b.classifier &&
-      a.wholeRegions === b.wholeRegions
+      a.classifier === b.classifier
     )
   }
 

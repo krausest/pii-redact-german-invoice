@@ -35,6 +35,9 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     # -- the recipient block --------------------------------------------------
     ("Herrn", {S}),
     ("Frau Dr. Erika Muster", {S, P}),
+    # A letterhead prints title and name in capitals.
+    ("DR. MED. ANDREA MUSTER, FEBO*", {P}),
+    ("PROF. DR. A. MUSTER", {P}),
     ("Musterstrasse 23", {A}),
     ("Bahnhofweg 5a", {A}),
     # A letterhead prints its address in capitals, and OCR glues the house
@@ -53,6 +56,19 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("Rg.-Nr.: 000123/045678", {I}),
     ("Kd.-Nr. 4711", {I}),
     ("Kundennummer: A-12", {I}),
+    ("Rechnung 123456-123456", {I}),
+    ("RECHNUNG: AB-248", {I}),
+    # Mid-sentence, or too short to be a number rather than a count.
+    ("Bitte begleichen Sie die Rechnung 123456 umgehend", set()),
+    ("Rechnung 1 von 2", set()),
+    ("Re.-Nr.: 123456", {I}),
+    ("BFS-Nr. 1-23456-12345678", {I}),
+    ("RechnNr:1234", {I}),
+    ("Rechn.Nr. 1234 5678 9012 34", {I}),
+    ("Nummer: 12/3456", {I}),
+    ("Nummer 3 der Anlage", set()),
+    ("Re.-Datum: 12.03.2026", set()),
+    ("Rechnung 12.03.2026", set()),
     # A sentence asking for the number carries none.
     ("Bitte bei Zahlung stets Rechnungs-Nr. angeben!", set()),
     ("Rechnungsdatum: 19.03.2026", set()),
@@ -86,6 +102,11 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("Beratung einschl.der Auslagen", set()),
     ("Leistung zzgl.der Sachkosten", set()),
     ("HRB 1234 Musterstadt", {B}),
+    ("Genossenschaftsregisternummer: GnR 123456", {B}),
+    ("Unser IK-Zeichen: 123456 789", {B}),
+    ("IK-Nummer: 1234 567 89", {B}),
+    ("Ust.-ID:DE123456789", {B}),
+    ("USt.-IdNr.: DE123456789", {B}),
     ("IBAN DE00 0000 0000 0000 0000 00 - BIC MUSTDEXXX", {B}),
     # -- the invoice body, which must stay readable ---------------------------
     ("Videodokumentation. Entsprechend Ziffer 612 der GOAe -", set()),
@@ -176,6 +197,41 @@ def test_keep_names_dates_diagnoses_and_the_clearing_house():
     assert keep_indices(lines) == {0: "PVS", 1: "DATE", 2: "DATE", 3: "DIAG", 4: "DIAG", 5: "DIAG"}
 
 
+def test_a_diagnosis_beside_its_label_cell_is_kept():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Diagnose:", 10, 120, width=80),
+        _cell("V.a. Akute Bronchitis, Verruca vulgaris", 100, 120, width=400),
+        _cell("Lumbago, Zephalgie", 103, 142, width=200),
+        _cell("Andrea Muster", 10, 164, width=150),
+        _cell("Musterstraße 1", 103, 250, width=150),
+    ]
+    assert keep_indices(lines) == {0: "DIAG", 1: "DIAG", 2: "DIAG"}
+
+
+def test_a_diagnosis_beside_its_label_ends_at_the_next_row_of_cells():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Diagnose:", 10, 120, width=80),
+        _cell("Lumbago", 100, 120, width=200),
+        _cell("Nr.", 10, 142, width=40),
+        _cell("Muster", 102, 142, width=100),
+    ]
+    assert keep_indices(lines) == {0: "DIAG", 1: "DIAG"}
+
+
+def test_a_merged_diagnosis_label_keeps_nothing_beside_it():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Diagnose: Lumbago", 10, 120, width=150),
+        _cell("Andrea Muster", 300, 120, width=150),
+    ]
+    assert keep_indices(lines) == {0: "DIAG"}
+
+
 def test_a_date_beside_a_name_is_not_kept_for_its_label():
     from backend.rules import keep_indices
 
@@ -203,6 +259,10 @@ def test_an_invoice_number_pairs_with_its_own_row_only():
         ("Steuernummer:", "123/456/78901"),
         ("USt-IdNr.:", "DE 123 456 789"),
         ("IK:", "123456789"),
+        ("IK-Nummer:", "123456789"),
+        # The label names whose IK it is.
+        ("IK Musterstelle Musterstadt", "123456789"),
+        ("USt.-IdNr.:", "DE 123 456 789"),
         ("LANR:", "123456789"),
         ("BSNR:", "123456700"),
     ],

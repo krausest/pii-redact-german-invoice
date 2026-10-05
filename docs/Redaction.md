@@ -122,12 +122,14 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 - **Identifiers** — insurance, patient, case, admission, member and contract numbers
   next to their label.
 - **References** — invoice, receipt and customer number (`Rechnungsnummer`,
-  `Rg.-Nr.`, `Kd.-Nr.`, …): glued to the label, in the cell right of a label cell,
-  or under it. A date or an amount is never taken for one, so the invoice date in
+  `Rg.-Nr.`, `Re.-Nr.`, `BFS-Nr.`, `Kd.-Nr.`, …): glued to the label, in the cell right of a label cell,
+  or under it. A line starting with `Rechnung` or `Nummer:` followed by a value of three
+  or more digits counts as well. A date or an amount is never taken for one, so the invoice date in
   the same row stays.
 - **Sender identifiers in their own cell** — the value beside or under a
   `Steuernummer:`, `USt-IdNr.:`, `IK:`, `LANR:` or `BSNR:` cell (`IMPRINT` covers
-  the one-line form).
+  the one-line form, also `IK-Zeichen` and register numbers such as `GnR`). An IK
+  label may name its holder (`IK Musterstelle`).
 - **Phone in its own cell** — the number beside or under a `Telefon:`/`Fax:` cell.
 - **Names** — `Patient:` alone in its cell makes the name in the next cell (or the
   column below) a value, plus the person's details under it (e.g. the birth date
@@ -143,7 +145,7 @@ line carrying a street or a labelled birthdate is redacted all the same):
 |---|---|
 | `item table` | the fee table: positions, descriptions, treatment dates, amounts |
 | `DATE` | `Rechnungsdatum`, `Behandlungsdatum`/`-zeitraum`, `Leistungsdatum`, `Datum` and the date cell beside or under it |
-| `DIAG` | a `Diagnose(n)`/`ICD` label and the left-aligned block under it |
+| `DIAG` | a `Diagnose(n)`/`ICD` label and the left-aligned block under it; a label alone in its cell instead keeps the cell beside it and that cell's wrapped lines, up to the next row of cells |
 | `PVS` | the clearing house's name (`…verrechnung…`, `Abrechnungsstelle`, `PVS`, `Rechenzentrum`); `ORG_LEGAL` yields there, its address and bank data do not |
 | `FACH` | a line made only of specialty words (`Facharzt für Orthopädie`); any other word — a practice name — and it is not kept |
 
@@ -166,20 +168,16 @@ one on first use and keeps it (`RedactionPipeline.classifier`).
 ## Layout regions
 
 `layout.region_boxes` blackens whole regions from PP-DocLayout
-(`[redaction].redact_regions`, on by default):
+(`[redaction].redact_regions`, on by default) by their type alone:
+**`image`, `seal`, `footer`, `footnote`, `aside_text`**. This covers a letterhead
+logo, a stamp and a payment QR code — graphics OCR never reports — and the
+imprint; `footnote` is how the detector sometimes labels that imprint. Every other
+region (`text`, `table`, `header`, …) is never blackened whole, however many of
+its lines are flagged: it only shapes the reading order.
 
-- **`image`, `seal`, `footer`, `aside_text`** — always. This covers a
-  letterhead logo, a stamp and a payment QR code: graphics OCR never reports.
-- **Any other region**, `header` included — once *more than* `region_ratio` (default 0.4) of its
-  non-empty lines were flagged by the per-line pass. This catches the lines
-  *between* hits in an address or sender block (a c/o line, a company name, a
-  garbled line). `?region-ratio=1` (the web UI's *Whole blocks* checkbox, unticked)
-  switches this rule off; the always-blackened types above are unaffected.
-
-Kept lines ([above](#what-stays-readable)) are cut out of every region box, so a
-letterhead goes black around its specialty line and a fee table around its rows.
-`image` and `seal` are never cut open: a stamp prints the doctor's name around the
-specialty.
+Kept lines ([above](#what-stays-readable)) are cut out of a footer box, so an
+imprint goes black around a specialty line. `image` and `seal` are never cut
+open: a stamp prints the doctor's name around the specialty.
 
 A line belongs to the smallest region containing its centre. The CLI flag
 `--debug-layout` draws what the detector saw.

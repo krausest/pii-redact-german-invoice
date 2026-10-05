@@ -47,8 +47,6 @@ export interface AnalyzeOptions {
   unwarp: boolean
   /** Which model detects PII; `null` until `/health` named the server default. */
   classifier: string | null
-  /** Blacken a whole text block once enough of its lines are redacted (server ratio). */
-  wholeRegions: boolean
 }
 
 /** What the server offers: its default classifier and every one a request may name. */
@@ -108,8 +106,6 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
     unwarp: String(opts.unwarp),
   })
   if (opts.classifier) params.set('classifier', opts.classifier)
-  // Off is a ratio no block can exceed; on leaves the ratio to the server config.
-  if (!opts.wholeRegions) params.set('region-ratio', '1')
   if (debug) params.set('debug', 'true')
   const res = await fetch(`${REDACT_URL}?${params}`, {
     method: 'POST',

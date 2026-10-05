@@ -108,11 +108,12 @@ NAME_VALUE = re.compile(
 # "Prof. Dr. med. Hans Müller", "Dr. Dr. Daphne Schlegel-Lippert"). The NER
 # model is unreliable around titles — it misses the name entirely after a
 # doubled "Dr. Dr.", and for "Dr. Weber" tags only the single token the PERSON
-# guard drops — while a title is by itself strong evidence of a person.
+# guard drops — while a title is by itself strong evidence of a person. A
+# letterhead prints both in capitals ("DR. MED. ANDREA MUSTER").
 TITLE_NAME = re.compile(
-    r"\b(?:(?:Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med)\.\s*)+"  # title(s)
+    r"\b(?i:(?:Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med)\.\s*)+"  # title(s)
     r"(?:[A-ZÄÖÜ]\.\s*)*"  # optional initials: "Dr. A. Meier"
-    r"[A-ZÄÖÜ][a-zäöüß]+"
+    r"[A-ZÄÖÜ](?:[a-zäöüß]+|[A-ZÄÖÜß]+\b)"
 )
 
 # German street: "<Street>strasse 23", and the all-caps form a letterhead or a
@@ -225,18 +226,26 @@ ID_VALUE = re.compile(rf"(?<![\d./-]){_NOT_DATE_OR_MONEY}\b[A-Z]?\d(?:[ ./-]?\d)
 # only as a label cell beside a cell holding nothing but the value — a sentence
 # asking to quote the invoice number labels nothing, and an address in the
 # same row is not its value.
-_REF = r"(?:Rechnungs?|Rg|Beleg|Kunden|Kd)[-\s.]*(?:Nr|Nummer)"
-_REF_TOKEN = rf"(?<!\S){_NOT_DATE_OR_MONEY}(?=[^\s\d]*\d)[A-Za-z0-9][\w/.:-]*"
+_REF = r"(?:Rechnungs?|Rechn|Re|Rg|BFS|Beleg|Kunden|Kd)[-\s.]*(?:Nr|Nummer)"
+_REF_TOKEN = rf"(?<![^\s:]){_NOT_DATE_OR_MONEY}(?=[^\s\d]*\d)[A-Za-z0-9][\w/.:-]*"
 REF_LABEL_CELL = re.compile(rf"(?i)^\s*{_REF}\.?\s*:?\s*$")
 REF_VALUE = re.compile(rf"^\s*{_REF_TOKEN}\s*$")
-REF_MERGED = re.compile(rf"(?i)\b{_REF}\b\.?\s*:?\s*{_REF_TOKEN}")
+# A heading "Rechnung 2026-0815" or a bare "Nummer: 24/0815" labels its number
+# without "Nr": only at the line's start and with three digits or more, so
+# "Rechnung 1 von 2" stays.
+_REF_TITLE = rf"^\s*(?:Rechnung(?:\s*:)?\s+|Nummer\s*:\s*)(?=(?:[^\s\d]*\d){{3}}){_REF_TOKEN}"
+REF_MERGED = re.compile(rf"(?i)\b{_REF}\b\.?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}")
+
+# An IK label, also "IK-Zeichen" or "IK Musterstelle" naming whose IK it is.
+_IK = r"(?-i:\bIK)(?:[-\s.]?(?:Nr|Nummer|Zeichen))?\.?(?:\s+[A-Za-zÄÖÜäöüß]+){0,3}"
+_UST_ID = r"USt[-.\s]*Id"
 
 # The sender's tax and registry identifiers, label and value in separate cells.
 # IMPRINT already catches them on one line; here only the value cell is new. A
 # VAT ID may be printed in groups ("DE 123 456 789"), so the value may be too.
 SENDER_LABEL_CELL = re.compile(
-    r"(?i)^\s*(?:Steuer[-\s]?(?:nummer|Nr)|USt[-.\s]?Id(?:[-.\s]?(?:Nr|Nummer))?"
-    r"|IK(?:[-\s.]?Nr)?|LANR|BSNR)\.?\s*:?\s*$"
+    rf"(?i)^\s*(?:Steuer[-\s]?(?:nummer|Nr)|{_UST_ID}(?:[-.\s]?(?:Nr|Nummer))?"
+    rf"|{_IK}|LANR|BSNR)\.?\s*:?\s*$"
 )
 SENDER_VALUE = re.compile(
     rf"{REF_VALUE.pattern}|^\s*(?:[A-Z]{{2}}\s?)?{_NOT_DATE_OR_MONEY}\d(?:[ /.-]?\d){{4,}}\s*$"
@@ -293,10 +302,10 @@ PHONE_VALUE = re.compile(r"^\s*[(+]?\d(?:[\s()/\-.|]*\d){5,}\s*$")
 
 # Registry / banking identifiers — the footer imprint block.
 IMPRINT = re.compile(
-    r"(?i)\bHR[AB]\s*\d"
-    r"|\b(?:USt|Umsatzsteuer)[\-.\s]?Id"
+    r"(?i)\bHR[AB]\s*\d|(?-i:\b(?:GnR|VR|PR)\s?\d)|\w*register(?:nummer|[-\s.]*Nr)\b"
+    rf"|\b(?:{_UST_ID}|Umsatzsteuer[-.\s]*Id)"
     r"|\bSteuer[\-\s]?(?:nummer|Nr)"
-    r"|\bIK[\-\s.]?(?:Nr\.?)?\s*:?\s*\d"
+    rf"|{_IK}\s*:?\s*\d"
     r"|\b(?:LANR|LAN\-Nr|BSNR|IBAN|BIC|BLZ)\b"
     r"|\bBankverbindung\b|\bKonto(?:\-?Nr)?\b|\bPostfach\b"
 )
@@ -709,8 +718,12 @@ KEEP_IDS: tuple[LabeledId, ...] = (
     LabeledId("DATE", label=DATE_KEEP_LABEL, value=DATE_KEEP_VALUE, header=DATE_KEEP_CELL),
 )
 
-# Diagnoses: the label line and the left-aligned block under it.
-DIAG_LABEL = re.compile(r"(?i)^\s*(?:Diagnose(?:n|\(n\))?|ICD(?:-?10)?)\b")
+# Diagnoses: the label line and the left-aligned block under it. A label alone
+# in its cell with a cell beside it keeps that cell and the block under it
+# instead — the column under the label then holds the next labels.
+_DIAG = r"(?:Diagnose(?:n|\(n\))?|ICD(?:-?10)?)"
+DIAG_LABEL = re.compile(rf"(?i)^\s*{_DIAG}\b")
+DIAG_LABEL_CELL = re.compile(rf"(?i)^\s*{_DIAG}\s*:?\s*$")
 
 # The clearing house's name ("… VerrechnungsSysteme GmbH", "Rechenzentrum für
 # Ärzte"). Only its name is kept: ORG_LEGAL yields on such a line, while an
@@ -738,17 +751,20 @@ def is_specialty_line(text: str) -> bool:
     return not _SPECIALTY_GLUE.sub("", SPECIALTY.sub("", text))
 
 
-def _block_below(lines: list[Line], start: Line, gap: float, table: set[int]) -> set[int]:
+def _block_below(
+    lines: list[Line], start: Line, gap: float, table: set[int], wrapped: bool = False
+) -> set[int]:
     """The left-aligned lines running on below ``start`` — a list under its
     heading. Unlike :func:`_column_below` the lines may be wider than the
-    heading; what binds them is the shared left edge."""
+    heading; what binds them is the shared left edge. ``wrapped`` follows a
+    cell's wrapped text, which ends at a line with a cell left of it."""
     tol = start.height
     found: set[int] = set()
     bottom = start.top + start.height
     for i, ln in sorted(enumerate(lines), key=lambda pair: pair[1].top):
         if ln.top < bottom or abs(ln.left - start.left) > tol or not ln.text.strip():
             continue
-        if i in table or ln.top - bottom > gap:
+        if i in table or ln.top - bottom > gap or wrapped and _left_neighbour(lines, ln):
             break
         found.add(i)
         bottom = ln.top + ln.height
@@ -768,7 +784,12 @@ def keep_indices(lines: list[Line], table: set[int] | None = None) -> dict[int, 
             keep.setdefault(i, "DATE")
         elif DIAG_LABEL.search(ln.text):
             keep.setdefault(i, "DIAG")
-            for j in _block_below(lines, ln, gap, table):
+            block: set[int] = set()
+            if DIAG_LABEL_CELL.search(ln.text):
+                for j, value in enumerate(lines):
+                    if j not in table and _left_neighbour(lines, value) is ln:
+                        block |= {j} | _block_below(lines, value, gap, table, wrapped=True)
+            for j in block or _block_below(lines, ln, gap, table):
                 keep.setdefault(j, "DIAG")
         elif PVS_NAME.search(ln.text):
             keep.setdefault(i, "PVS")

@@ -114,7 +114,7 @@ def test_api_values_parsed(tmp_path):
         ("[redaction.layout]\nthreshold = 0.0\n", "threshold"),  # not a probability
         ("[redaction.layout]\nthreshold = 1.5\n", "threshold"),
         ("[redaction.layout]\nmodel = \"x\"\n", "model"),  # typo
-        ("[redaction.layout]\nregion_ratio = 1.5\n", "region_ratio"),
+        ("[redaction.layout]\nregion_ratio = 0.4\n", "region_ratio"),  # removed key
     ],
 )
 def test_bad_config_is_rejected_at_load(tmp_path, body, culprit):
@@ -145,7 +145,6 @@ def test_layout_defaults():
     # table (0.38-0.43 on the corpus) is not detected at all.
     assert cfg.redaction.layout.threshold == 0.35
     assert cfg.redaction.layout.layout_nms is True
-    assert cfg.redaction.layout.region_ratio == 0.4
 
 
 def test_committed_config_toml_loads():

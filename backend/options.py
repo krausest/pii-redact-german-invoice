@@ -27,7 +27,6 @@ from backend.config import ClassifierName, Config
 
 Quality = Annotated[int, Field(ge=1, le=100)]
 Dpi = Annotated[int, Field(ge=36, le=1200)]
-Ratio = Annotated[float, Field(ge=0.0, le=1.0)]
 # A box is exactly four integers, [x0, y0, x1, y1]. Spelled as a bounded list
 # rather than a 4-tuple so a short box reports "should have at least 4 items"
 # instead of pydantic's per-index "Field required".
@@ -105,9 +104,6 @@ class RedactOptions(_QueryModel):
     # The OCR backend deliberately is *not* here: that is a property of the
     # machine, fixed per process.
     classifier: ClassifierName
-    # Whole-region rule: more than this share of a block's lines redacted
-    # blackens the block; 1.0 switches it off.
-    region_ratio: Ratio
     # Not config-backed: nothing sensible would turn the trace on for every
     # request, so this one really is a class default, like `json_output`.
     debug: bool = False
@@ -121,7 +117,6 @@ class RedactOptions(_QueryModel):
                 "pdf-dpi": red.pdf_dpi,
                 "jpeg-quality": red.jpeg_quality,
                 "classifier": config.engine.classifier,
-                "region-ratio": red.layout.region_ratio,
             },
             raw,
         )
