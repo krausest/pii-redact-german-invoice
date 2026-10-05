@@ -78,6 +78,7 @@ curl -X POST --data-binary @example/GOÄ_Rechnung1.png \
   "pages": [{
     "index": 0, "width": 1654, "height": 2339,
     "boxes": [[120, 88, 410, 118]],                               // [x0, y0, x1, y1]
+    "notes": [{ "box": [300, 88, 410, 118], "text": "1975" }],   // printed on top
     "image": { "content_type": "image/jpeg", "data": "<base64>" } // NOT redacted
   }],
   "redacted": { "content_type": "application/pdf", "data": "<base64>" },
@@ -85,9 +86,11 @@ curl -X POST --data-binary @example/GOÄ_Rechnung1.png \
 }
 ```
 
-- **Coordinate rule:** `pages[].boxes` are in the pixel space of `pages[].image` of
-  the same entry — never in the uploaded file's. Dewarping, PDF rasterization at
+- **Coordinate rule:** `pages[].boxes` and `pages[].notes` are in the pixel space of
+  `pages[].image` of the same entry — never in the uploaded file's. Dewarping, PDF rasterization at
   `pdf-dpi` and EXIF rotation all change the geometry.
+- **`pages[].notes`** are text printed white on their own black box, after every box
+  is filled — today the birth year where a redacted birthdate stood. Usually empty.
 - **`pages[].image` is the clean page**, for review and editing. Treat it like the
   original document.
 - **`redacted`** is exactly the file the same request without `json-output` returns
@@ -105,8 +108,11 @@ line's fate depends on the block it was read in:
   line @(134,175 234x28 conf=99.40): 'Herrn'
       SALUTATION 'Herrn' [rule SALUT 1.00]
       -> REDACT
-  -> region REDACT (text 4/4 lines)
+  -> region keep
 ```
+
+A region of a blackened-whole type (`footer`, `image`, …) ends with
+`-> region REDACT (footer)` instead.
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,
@@ -127,6 +133,7 @@ Body (`Content-Type: application/json`):
   "pages": [
     { "data": "<base64 PNG or JPEG>",
       "boxes": [[10, 5, 30, 25]],          // in this image's pixel space
+      "notes": [{ "box": [40, 5, 80, 25], "text": "1975" }],  // optional, 1-40 chars
       "content_type": "image/jpeg" }       // optional, informational
   ]
 }
@@ -154,7 +161,7 @@ curl -sX POST --data-binary @invoice.pdf -H "Content-Type: application/pdf" \
      "http://localhost:8000/api/redact?json-output=true&pdf-dpi=200" -o report.json
 
 # 2. Edit boxes in report.json (add, remove, move), then send pages back
-jq '{pages: [.pages[] | {data: .image.data, boxes: .boxes}]}' report.json \
+jq '{pages: [.pages[] | {data: .image.data, boxes: .boxes, notes: .notes}]}' report.json \
   | curl -sX POST -H "Content-Type: application/json" --data-binary @- \
          "http://localhost:8000/api/assemble?format=pdf&dpi=200" -o redacted.pdf
 ```

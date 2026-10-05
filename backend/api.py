@@ -68,8 +68,10 @@ PDF bytes, not multipart — and pass options as query parameters:
 
 By default you get the file back, the same kind you sent: a PDF for a PDF, a JPEG
 for any image. With `json-output=true` you get
-`{unwarped, pages: [{index, width, height, boxes, image}], redacted}` — where
-`boxes` are always in the pixel space of the `image` in the same entry, that image
+`{unwarped, pages: [{index, width, height, boxes, notes, image}], redacted}` — where
+`boxes` and `notes` are always in the pixel space of the `image` in the same entry
+(a note is `{box, text}`: text printed white on its own black box, the birth year
+over a redacted birthdate), that image
 is **not** redacted (it is the page for review), and `redacted` is the finished
 document: the very bytes this endpoint would have returned without `json-output`,
 `application/pdf` for PDF input and `image/jpeg` for an image. Ask for the report
@@ -88,9 +90,11 @@ this fills rectangles and packages the result, so the boxes cannot drift from th
 pixels. Call it after a human has reviewed what `/api/redact` reported.
 
     {"pages": [{"content_type": "image/jpeg", "data": "<base64>",
-                "boxes": [[10, 5, 30, 25]]}]}
+                "boxes": [[10, 5, 30, 25]],
+                "notes": [{"box": [40, 5, 80, 25], "text": "1975"}]}]}
 
-Boxes are in the pixel space of the image in the same entry.
+Boxes and notes are in the pixel space of the image in the same entry; `notes` is
+optional and is printed after every box is filled.
 
 | param | values | default | meaning |
 |---|---|---|---|
@@ -294,7 +298,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # The model decoded the base64; _decode_image still vets the bytes as a
         # real, non-abusive PNG/JPEG.
         images: list[Image.Image] = [_decode_image(p.data, config.api) for p in body.pages]
-        boxes: list[list[Box]] = [[Box(*b) for b in p.boxes] for p in body.pages]
+        boxes: list[list[Box]] = [
+            [Box(*b) for b in p.boxes] + [Box(*n.box, text=n.text) for n in p.notes]
+            for p in body.pages
+        ]
 
         try:
             media_type, out = await _run(lambda: assemble(pipeline, images, boxes, opts))

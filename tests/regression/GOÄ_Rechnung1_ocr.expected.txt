@@ -35,7 +35,7 @@ line @(1267,806 73x33 conf=99.99884366989136): 'Fakt.'
 line @(1409,806 95x28 conf=99.99946355819702): 'Summe'
     -> keep
 line @(157,819 88x29 conf=99.9996542930603): 'Datum'
-    -> keep
+    -> keep (DATE)
 line @(429,863 607x36 conf=99.89149570465088): 'Beratung, auch mittels Fernsprecher (inkl. Ausstellung'
     -> keep (item table)
 line @(1138,858 83x39 conf=99.7988224029541): '4,66 €'

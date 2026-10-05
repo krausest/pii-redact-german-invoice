@@ -15,6 +15,7 @@ from PIL import Image
 
 from backend.api import create_app
 from backend.config import ApiConfig, Config
+from backend.models import Box
 from tests.conftest import FakePipeline, make_image_bytes, make_pdf_bytes as pdf_bytes
 
 PNG = {"content-type": "image/png"}
@@ -183,6 +184,14 @@ def test_unwarp_true_unwarps_first(png_bytes):
 
 
 # -- the JSON report --------------------------------------------------------- #
+def test_json_report_lists_a_note_apart_from_the_boxes(png_bytes):
+    client, _ = build_client(pipeline=FakePipeline([Box(1, 2, 3, 4), Box(2, 2, 3, 4, text="1975")]))
+    with client:
+        page = client.post(f"{URL}?json-output=true", content=png_bytes, headers=PNG).json()["pages"][0]
+    assert page["boxes"] == [[1, 2, 3, 4]]
+    assert page["notes"] == [{"box": [2, 2, 3, 4], "text": "1975"}]
+
+
 def test_json_report_shape(png_bytes):
     client, _ = build_client()
     with client:
@@ -195,6 +204,7 @@ def test_json_report_shape(png_bytes):
     page = body["pages"][0]
     assert page["index"] == 0
     assert page["boxes"] == [[1, 2, 3, 4]]
+    assert page["notes"] == []
     assert page["image"]["content_type"] == "image/jpeg"
     image = Image.open(io.BytesIO(base64.b64decode(page["image"]["data"])))
     assert image.size == (page["width"], page["height"])
@@ -325,6 +335,13 @@ def test_the_classifier_can_be_chosen_per_request_and_the_report_says_which_ran(
         )
     assert r.status_code == 200
     assert r.json()["classifier"] == "guard-omni"
+
+
+def test_the_removed_region_ratio_is_an_unknown_parameter(png_bytes):
+    client, _ = build_client()
+    with client:
+        r = client.post(f"{URL}?region-ratio=1", content=png_bytes, headers=PNG)
+    assert r.status_code == 400
 
 
 # -- health ------------------------------------------------------------------ #

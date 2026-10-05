@@ -105,8 +105,10 @@ def trace_page(
     order: list[int],
     spoken: list[int],
     found: dict[int, list["Span"]],
-    table: set[int],
+    keep: dict[int, str],
     region_hits: list[tuple[int, "Box", str]],
+    signatures: list[tuple[int, "Box"]],
+    notes: dict[int, "Box"],
 ) -> None:
     """Narrate one page: every detected region, the text it contributed, the
     lines inside it with their spans and verdict, then the region's own verdict.
@@ -119,6 +121,9 @@ def trace_page(
     ``order`` is the reading order the text was built in; the regions are
     narrated in that same order, so the trace reads the way the classifier read
     the page rather than the way the detector happened to emit its boxes.
+
+    ``keep`` names why a line was spared (``item table``, ``DATE``, ...), which
+    is what a ``-> keep (...)`` verdict quotes.
     """
     from backend.layout import lines_by_region
 
@@ -126,6 +131,7 @@ def trace_page(
     rank = {i: pos for pos, i in enumerate(order)}
     claimed = {i for group in per_region for i in group}
     why_by_region = {r: why for r, _, why in region_hits}
+    signed = {i: box for i, box in signatures}
 
     def narrate(idx: list[int], header: str) -> None:
         trace.add("%s", header)
@@ -143,11 +149,15 @@ def trace_page(
                 )
             if i in found:
                 trace.add("      -> REDACT")
-            elif i in table:
+                if i in notes:
+                    trace.add("      note %r", notes[i].text)
+            elif i in keep:
                 # Why no classifier verdict was reported for this line.
-                trace.add("      -> keep (item table)")
+                trace.add("      -> keep (%s)", keep[i])
             else:
                 trace.add("      -> keep")
+            if i in signed:
+                trace.add("      signature %s", signed[i].as_list())
 
     for r, region in enumerate(regions):
         why = why_by_region.get(r)

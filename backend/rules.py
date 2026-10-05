@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from statistics import median
 
-from backend.models import Line
+from backend.models import Box, Line
 from backend.pii import RULE_LABELS, PiiLabel, Span
 
 # Anrede: any line containing a salutation word is redacted — lone ("Herrn" above
@@ -107,11 +108,12 @@ NAME_VALUE = re.compile(
 # "Prof. Dr. med. Hans Müller", "Dr. Dr. Daphne Schlegel-Lippert"). The NER
 # model is unreliable around titles — it misses the name entirely after a
 # doubled "Dr. Dr.", and for "Dr. Weber" tags only the single token the PERSON
-# guard drops — while a title is by itself strong evidence of a person.
+# guard drops — while a title is by itself strong evidence of a person. A
+# letterhead prints both in capitals ("DR. MED. ANDREA MUSTER").
 TITLE_NAME = re.compile(
-    r"\b(?:(?:Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med)\.\s*)+"  # title(s)
+    r"\b(?i:(?:Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med)\.\s*)+"  # title(s)
     r"(?:[A-ZÄÖÜ]\.\s*)*"  # optional initials: "Dr. A. Meier"
-    r"[A-ZÄÖÜ][a-zäöüß]+"
+    r"[A-ZÄÖÜ](?:[a-zäöüß]+|[A-ZÄÖÜß]+\b)"
 )
 
 # German street: "<Street>strasse 23", and the all-caps form a letterhead or a
@@ -202,17 +204,52 @@ NAME_DATE = re.compile(_NAME_PART + r"\s*,\s*" + _NAME_PART + r"\s+" + DATE_RE.p
 # treatment episode, across the neighbouring document types (dental, hospital,
 # insurance). ``[-\s.]*`` also covers the closed compound ("Fallnummer") and the
 # hyphenated/abbreviated forms ("Fall-Nr.", "Pat.-Nr:"). Sender-side identifiers
-# (IK, LANR, BSNR, Steuer-Nr, ...) live in IMPRINT; ``Rechnungs-Nr`` is
-# deliberately absent from *both* — the invoice number is the reference a
-# redacted document is usually shared for.
+# (IK, LANR, BSNR, Steuer-Nr, ...) live in IMPRINT; the invoice and customer
+# numbers are REF_LABEL below.
 ID_LABEL = re.compile(
     r"(?i)\b(?:Versicherten|Versicherungs(?:schein)?|Patienten|Pat\.?"
     r"|Fall|Aufnahme|Mitglieds?|Vertrags)"
     r"[-\s.]*(?:Nr|Nummer)\b"
 )
+# A date or an amount sitting in the same row as an identifier label is the
+# invoice date or the total, never the identifier — and both have to stay.
+_NOT_DATE_OR_MONEY = (
+    r"(?!\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}(?![\d,]))(?!\d{1,3}(?:\.\d{3})*,\d{2}(?!\d))"
+)
 # An identifier value: at least four digits, optionally grouped ("4 399 267 00"),
 # optionally led by a letter (a KVNR is "A123456789").
-ID_VALUE = re.compile(r"\b[A-Z]?\d(?:[ ./-]?\d){3,}\b")
+ID_VALUE = re.compile(rf"(?<![\d./-]){_NOT_DATE_OR_MONEY}\b[A-Z]?\d(?:[ ./-]?\d){{3,}}\b")
+
+# The invoice's own references: invoice, receipt and customer number. Their
+# values are short and alphanumeric ("248", "AB-12-3456", "12345/678901"), so
+# a value is any whitespace-delimited token holding a digit. Paired across cells
+# only as a label cell beside a cell holding nothing but the value — a sentence
+# asking to quote the invoice number labels nothing, and an address in the
+# same row is not its value.
+_REF = r"(?:Rechnungs?|Rechn|Re|Rg|BFS|Beleg|Kunden|Kd)[-\s.]*(?:Nr|Nummer)"
+_REF_TOKEN = rf"(?<![^\s:]){_NOT_DATE_OR_MONEY}(?=[^\s\d]*\d)[A-Za-z0-9][\w/.:-]*"
+REF_LABEL_CELL = re.compile(rf"(?i)^\s*{_REF}\.?\s*:?\s*$")
+REF_VALUE = re.compile(rf"^\s*{_REF_TOKEN}\s*$")
+# A heading "Rechnung 2026-0815" or a bare "Nummer: 24/0815" labels its number
+# without "Nr": only at the line's start and with three digits or more, so
+# "Rechnung 1 von 2" stays.
+_REF_TITLE = rf"^\s*(?:Rechnung(?:\s*:)?\s+|Nummer\s*:\s*)(?=(?:[^\s\d]*\d){{3}}){_REF_TOKEN}"
+REF_MERGED = re.compile(rf"(?i)\b{_REF}\b\.?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}")
+
+# An IK label, also "IK-Zeichen" or "IK Musterstelle" naming whose IK it is.
+_IK = r"(?-i:\bIK)(?:[-\s.]?(?:Nr|Nummer|Zeichen))?\.?(?:\s+[A-Za-zÄÖÜäöüß]+){0,3}"
+_UST_ID = r"USt[-.\s]*Id"
+
+# The sender's tax and registry identifiers, label and value in separate cells.
+# IMPRINT already catches them on one line; here only the value cell is new. A
+# VAT ID may be printed in groups ("DE 123 456 789"), so the value may be too.
+SENDER_LABEL_CELL = re.compile(
+    rf"(?i)^\s*(?:Steuer[-\s]?(?:nummer|Nr)|{_UST_ID}(?:[-.\s]?(?:Nr|Nummer))?"
+    rf"|{_IK}|LANR|BSNR)\.?\s*:?\s*$"
+)
+SENDER_VALUE = re.compile(
+    rf"{REF_VALUE.pattern}|^\s*(?:[A-Z]{{2}}\s?)?{_NOT_DATE_OR_MONEY}\d(?:[ /.-]?\d){{4,}}\s*$"
+)
 
 # --- sender identity ------------------------------------------------------- #
 # The three below identify the *sender* (practice, clearing house, bank) rather
@@ -247,15 +284,28 @@ CONTACT = re.compile(
     r"|\bwww\.[\w\-]+(?:\.[\w\-]+)+"
     r"|(?-i:\b[a-z\d][a-z\d\-]+(?:\.[a-z\d\-]+)*\.(?:de|com|net|org|eu|at|ch))(?![\w.\-])"
     r"|[\w.\-+]+@[\w\-]+(?:\.[\w\-]+)+"
-    r"|\b(?:Tel(?:efon)?|Telefax|Fax|Mobil)\b\.?\s*:?\s*(?=[\d\s()/+\-]{6,})[\d(+]"
 )
+
+# Phone and fax numbers: behind a label, or unlabelled with a DACH country code
+# ("+49 911 …", "0049 (0)911 …"). Six digits at least; OCR reads the separator
+# bar some letterheads print inside a number as "|". The country codes are
+# listed rather than any "00\d\d" — an IBAN group like "0094 0000" has that shape.
+_PHONE_DIGITS = r"(?:[\s()/+\-.|]*\d){6,}"
+PHONE = re.compile(
+    r"(?i)\b(?:Tel(?:efon)?|Telefax|Fax|Mobil|Handy|Fon)\b\.?\s*(?:Nr\.?)?\s*:?\s*"
+    rf"(?=[(+\d]){_PHONE_DIGITS}"
+    rf"|(?<![\w+])(?<!\d\s)(?:\+|00)\s?(?:49|43|41){_PHONE_DIGITS}"
+)
+# The label alone in its cell, with the number beside or under it.
+PHONE_LABEL_CELL = re.compile(r"(?i)^\s*(?:Tel(?:efon)?|Telefax|Fax|Mobil)\.?\s*:?\s*$")
+PHONE_VALUE = re.compile(r"^\s*[(+]?\d(?:[\s()/\-.|]*\d){5,}\s*$")
 
 # Registry / banking identifiers — the footer imprint block.
 IMPRINT = re.compile(
-    r"(?i)\bHR[AB]\s*\d"
-    r"|\b(?:USt|Umsatzsteuer)[\-.\s]?Id"
+    r"(?i)\bHR[AB]\s*\d|(?-i:\b(?:GnR|VR|PR)\s?\d)|\w*register(?:nummer|[-\s.]*Nr)\b"
+    rf"|\b(?:{_UST_ID}|Umsatzsteuer[-.\s]*Id)"
     r"|\bSteuer[\-\s]?(?:nummer|Nr)"
-    r"|\bIK[\-\s.]?(?:Nr\.?)?\s*:?\s*\d"
+    rf"|{_IK}\s*:?\s*\d"
     r"|\b(?:LANR|LAN\-Nr|BSNR|IBAN|BIC|BLZ)\b"
     r"|\bBankverbindung\b|\bKonto(?:\-?Nr)?\b|\bPostfach\b"
 )
@@ -305,6 +355,7 @@ STATIC_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("DE_PLZ_CITY", DE_PLZ_CITY),
     ("ORG_LEGAL", ORG_LEGAL),
     ("CONTACT", CONTACT),
+    ("PHONE", PHONE),
     ("IMPRINT", IMPRINT),
 )
 
@@ -338,19 +389,26 @@ def line_matches_static_rule(text: str) -> bool:
 @dataclass(frozen=True)
 class LabeledId:
     """One kind of labeled value: a ``label`` marks the line (or column
-    neighbour) and ``value`` is what actually gets redacted. ``merged`` is
-    extra same-line-only evidence — the abbreviated form that is only
+    neighbour) and ``value`` is what actually gets redacted, as ``kind``.
+    ``merged`` is extra same-line-only evidence — the form that is only
     unambiguous glued directly to its value (``geb. 13.08.1954``).
 
     ``header`` is the label in its *other* role: alone in a cell at the top of a
     column, with the values running **downwards** beneath it rather than beside
     it. It is a separate pattern because that role has to be anchored — a label
-    found mid-sentence heads nothing."""
+    found mid-sentence heads nothing. ``details`` lets the column under a matched
+    value continue with the person's other details (:data:`PERSON_DETAIL`).
+    ``cell`` is for a value too plain to be told apart from its neighbours (a
+    bare "11"): it pairs only with the cell directly left of it, and a column
+    under its label may also be one sharing the label's left edge."""
 
+    kind: str  # a PiiLabel, or a keep reason in KEEP_IDS
     label: re.Pattern[str]
     value: re.Pattern[str]
     merged: re.Pattern[str] | None = None
     header: re.Pattern[str] | None = None
+    details: bool = False
+    cell: bool = False
 
 
 # The label ↔ value pairings labeled_value_indices matches. Birthdate is row
@@ -367,13 +425,48 @@ class LabeledId:
 # by definition, which is what makes the downward pass safe here and not for,
 # say, a "Datum" column. The name row carries one for the same reason — a column
 # headed "Patient:" holds names — so a name reaches its label in either
-# direction, beside it or below it.
+# direction, beside it or below it. The invoice-reference, sender-identifier and
+# phone rows have one because a payment box prints "Rg.-Nr. | Betrag | Datum"
+# over a row of values.
 LABELED_IDS: tuple[LabeledId, ...] = (
     LabeledId(
-        label=BIRTH_LABEL, value=DATE_RE, merged=BIRTH_MARK, header=BIRTH_LABEL_CELL
+        PiiLabel.DATE_OF_BIRTH,
+        label=BIRTH_LABEL,
+        value=DATE_RE,
+        merged=BIRTH_MARK,
+        header=BIRTH_LABEL_CELL,
+        details=True,
     ),
-    LabeledId(label=ID_LABEL, value=ID_VALUE),
-    LabeledId(label=PERSON_LABEL_CELL, value=NAME_VALUE, header=PERSON_LABEL_CELL),
+    LabeledId(PiiLabel.ID, label=ID_LABEL, value=ID_VALUE),
+    LabeledId(
+        PiiLabel.ID,
+        label=REF_LABEL_CELL,
+        value=REF_VALUE,
+        merged=REF_MERGED,
+        header=REF_LABEL_CELL,
+        cell=True,
+    ),
+    LabeledId(
+        PiiLabel.ID,
+        label=SENDER_LABEL_CELL,
+        value=SENDER_VALUE,
+        header=SENDER_LABEL_CELL,
+        cell=True,
+    ),
+    LabeledId(
+        PiiLabel.CONTACT,
+        label=PHONE_LABEL_CELL,
+        value=PHONE_VALUE,
+        header=PHONE_LABEL_CELL,
+        cell=True,
+    ),
+    LabeledId(
+        PiiLabel.PERSON,
+        label=PERSON_LABEL_CELL,
+        value=NAME_VALUE,
+        header=PERSON_LABEL_CELL,
+        details=True,
+    ),
 )
 
 # What a person's *other* details look like: a cell holding nothing but one name,
@@ -470,13 +563,17 @@ def _column_below(
     value: re.Pattern[str],
     gap: float,
     table: set[int],
+    aligned: bool = False,
 ) -> set[int]:
     """The value lines of the column running below ``start``.
 
     A line belongs to the column when its horizontal *center* falls within
     ``start``'s x-range — centers rather than overlap, because a "Geburtsdatum"
     header is wider than the dates under it and would otherwise reach into the
-    columns on either side. The walk stops at the first line in that column that
+    columns on either side — or, with ``aligned``, when it shares ``start``'s
+    left edge, for a value wider than its label ("Rg.-Nr.:" over
+    "000123/045678"). A line counts
+    as below once its centre is: OCR boxes of adjacent rows overlap by a pixel. The walk stops at the first line in that column that
     is not a value, as soon as the vertical gap exceeds ``gap``, or at the item
     table: a header may only claim what runs on directly beneath it, never the
     rest of the page.
@@ -494,7 +591,9 @@ def _column_below(
     found: set[int] = set()
     bottom = start.top + start.height
     for i, ln in sorted(enumerate(lines), key=lambda pair: pair[1].top):
-        if ln.top < bottom or not x0 <= ln.left + ln.width / 2 <= x1:
+        if ln.top + ln.height / 2 < bottom:
+            continue
+        if not (x0 <= ln.left + ln.width / 2 <= x1 or aligned and abs(ln.left - x0) <= start.height):
             continue
         if i in table or ln.top - bottom > gap or not value.search(ln.text):
             break
@@ -503,12 +602,35 @@ def _column_below(
     return found
 
 
-def labeled_value_indices(lines: list[Line], table: set[int] | None = None) -> set[int]:
-    """Indices of lines holding a labeled personal value (birthdate,
-    Versicherten-Nr., Fall-Nr., name, ...).
+def _left_neighbour(lines: list[Line], cell: Line) -> Line | None:
+    """The cell directly left of ``cell`` in its row: of the lines ending left of
+    it whose centre is within half a line height of its own, the nearest — a
+    row's cells are a few pixels off level on a photo, so height decides less."""
+    center = cell.top + cell.height / 2
+    row = [
+        ln
+        for ln in lines
+        if ln is not cell and ln.text.strip()
+        and ln.left + ln.width <= cell.left + cell.height
+        and abs(ln.top + ln.height / 2 - center) <= max(ln.height, cell.height) / 2
+    ]
+    return min(
+        row,
+        key=lambda ln: (cell.left - ln.left - ln.width, abs(ln.top + ln.height / 2 - center)),
+        default=None,
+    )
+
+
+def labeled_value_indices(
+    lines: list[Line],
+    table: set[int] | None = None,
+    rules: tuple[LabeledId, ...] = LABELED_IDS,
+) -> dict[int, str]:
+    """Lines holding a labeled value (birthdate, Versicherten-Nr., invoice
+    number, name, ...), mapped to the ``kind`` of the first rule that claimed them.
 
     Labels and values routinely sit in different columns — separate OCR lines —
-    which no per-line regex can pair. A value line is redacted when its line
+    which no per-line regex can pair. A value line is matched when its line
     also matches the label (the merged one-line form), when it shares a row with
     a line matching the label (the two-column form), when it runs *below* a
     line holding the label alone in its cell (the column-header form), or when it
@@ -516,18 +638,26 @@ def labeled_value_indices(lines: list[Line], table: set[int] | None = None) -> s
     prints the name beside the label and the birthdate under the name). The last
     two are the same :func:`_column_below` walk from a different starting cell.
 
-    The *label* line itself is only redacted if it contains a value; a bare column
+    The *label* line itself is only matched if it contains a value; a bare column
     header is not PII. ``table`` is ``item_table_indices`` — the column walks stop
     there; ``None`` means "no table", which is what a caller testing the rule in
-    isolation wants."""
-    idx: set[int] = set()
+    isolation wants. ``rules`` defaults to the PII table; :func:`keep_indices`
+    runs the same geometry over :data:`KEEP_IDS`."""
+    idx: dict[int, str] = {}
     table = table or set()
     gap = _COLUMN_GAP_FACTOR * median([ln.height for ln in lines] or [0])
-    for rule in LABELED_IDS:
+    for rule in rules:
+        found: set[int] = set()
+        details: set[int] = set()
         label_spans = [
             (ln.top, ln.top + ln.height) for ln in lines if rule.label.search(ln.text)
         ]
         for i, ln in enumerate(lines):
+            # label and value merged on one line, in a form only unambiguous
+            # glued together (``geb. 13.08.1954``, ``Rg.-Nr. 4711``)
+            if rule.merged is not None and rule.merged.search(ln.text):
+                found.add(i)
+                continue
             if not rule.value.search(ln.text):
                 continue
             # A cell holding nothing but the label is never a value. Implicit
@@ -537,39 +667,143 @@ def labeled_value_indices(lines: list[Line], table: set[int] | None = None) -> s
             # rather than left to the patterns not overlapping.
             if rule.header is not None and rule.header.search(ln.text):
                 continue
-            # label + value merged on one line, spelled out or abbreviated
-            if rule.label.search(ln.text) or (
-                rule.merged is not None and rule.merged.search(ln.text)
-            ):
-                idx.add(i)
+            # label + value merged on one line, spelled out
+            if rule.label.search(ln.text):
+                found.add(i)
                 continue
             center = ln.top + ln.height / 2
             tol = ln.height / 2
-            if any(y0 - tol <= center <= y1 + tol for y0, y1 in label_spans):
-                idx.add(i)
-                if rule.header is not None:
+            if rule.cell:
+                left = _left_neighbour(lines, ln)
+                paired = left is not None and bool(rule.label.search(left.text))
+            else:
+                paired = any(y0 - tol <= center <= y1 + tol for y0, y1 in label_spans)
+            if paired:
+                found.add(i)
+                if rule.details:
                     # The label licensed this cell, so it licenses the person's
                     # other details running on beneath it — the birthdate under
                     # the name, which carries no label of its own.
-                    idx |= _column_below(lines, ln, PERSON_DETAIL, gap, table)
+                    details |= _column_below(lines, ln, PERSON_DETAIL, gap, table)
         if rule.header is not None:
             for ln in lines:
                 if rule.header.search(ln.text):
-                    idx |= _column_below(lines, ln, rule.value, gap, table)
+                    found |= _column_below(lines, ln, rule.value, gap, table, rule.cell)
+        for i in sorted(found):
+            idx.setdefault(i, rule.kind)
+        for i in sorted(details - found):
+            idx.setdefault(i, _labeled_value_label(lines[i].text))
     return idx
+
+
+# --- what must stay readable ------------------------------------------------ #
+# A redacted invoice is shared to be reimbursed, so the reviewer has to see when,
+# by what kind of doctor, through which clearing house and for what. These lines
+# are *kept*: the classifier, the name memory and the whole-region boxes leave
+# them alone. A deterministic rule still wins — a kept line carrying a street or
+# a labeled birthdate is redacted all the same.
+
+# The invoice and treatment dates. The value is anchored to a date cell — "vom
+# 15.04.2026 bis 28.04.2026" at most — so a row that also holds a name is never
+# kept for the date beside it. "Geburtsdatum" cannot match: no word boundary
+# before its "datum", and "Geburts" is not one of the prefixes.
+_DATE_KEEP = r"(?:Rechnungs|Behandlungs|Leistungs|Ausstellungs)?datum|Behandlungs(?:zeitraum|tag)"
+DATE_KEEP_LABEL = re.compile(rf"(?i)\b(?:{_DATE_KEEP})\b")
+DATE_KEEP_CELL = re.compile(rf"(?i)^\s*(?:{_DATE_KEEP})\s*:?\s*$")
+DATE_KEEP_VALUE = re.compile(
+    rf"(?i)^\s*(?:(?:{_DATE_KEEP})\s*:?\s*)?(?:vom\s+)?{DATE_RE.pattern}"
+    rf"(?:\s*(?:-|–|bis)\s*{DATE_RE.pattern})?\s*$"
+)
+KEEP_IDS: tuple[LabeledId, ...] = (
+    LabeledId("DATE", label=DATE_KEEP_LABEL, value=DATE_KEEP_VALUE, header=DATE_KEEP_CELL),
+)
+
+# Diagnoses: the label line and the left-aligned block under it. A label alone
+# in its cell with a cell beside it keeps that cell and the block under it
+# instead — the column under the label then holds the next labels.
+_DIAG = r"(?:Diagnose(?:n|\(n\))?|ICD(?:-?10)?)"
+DIAG_LABEL = re.compile(rf"(?i)^\s*{_DIAG}\b")
+DIAG_LABEL_CELL = re.compile(rf"(?i)^\s*{_DIAG}\s*:?\s*$")
+
+# The clearing house's name ("… VerrechnungsSysteme GmbH", "Rechenzentrum für
+# Ärzte"). Only its name is kept: ORG_LEGAL yields on such a line, while an
+# address, a phone number or an IBAN printed on it still redacts it.
+PVS_NAME = re.compile(
+    r"(?i)\w*verrechnung\w*|\bAbrechnungs(?:stelle|gesellschaft|zentrum)\w*|\bPVS\b|\bRechenzentrum\b"
+)
+
+# A medical specialty ("Facharzt für Orthopädie", "Hautarzt-Allergologie").
+# Kept only when the line holds *nothing else*: "Kieferorthopädie Muster" names
+# the practice, and the unknown word is what gives it away.
+SPECIALTY = re.compile(
+    r"(?i)\b(?:\w*ärzt\w*|\w*arzt\w*|\w*(?:logie|logisch|medizin|medizinisch|chirurgie"
+    r"|pädie|iatrie|heilkunde|therapie|pathie|diagnostik)\w*"
+    r"|Praxis|Privatpraxis|Gemeinschaftspraxis|Innere|Allgemein\w*|Zahn\w*|Kiefer\w*"
+    r"|ambulante[nr]?|Operationen|Akupunktur|Naturheilverfahren|Homöopathie)\b"
+)
+_SPECIALTY_GLUE = re.compile(r"(?i)\b(?:für|und|u|sowie|der|des|die|im|in)\b|[\W\d_]")
+
+
+def is_specialty_line(text: str) -> bool:
+    """Whether ``text`` names a specialty and nothing besides it."""
+    if not SPECIALTY.search(text):
+        return False
+    return not _SPECIALTY_GLUE.sub("", SPECIALTY.sub("", text))
+
+
+def _block_below(
+    lines: list[Line], start: Line, gap: float, table: set[int], wrapped: bool = False
+) -> set[int]:
+    """The left-aligned lines running on below ``start`` — a list under its
+    heading. Unlike :func:`_column_below` the lines may be wider than the
+    heading; what binds them is the shared left edge. ``wrapped`` follows a
+    cell's wrapped text, which ends at a line with a cell left of it."""
+    tol = start.height
+    found: set[int] = set()
+    bottom = start.top + start.height
+    for i, ln in sorted(enumerate(lines), key=lambda pair: pair[1].top):
+        if ln.top < bottom or abs(ln.left - start.left) > tol or not ln.text.strip():
+            continue
+        if i in table or ln.top - bottom > gap or wrapped and _left_neighbour(lines, ln):
+            break
+        found.add(i)
+        bottom = ln.top + ln.height
+    return found
+
+
+def keep_indices(lines: list[Line], table: set[int] | None = None) -> dict[int, str]:
+    """Lines that must stay readable, mapped to why: ``item table``, ``DATE``,
+    ``DIAG``, ``PVS`` or ``FACH``. The first reason found wins."""
+    table = table or set()
+    keep: dict[int, str] = {i: "item table" for i in sorted(table)}
+    for i, kind in labeled_value_indices(lines, table, KEEP_IDS).items():
+        keep.setdefault(i, kind)
+    gap = _COLUMN_GAP_FACTOR * median([ln.height for ln in lines] or [0])
+    for i, ln in enumerate(lines):
+        if DATE_KEEP_CELL.search(ln.text):
+            keep.setdefault(i, "DATE")
+        elif DIAG_LABEL.search(ln.text):
+            keep.setdefault(i, "DIAG")
+            block: set[int] = set()
+            if DIAG_LABEL_CELL.search(ln.text):
+                for j, value in enumerate(lines):
+                    if j not in table and _left_neighbour(lines, value) is ln:
+                        block |= {j} | _block_below(lines, value, gap, table, wrapped=True)
+            for j in block or _block_below(lines, ln, gap, table):
+                keep.setdefault(j, "DIAG")
+        elif PVS_NAME.search(ln.text):
+            keep.setdefault(i, "PVS")
+        elif is_specialty_line(ln.text):
+            keep.setdefault(i, "FACH")
+    return keep
 
 
 # -- the rules as spans ---------------------------------------------------- #
 def _labeled_value_label(text: str) -> PiiLabel:
-    """Which kind of labeled value a matched line holds.
-
-    :func:`labeled_value_indices` returns bare indices — it pairs a label cell
-    with a value cell geometrically and has no reason to care which of the three
-    :data:`LABELED_IDS` rules did it. The label is recovered here, after the
-    fact, by asking what the value *looks* like, in the order the rules are
-    tried: a date is a birthdate (nothing else is labeled that way once the pass
-    has already accepted it), a name-shaped cell is a person, and what is left is
-    an identifier."""
+    """What a person-detail cell under a labeled value holds — it carries no
+    label of its own, so it is judged by what it *looks* like: a date is a
+    birthdate, a name-shaped cell is a person, and what is left is an
+    identifier."""
     if BIRTH_MARK.search(text) or DATE_RE.search(text):
         return PiiLabel.DATE_OF_BIRTH
     if NAME_VALUE.search(text):
@@ -615,7 +849,41 @@ def rule_spans(
                     Span(RULE_LABELS[name], lo + m.start(), lo + m.end(), m.group(), f"rule {name}")
                 )
 
-    for i in labeled_value_indices(lines, table):
-        whole_line(i, _labeled_value_label(lines[i].text), "labeled-value")
+    for i, kind in labeled_value_indices(lines, table).items():
+        whole_line(i, PiiLabel(kind), "labeled-value")
 
     return spans
+
+
+# -- the birth year ---------------------------------------------------------- #
+def _full_year(digits: str) -> str:
+    """A two-digit birth year in the past century unless that would put it in
+    the future."""
+    if len(digits) != 2:
+        return digits
+    yy = int(digits)
+    return f"{19 if yy > date.today().year % 100 else 20}{digits}"
+
+
+def birth_year_note(line: Line, spans: list[Span]) -> Box | None:
+    """A note printing the birth year where the birthdate stood on a redacted
+    ``line`` — only the day and month are personal enough to hide. The position
+    is estimated from the date's share of the text. ``None`` when the line holds
+    no birthdate, or several dates and nothing saying which is the birthdate."""
+    text = line.text
+    if not any(
+        s.label is PiiLabel.DATE_OF_BIRTH or s.source == "rule NAME_DATE" for s in spans
+    ):
+        return None
+    marked = BIRTH_MARK.search(text) or NAME_DATE.search(text)
+    if marked is not None:
+        found = DATE_RE.search(text, marked.start())
+    else:
+        dates = list(DATE_RE.finditer(text))
+        found = dates[0] if len(dates) == 1 else None
+    if found is None or not text:
+        return None
+    year = _full_year(re.split(r"\.\s?", found.group())[-1])
+    x0 = line.left + line.width * found.start() // len(text)
+    x1 = line.left + line.width * found.end() // len(text)
+    return Box(x0, line.top, max(x1, x0 + 1), line.top + line.height, text=year)

@@ -16,9 +16,8 @@ name redact the third one, in a footer, that it did not tag itself.
 
 Only ``PERSON`` counts. ``ADDRESS``, ``ORG``, ``CONTACT``, ``BANK`` and ``ID``
 name a place, a company or a number: a page's own street recurring in its
-letterhead is not a person to look for, and a bare number matching an invoice
-figure elsewhere is a box drawn over the very reference the document is shared
-for.
+letterhead is not a person to look for, and a bare number matching an amount
+elsewhere would blacken an unrelated figure.
 
 **Evidence comes in two kinds, and they harvest differently** — measured, not
 assumed:
@@ -31,7 +30,7 @@ assumed:
   whole line around a model's find is what a letterhead punishes: one line
   carries a managing director's name **and** the company's, and taking the line
   whole made the company a remembered "name" that then blackened body text,
-  a legal footnote and an invoice number elsewhere on the page (measured on the
+  a legal footnote and a reference number elsewhere on the page (measured on the
   corpus: 12 new boxes, 9 of them wrong). The span carries the name and stops.
 """
 

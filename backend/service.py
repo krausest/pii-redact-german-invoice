@@ -233,7 +233,8 @@ def build_report(redaction: Redaction, opts: RedactOptions) -> dict[str, Any]:
                 "index": r.index,
                 "width": r.width,
                 "height": r.height,
-                "boxes": [box.as_list() for box in r.boxes],
+                "boxes": [box.as_list() for box in r.boxes if box.text is None],
+                "notes": [{"box": box.as_list(), "text": box.text} for box in r.boxes if box.text],
                 "image": _artifact(JPEG_MEDIA_TYPE, encode_jpeg(r.image, opts.jpeg_quality)),
             }
             for r in redaction.pages

@@ -21,8 +21,8 @@ process with a message naming the field. A typo is an error, not a no-op.
 The overriding variables are validated like the file. Booleans accept
 `true|false|1|0|yes|no|on|off`.
 
-**Defaults vs. absolute values.** `unwarp`, `classifier`, `pdf_dpi` and
-`jpeg_quality` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
+**Defaults vs. absolute values.** `unwarp`, `classifier`, `pdf_dpi`
+and `jpeg_quality` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
 (`--unwarp`) that names the option wins. `ocr_backend`, `det_box_thresh`,
 `redact_regions` and everything under `[api]` are fixed per process.
 

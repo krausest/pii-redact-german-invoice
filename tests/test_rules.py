@@ -21,12 +21,13 @@ from backend.models import Line
 from backend.pii import PiiLabel
 from backend.rules import rule_spans
 
-P, A, C, B, S = (
+P, A, C, B, S, I = (
     PiiLabel.PERSON,
     PiiLabel.ADDRESS,
     PiiLabel.CONTACT,
     PiiLabel.BANK,
     PiiLabel.SALUTATION,
+    PiiLabel.ID,
 )
 
 # (text, labels it must produce). An empty set means: this line must survive.
@@ -34,6 +35,9 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     # -- the recipient block --------------------------------------------------
     ("Herrn", {S}),
     ("Frau Dr. Erika Muster", {S, P}),
+    # A letterhead prints title and name in capitals.
+    ("DR. MED. ANDREA MUSTER, FEBO*", {P}),
+    ("PROF. DR. A. MUSTER", {P}),
     ("Musterstrasse 23", {A}),
     ("Bahnhofweg 5a", {A}),
     # A letterhead prints its address in capitals, and OCR glues the house
@@ -46,7 +50,28 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("Gesamtbetrag 23", set()),
     ("MwSt. 19", set()),
     ("Beleg 12", set()),
-    ("RECHNUNG Nr. 2026-1234-001", set()),
+    # -- the invoice's references ---------------------------------------------
+    ("RECHNUNG Nr. 2026-1234-001", {I}),
+    ("Rechnungsnummer: 248", {I}),
+    ("Rg.-Nr.: 000123/045678", {I}),
+    ("Kd.-Nr. 4711", {I}),
+    ("Kundennummer: A-12", {I}),
+    ("Rechnung 123456-123456", {I}),
+    ("RECHNUNG: AB-248", {I}),
+    # Mid-sentence, or too short to be a number rather than a count.
+    ("Bitte begleichen Sie die Rechnung 123456 umgehend", set()),
+    ("Rechnung 1 von 2", set()),
+    ("Re.-Nr.: 123456", {I}),
+    ("BFS-Nr. 1-23456-12345678", {I}),
+    ("RechnNr:1234", {I}),
+    ("Rechn.Nr. 1234 5678 9012 34", {I}),
+    ("Nummer: 12/3456", {I}),
+    ("Nummer 3 der Anlage", set()),
+    ("Re.-Datum: 12.03.2026", set()),
+    ("Rechnung 12.03.2026", set()),
+    # A sentence asking for the number carries none.
+    ("Bitte bei Zahlung stets Rechnungs-Nr. angeben!", set()),
+    ("Rechnungsdatum: 19.03.2026", set()),
     # -- the patient ----------------------------------------------------------
     ("Patient Mustermann, Max", {P}),
     ("Patientin Erika Muster", {P}),
@@ -61,6 +86,15 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("info@praxis-muster.de", {C}),
     ("praxis-muster.de", {C}),  # a bare host: no scheme, no www.
     ("Telefon: 01234 123456", {C}),
+    ("Tel.:0123|456789-10", {C}),  # OCR reads the printed separator bar as "|"
+    ("Fax 0123-45678901", {C}),
+    ("+49 911 1234567", {C}),
+    ("0049 (0)911 123456", {C}),
+    ("Zentrale +43 1 5321234", {C}),
+    ("Beratung, auch telefonisch", set()),
+    ("Telefonische Beratung 3", set()),
+    # An IBAN group can read "0043 0000 00" — a country code it is not.
+    ("DE00 1234 0000 0043 0000 00", set()),
     ("Faktor 2,30", set()),
     # German glues abbreviations with the same dot OCR leaves attached to the
     # next word, so a body line can end in something shaped like a TLD.
@@ -68,6 +102,11 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("Beratung einschl.der Auslagen", set()),
     ("Leistung zzgl.der Sachkosten", set()),
     ("HRB 1234 Musterstadt", {B}),
+    ("Genossenschaftsregisternummer: GnR 123456", {B}),
+    ("Unser IK-Zeichen: 123456 789", {B}),
+    ("IK-Nummer: 1234 567 89", {B}),
+    ("Ust.-ID:DE123456789", {B}),
+    ("USt.-IdNr.: DE123456789", {B}),
     ("IBAN DE00 0000 0000 0000 0000 00 - BIC MUSTDEXXX", {B}),
     # -- the invoice body, which must stay readable ---------------------------
     ("Videodokumentation. Entsprechend Ziffer 612 der GOAe -", set()),
@@ -118,3 +157,166 @@ def test_every_rule_has_a_label() -> None:
     from backend.rules import STATIC_RULES
 
     assert {name for name, _ in STATIC_RULES} == set(RULE_LABELS)
+
+
+# -- what must stay readable ------------------------------------------------- #
+def _cell(text, left, top, width=100, height=20):
+    return Line(text=text, left=left, top=top, width=width, height=height)
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        ("Facharzt für Orthopädie", True),
+        ("Hautarzt-Allergologie-Lasermedizin", True),
+        ("Privatärztliche Praxis für", True),
+        ("Chirotherapie – Sportmedizin", True),
+        # The unknown word is the practice's name.
+        ("Kieferorthopädie Muster", False),
+        ("Dr. med. Andrea Muster, Fachärztin für Innere Medizin", False),
+        ("Beratung", False),
+    ],
+)
+def test_a_specialty_is_kept_only_on_its_own(text, kept):
+    from backend.rules import is_specialty_line
+
+    assert is_specialty_line(text) is kept
+
+
+def test_keep_names_dates_diagnoses_and_the_clearing_house():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Muster VerrechnungsSysteme GmbH", 10, 10, width=300),
+        _cell("Rechnungsdatum:", 10, 60),
+        _cell("19.03.2026", 130, 60),
+        _cell("Diagnosen:", 10, 120),
+        _cell("1. Akute Bronchitis", 10, 142, width=250),
+        _cell("2. Lumbago", 12, 164, width=120),
+    ]
+    assert keep_indices(lines) == {0: "PVS", 1: "DATE", 2: "DATE", 3: "DIAG", 4: "DIAG", 5: "DIAG"}
+
+
+def test_a_diagnosis_beside_its_label_cell_is_kept():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Diagnose:", 10, 120, width=80),
+        _cell("V.a. Akute Bronchitis, Verruca vulgaris", 100, 120, width=400),
+        _cell("Lumbago, Zephalgie", 103, 142, width=200),
+        _cell("Andrea Muster", 10, 164, width=150),
+        _cell("Musterstraße 1", 103, 250, width=150),
+    ]
+    assert keep_indices(lines) == {0: "DIAG", 1: "DIAG", 2: "DIAG"}
+
+
+def test_a_diagnosis_beside_its_label_ends_at_the_next_row_of_cells():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Diagnose:", 10, 120, width=80),
+        _cell("Lumbago", 100, 120, width=200),
+        _cell("Nr.", 10, 142, width=40),
+        _cell("Muster", 102, 142, width=100),
+    ]
+    assert keep_indices(lines) == {0: "DIAG", 1: "DIAG"}
+
+
+def test_a_merged_diagnosis_label_keeps_nothing_beside_it():
+    from backend.rules import keep_indices
+
+    lines = [
+        _cell("Diagnose: Lumbago", 10, 120, width=150),
+        _cell("Andrea Muster", 300, 120, width=150),
+    ]
+    assert keep_indices(lines) == {0: "DIAG"}
+
+
+def test_a_date_beside_a_name_is_not_kept_for_its_label():
+    from backend.rules import keep_indices
+
+    lines = [_cell("Datum:", 10, 10), _cell("Muster, Andrea 12.03.2026", 130, 10, width=200)]
+    assert 1 not in keep_indices(lines)
+
+
+def test_an_invoice_number_pairs_with_its_own_row_only():
+    """Rows twenty pixels apart: the half-line tolerance of the other labeled
+    values would hand the next row's plain "11" to the label above it."""
+    from backend.rules import labeled_value_indices
+
+    lines = [
+        _cell("Rechnungsnummer:", 10, 100, height=21),
+        _cell("26001234p", 130, 100),
+        _cell("Abschlagsnummer:", 10, 118),
+        _cell("11", 130, 121, width=22, height=18),
+    ]
+    assert set(labeled_value_indices(lines)) == {1}
+
+
+@pytest.mark.parametrize(
+    "label,value",
+    [
+        ("Steuernummer:", "123/456/78901"),
+        ("USt-IdNr.:", "DE 123 456 789"),
+        ("IK:", "123456789"),
+        ("IK-Nummer:", "123456789"),
+        # The label names whose IK it is.
+        ("IK Musterstelle Musterstadt", "123456789"),
+        ("USt.-IdNr.:", "DE 123 456 789"),
+        ("LANR:", "123456789"),
+        ("BSNR:", "123456700"),
+    ],
+)
+def test_a_sender_identifier_in_the_cell_beside_its_label(label, value):
+    from backend.rules import labeled_value_indices
+
+    lines = [_cell(label, 10, 100), _cell(value, 130, 100), _cell("12.03.2026", 300, 100)]
+    assert labeled_value_indices(lines) == {1: PiiLabel.ID}
+
+
+def test_a_sender_label_does_not_take_the_date_beside_it():
+    from backend.rules import labeled_value_indices
+
+    lines = [_cell("Steuernummer:", 10, 100), _cell("12.03.2026", 130, 100)]
+    assert labeled_value_indices(lines) == {}
+
+
+def test_an_invoice_number_under_a_narrower_label_cell():
+    from backend.rules import labeled_value_indices
+
+    lines = [
+        _cell("Rg.-Nr.:", 462, 487, width=41, height=15),
+        _cell("000123/045678", 462, 502, width=85, height=14),
+    ]
+    assert labeled_value_indices(lines) == {1: PiiLabel.ID}
+
+
+# -- the birth year ---------------------------------------------------------- #
+def _note(text):
+    from backend.pii import Span
+    from backend.rules import birth_year_note
+
+    line = Line(text=text, left=0, top=10, width=len(text) * 10, height=20)
+    return birth_year_note(line, [Span(PiiLabel.DATE_OF_BIRTH, 0, len(text), text, "labeled-value")])
+
+
+def test_the_birth_year_is_printed_where_the_date_stood():
+    note = _note("Geburtsdatum: 26.06.1975")
+    assert (note.text, note.x0, note.x1, note.y0, note.y1) == ("1975", 140, 240, 10, 30)
+
+
+def test_a_two_digit_birth_year_is_written_out():
+    assert _note("geb. 05.03.11").text == "2011"
+    assert _note("geb. 05.03.75").text == "1975"
+
+
+def test_no_year_when_the_birthdate_is_ambiguous():
+    assert _note("Geburtsdatum Behandlung 03.04.2026 01.02.1980") is None
+
+
+def test_no_year_without_a_birthdate():
+    from backend.pii import Span
+    from backend.rules import birth_year_note
+
+    line = Line(text="Rechnungsdatum: 19.03.2026", left=0, top=0, width=100, height=10)
+    assert birth_year_note(line, [Span(PiiLabel.ID, 0, 5, "x", "labeled-value")]) is None

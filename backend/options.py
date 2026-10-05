@@ -33,6 +33,16 @@ Dpi = Annotated[int, Field(ge=36, le=1200)]
 BoxList = Annotated[list[int], Field(min_length=4, max_length=4)]
 
 
+class NoteIn(BaseModel):
+    """Text printed white on its own black box — the birth year where the
+    birthdate was."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    box: BoxList
+    text: Annotated[str, Field(min_length=1, max_length=40)]
+
+
 def _detail(exc: ValidationError, valid: list[str] | None = None) -> str:
     """Flatten a pydantic error into the single sentence the API reports.
 
@@ -135,14 +145,15 @@ class AssembleOptions(_QueryModel):
 
 class PageIn(BaseModel):
     """One page of an ``/api/assemble`` body. ``data`` is base64, decoded here;
-    ``boxes`` are in that image's own pixel space; ``content_type`` is purely
-    informational — the real format is whatever the bytes decode to."""
+    ``boxes`` and ``notes`` are in that image's own pixel space; ``content_type``
+    is purely informational — the real format is whatever the bytes decode to."""
 
     model_config = ConfigDict(extra="forbid")
 
     data: Base64Bytes
     content_type: str | None = None
     boxes: list[BoxList] = []
+    notes: list[NoteIn] = []
 
 
 class AssembleBody(BaseModel):

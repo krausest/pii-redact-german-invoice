@@ -16,7 +16,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from backend.classifiers.base import Classifier
 from backend.document import build_document, spans_to_lines
@@ -29,12 +29,34 @@ from backend.layout import (
     document_order,
     draw_layout_debug,
     region_boxes,
+    signature_boxes,
+    subtract,
 )
 from backend.harvest import harvest, name_spans
 from backend.pii import Span
-from backend.rules import item_table_indices, rule_spans
+from backend.rules import birth_year_note, item_table_indices, keep_indices, rule_spans
 from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
+
+
+def _rect(line: Line) -> Box:
+    return Box(line.left, line.top, line.left + line.width, line.top + line.height)
+
+
+def _inside(inner: Box, outer: Box) -> bool:
+    return outer.x0 <= inner.x0 and outer.y0 <= inner.y0 and inner.x1 <= outer.x1 and inner.y1 <= outer.y1
+
+
+def _print_note(draw: ImageDraw.ImageDraw, box: Box) -> None:
+    """``box.text`` left-aligned and vertically centred on ``box``, as large as
+    the box's height allows and shrunk until it fits its width."""
+    height = box.y1 - box.y0
+    size = max(6, int(height * 0.85))
+    font = ImageFont.load_default(size=size)
+    while size > 6 and draw.textlength(box.text, font=font) > box.x1 - box.x0:
+        size -= 1
+        font = ImageFont.load_default(size=size)
+    draw.text((box.x0, box.y0 + height / 2), box.text, fill=(255, 255, 255), font=font, anchor="lm")
 
 
 class RedactionPipeline:
@@ -190,21 +212,27 @@ class RedactionPipeline:
         # as everywhere else, the classifier does not (see item_table_indices).
         # Computed on the *unordered* lines because it is a purely geometric
         # pass over pixel boxes — reading order neither helps nor hinders it.
+        # The kept lines (dates, diagnoses, specialty, clearing house) extend
+        # the same exemption and are cut out of the region boxes. The name
+        # memory still reaches a diagnosis; a line made only of specialty or
+        # clearing-house words holds no name for it to find.
         table_idx = item_table_indices(lines)
+        keep = keep_indices(lines, table_idx)
 
         # --- pass one: what each line carries on its own ------------------- #
         # Two span sources, kept apart on purpose: inside the item table the
         # classifier's findings are dropped and the rules' are not. A fee table
         # is a grid of two-word service texts, which in German look exactly like
         # a forename/surname pair to a model — while a rule that fires there
-        # (a labeled patient name) is still evidence.
+        # (a labeled patient line) is still evidence.
         rules_by_line = spans_to_lines(
             rule_spans(ordered, bounds, self._table_in_order(order, table_idx)), bounds
         )
         model = self.classifier(classifier)
         model_by_line = spans_to_lines(model.spans(text, trace), bounds)
         hits: list[list[Span]] = [
-            list(rules_by_line[pos]) + ([] if i in table_idx else model_by_line[pos])
+            [s for s in rules_by_line[pos] if keep.get(i) != "PVS" or s.source != "rule ORG_LEGAL"]
+            + ([] if i in keep else model_by_line[pos])
             for pos, i in enumerate(order)
         ]
 
@@ -217,32 +245,48 @@ class RedactionPipeline:
         names = known_names if known_names is not None else set()
         names |= harvest(ordered, hits)
         memory_by_line = spans_to_lines(name_spans(ordered, bounds, names), bounds)
-        for pos in range(len(order)):
-            hits[pos] += memory_by_line[pos]
+        for pos, i in enumerate(order):
+            if keep.get(i) not in ("FACH", "PVS"):
+                hits[pos] += memory_by_line[pos]
 
         pad = self._padding
         boxes: list[Box] = []
-        redacted: set[int] = set()
-        found: dict[int, list[Span]] = {}
-        for pos, i in enumerate(order):
-            if hits[pos]:
-                found[i] = hits[pos]
-                redacted.add(i)
-                line = lines[i]
-                boxes.append(
-                    Box(
-                        line.left - pad,
-                        line.top - pad,
-                        line.left + line.width + pad,
-                        line.top + line.height + pad,
-                    )
-                )
+        notes: dict[int, Box] = {}
+        found = {i: hits[pos] for pos, i in enumerate(order) if hits[pos]}
+        redacted = set(found)
+        # A kept line clips its neighbours' padding, never their own box: the
+        # padding only guards against a tight OCR box, the kept line is content.
+        holes = [_rect(lines[i]) for i in keep if i not in redacted]
+        for i in order:
+            if i not in found:
+                continue
+            line = lines[i]
+            padded = Box(
+                line.left - pad,
+                line.top - pad,
+                line.left + line.width + pad,
+                line.top + line.height + pad,
+            )
+            parts = subtract(padded, holes)
+            if parts != [padded]:
+                own = _rect(line)
+                parts = [p for p in parts if not _inside(p, own)] + [own]
+            boxes.extend(parts)
+            note = birth_year_note(line, found[i])
+            if note is not None:
+                notes[i] = note
 
         # No gate on the detector: without one there are no regions, and
         # `region_boxes` over none is empty.
-        region_hits = region_boxes(lines, regions, redacted, pad)
-        trace_page(trace, lines, regions, order, spoken, found, table_idx, region_hits)
+        region_hits = region_boxes(lines, regions, redacted, pad, set(keep))
+        signatures = signature_boxes(lines, image.width, pad)
+        trace_page(
+            trace, lines, regions, order, spoken, found, keep, region_hits, signatures, notes
+        )
         boxes.extend(box for _, box, _ in region_hits)
+        boxes.extend(box for _, box in signatures)
+        # Last, so no box drawn after a note covers its text.
+        boxes.extend(notes.values())
         return boxes
 
     @staticmethod
@@ -258,9 +302,14 @@ class RedactionPipeline:
         boxes: list[Box],
         fill: tuple[int, int, int] | None = None,
     ) -> Image.Image:
+        """Fill ``boxes``; a note's text is printed in white on its box, after
+        every box is filled so none covers it."""
         draw = ImageDraw.Draw(image)
         for box in boxes:
             draw.rectangle(box.as_list(), fill=fill if fill is not None else self._fill)
+        for box in boxes:
+            if box.text:
+                _print_note(draw, box)
         return image
 
     # -- full path --------------------------------------------------------- #
@@ -280,7 +329,7 @@ class RedactionPipeline:
         copied with the detected regions outlined and labeled and each line
         group's bounding box drawn — what ``--debug-layout`` writes to
         ``<stem>_layout.jpg``. It shows what the detector *saw*, not which
-        regions the majority rule then blackened; only ``backend/cli.py``
+        regions then got blackened; only ``backend/cli.py``
         calls it."""
         if self._layout is None:
             return None

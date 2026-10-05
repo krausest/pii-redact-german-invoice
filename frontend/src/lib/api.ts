@@ -1,4 +1,4 @@
-import type { Box, Dpi, OutputFormat, Page } from './types'
+import type { Box, Dpi, Note, OutputFormat, Page } from './types'
 
 /**
  * Two endpoints, one job each. `/api/redact` runs the models and reports what it
@@ -35,6 +35,7 @@ interface ReportPage {
   width: number
   height: number
   boxes: Box[]
+  notes: Note[]
   image: { content_type: string; data: string }
 }
 
@@ -77,6 +78,7 @@ export async function analyze(file: File, opts: AnalyzeOptions): Promise<Page[]>
     width: p.width,
     height: p.height,
     boxes: p.boxes,
+    notes: p.notes,
   }))
 }
 
@@ -123,7 +125,7 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
  * or the PDF comes back at the wrong physical page size.
  */
 export async function render(
-  pages: { image: string; boxes: Box[] }[],
+  pages: { image: string; boxes: Box[]; notes: Note[] }[],
   format: OutputFormat,
   dpi: number,
   quality?: number,
@@ -134,7 +136,12 @@ export async function render(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      pages: pages.map((p) => ({ content_type: 'image/jpeg', data: p.image, boxes: p.boxes })),
+      pages: pages.map((p) => ({
+        content_type: 'image/jpeg',
+        data: p.image,
+        boxes: p.boxes,
+        notes: p.notes,
+      })),
     }),
   })
   if (!res.ok) throw await toError(res)

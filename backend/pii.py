@@ -98,6 +98,7 @@ RULE_LABELS: dict[str, PiiLabel] = {
     "DE_PLZ_CITY": PiiLabel.ADDRESS,
     "ORG_LEGAL": PiiLabel.ORG,
     "CONTACT": PiiLabel.CONTACT,
+    "PHONE": PiiLabel.CONTACT,
     "IMPRINT": PiiLabel.BANK,
 }
 
@@ -129,13 +130,13 @@ RULE_LABELS: dict[str, PiiLabel] = {
 #   label printed beside the value, and no zero-shot extractor can. The two
 #   genuine catches were sender identifiers (an IK number, a VAT ID) that
 #   `IMPRINT` is meant to cover; the fix for those is that rule, not a label
-#   that also undoes a documented invariant.
+#   that would also fire on amounts and fee numbers.
 # * `media` produced 12 spans and helped redact nothing at all; `region`
 #   produced 5 and was never the only reason for a box. Dead weight.
 # * `product` stays, against the prediction that it would fire on Leistungstexte:
-#   all 10 lines only it redacts are letterhead specialty lines and clearing-house
-#   names, i.e. sender identity, which is redacted by design. The item-table gate
-#   removes the Leistungstexte before this table is ever consulted.
+#   all 10 lines only it redacted were letterhead specialty lines and
+#   clearing-house names. Both are now kept (`backend.rules.keep_indices`), which
+#   drops the classifier there, as the item-table gate does for Leistungstexte.
 #
 # Note what has no key at all: **SALUTATION**. GLiNER2 has no label for "Herrn"
 # or "Sehr geehrte", so `backend.rules.SALUT` stays load-bearing whichever

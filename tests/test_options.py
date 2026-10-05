@@ -53,6 +53,7 @@ def test_hyphenated_wire_names():
         {"jpeg-quality": "101"},
         {"pdf-dpi": "5"},
         {"pdf-dpi": "nope"},
+        {"region-ratio": "0.5"},  # removed option
     ],
 )
 def test_redact_rejects(raw):

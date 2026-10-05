@@ -110,7 +110,8 @@ class Verdict:
     # What put ink on the line: the source of every span that touched it
     # ("rule SALUT", "labeled-value", "name-memory", "presidio"), joined with
     # "+" when several did, or `overlap` for a neighbour's padding spilling onto
-    # it. `item table` on a `keep` records that the classifier was off there.
+    # it. On a `keep` it records why the line was spared (`item table`, `DATE`,
+    # `DIAG`, `PVS`, `FACH`).
     reason: str | None
     coverage: float
 
@@ -139,6 +140,8 @@ _REASON_RE = re.compile(r"\(([^)]*)\)\s*$")
 # source is read back — the label and the score are for a human, the source is
 # what a snapshot diff needs to say *which* detector went quiet.
 _SPAN_RE = re.compile(r"^[A-Z_]+ .* \[(.+?) \d+\.\d+\]$")
+# Why a line was spared: `-> keep (item table)`, `-> keep (DIAG)`, ...
+_KEEP_RE = re.compile(r"^-> keep \((.+)\)$")
 
 
 # `format_line` lives in backend.trace, next to the code that emits it — the
@@ -297,7 +300,7 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
     line unambiguously and the ordering difference stays an implementation
     detail of the trace."""
     sources: dict[str, list[str]] = {}
-    kept_by_table: set[str] = set()
+    kept_why: dict[str, str] = {}
     header: str | None = None
     for raw in trace_text.splitlines():
         stripped = raw.strip()
@@ -306,8 +309,8 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
             sources.setdefault(header, [])
         elif header is None:
             continue
-        elif stripped.startswith("-> keep (item table)"):
-            kept_by_table.add(header)
+        elif (k := _KEEP_RE.match(stripped)) is not None:
+            kept_why[header] = k.group(1)
         elif (m := _SPAN_RE.match(stripped)) is not None:
             if m.group(1) not in sources[header]:
                 sources[header].append(m.group(1))
@@ -327,7 +330,7 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
         cov = coverage(line, all_boxes)
         if cov <= UNTOUCHED:
             verdicts.append(
-                Verdict(header, "keep", "item table" if header in kept_by_table else None, cov)
+                Verdict(header, "keep", kept_why.get(header), cov)
             )
             continue
         # Ink on a line nothing flagged can only be a neighbour's padded box

@@ -51,6 +51,25 @@ def test_fills_the_box():
     assert image.getpixel((2, 2)) == (255, 255, 255)  # outside
 
 
+def test_prints_a_note_on_its_own_black_box():
+    client = build()
+    note = {"box": [0, 0, 40, 30], "text": "1975"}
+    payload = {"pages": [{"data": b64_png(), "notes": [note]}]}
+    with client:
+        r = client.post(f"{URL}?format=jpeg", json=payload)
+    assert r.status_code == 200
+    image = Image.open(io.BytesIO(r.content)).convert("RGB")
+    assert image.getpixel((39, 1))[0] < 30  # black ground
+    assert max(image.getpixel((x, 15))[0] for x in range(40)) > 200  # white text
+
+
+def test_a_note_needs_text():
+    client = build()
+    payload = {"pages": [{"data": b64_png(), "notes": [{"box": [0, 0, 4, 4], "text": ""}]}]}
+    with client:
+        assert client.post(URL, json=payload).status_code == 400
+
+
 def test_combines_pages_into_one_pdf():
     client = build()
     payload = {"pages": [{"data": b64_png(), "boxes": []}, {"data": b64_png(), "boxes": []}]}

@@ -128,7 +128,11 @@
   }
 
   function sameOptions(a: AnalyzeOptions, b: AnalyzeOptions) {
-    return a.dpi === b.dpi && a.unwarp === b.unwarp && a.classifier === b.classifier
+    return (
+      a.dpi === b.dpi &&
+      a.unwarp === b.unwarp &&
+      a.classifier === b.classifier
+    )
   }
 
   /**
@@ -233,7 +237,7 @@
   function renderDoc(d: Doc): Promise<Blob> {
     const format: OutputFormat = d.kind === 'pdf' ? 'pdf' : 'jpeg'
     return render(
-      d.pages.map((p) => ({ image: p.image, boxes: p.boxes })),
+      d.pages.map((p) => ({ image: p.image, boxes: p.boxes, notes: p.notes })),
       format,
       d.options.dpi,
     )
