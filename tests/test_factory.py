@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from backend import factory
 from backend.config import Config, EngineConfig
 
@@ -10,7 +12,9 @@ def test_resolve_engine_reports_the_pair():
     """The dict is the wire shape: /health and the report's `engine` block both
     publish it verbatim, so this pins their contract too."""
     assert factory.resolve_engine(Config()) == {"ocr": "onnxruntime", "classifier": "presidio"}
-    config = Config(engine=EngineConfig(ocr_backend="paddle", classifier="guard-omni"))
+    config = Config(
+        engine=EngineConfig(ocr_backend="paddle", classifier="guard-omni", guard_omni=True)
+    )
     assert factory.resolve_engine(config) == {"ocr": "paddle", "classifier": "guard-omni"}
 
 
@@ -48,7 +52,7 @@ def test_no_classifier_is_built_until_one_is_asked_for(monkeypatch):
     monkeypatch.setattr(factory, "_build_classifier", lambda name, _t: built.append(name) or name)
     monkeypatch.setattr(factory, "_build_layout_detector", lambda *_a: None)
 
-    pipeline = factory.build_pipeline(Config())
+    pipeline = factory.build_pipeline(Config(engine=EngineConfig(guard_omni=True)))
     assert built == []  # constructing the pipeline builds no classifier at all
 
     assert pipeline.classifier() == "presidio"  # the process default
@@ -57,3 +61,14 @@ def test_no_classifier_is_built_until_one_is_asked_for(monkeypatch):
 
     pipeline.classifier("guard-omni")
     assert built == ["presidio", "guard-omni"]  # built once, then kept
+
+
+def test_a_disabled_classifier_gets_no_factory(monkeypatch):
+    monkeypatch.setattr(factory, "_build_ocr", lambda *_a: None)
+    monkeypatch.setattr(factory, "_build_classifier", lambda name, _t: name)
+    monkeypatch.setattr(factory, "_build_layout_detector", lambda *_a: None)
+
+    pipeline = factory.build_pipeline(Config())
+    assert factory.classifier_names(Config()) == ("presidio",)
+    with pytest.raises(RuntimeError, match="guard-omni"):
+        pipeline.classifier("guard-omni")

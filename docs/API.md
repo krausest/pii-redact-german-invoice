@@ -24,13 +24,14 @@ curl http://localhost:8000/health
 {
   "status": "ok",
   "engine": { "ocr": "onnxruntime", "classifier": "presidio" },
-  "classifiers": ["presidio", "guard-omni"]
+  "classifiers": ["presidio"]
 }
 ```
 
 - `engine.ocr` — the OCR inference runtime, fixed per process.
 - `engine.classifier` — the classifier a request gets when it does not name one.
-- `classifiers` — every value `?classifier=` accepts.
+- `classifiers` — every value `?classifier=` accepts on this server. `guard-omni`
+  is listed only when enabled (`[engine].guard_omni`, off by default).
 
 Both come from [`config.toml`](Configuration.md#engine) or the matching environment
 variables.
@@ -46,7 +47,7 @@ Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
 | `json-output` | `true` \| `false` | `false` | return the JSON report instead of the bare file |
 | `pdf-dpi` | 36–1200 | `redaction.pdf_dpi` | rasterization DPI for PDF input |
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
-| `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it |
+| `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it. `guard-omni` only if enabled, otherwise `400` |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report — **requires `json-output=true`** |
 
 ### File response (default)
@@ -170,7 +171,7 @@ jq '{pages: [.pages[] | {data: .image.data, boxes: .boxes, notes: .notes}]}' rep
 
 | Status | When |
 |---|---|
-| `400` | bad or unknown parameter, empty or malformed body, undecodable image or PDF, image over `api.max_image_pixels` (decompression-bomb guard), more pages than `redaction.max_pages`, `debug=true` without `json-output=true` |
+| `400` | bad or unknown parameter, empty or malformed body, undecodable image or PDF, image over `api.max_image_pixels` (decompression-bomb guard), more pages than `redaction.max_pages`, `debug=true` without `json-output=true`, a classifier not enabled on this server |
 | `413` | body larger than `api.max_upload_bytes` — checked on `Content-Length` and while streaming |
 | `415` | unsupported content type or image format |
 

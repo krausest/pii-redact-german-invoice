@@ -10,13 +10,14 @@ setup without Docker, and [Docker](Docker.md). The batch CLI is described in
 - Node.js 22+ for the web UI
 
 ```bash
-uv sync                                          # Python dependencies
+uv sync                                          # Python dependencies (incl. the guard-omni group)
 uv run python -m spacy download de_core_news_lg  # German model for the presidio classifier
 cd frontend && npm install && cd ..              # web UI dependencies
 ```
 
 The first run downloads the Paddle models (~180 MB) into `.paddle_cache/`;
-`guard-omni` is fetched from Hugging Face the first time it is selected. See
+`guard-omni` is off unless `PII_GUARD_OMNI=true`, and is then fetched from
+Hugging Face the first time it is selected. See
 [Redaction › Models](Redaction.md#models).
 
 ## Development

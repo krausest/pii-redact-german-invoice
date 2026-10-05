@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from backend.config import Config, load_config
+from backend.config import Config, EngineConfig, load_config
 
 
 def _write(tmp_path, body: str):
@@ -30,9 +31,20 @@ def test_partial_file_fills_defaults(tmp_path):
 
 
 def test_engine_axes_combine_freely(tmp_path):
-    body = '[engine]\nocr_backend = "paddle"\nclassifier = "guard-omni"\n'
+    body = '[engine]\nocr_backend = "paddle"\nclassifier = "guard-omni"\nguard_omni = true\n'
     cfg = load_config(_write(tmp_path, body))
     assert (cfg.engine.ocr_backend, cfg.engine.classifier) == ("paddle", "guard-omni")
+
+
+def test_guard_omni_is_opt_in():
+    assert Config().engine.classifiers == ("presidio",)
+    assert EngineConfig(guard_omni=True).classifiers == ("presidio", "guard-omni")
+
+
+def test_a_disabled_classifier_cannot_be_the_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("PII_CLASSIFIER", "guard-omni")
+    with pytest.raises(ValidationError, match="PII_GUARD_OMNI"):
+        load_config(_write(tmp_path, ""))
 
 
 def test_det_box_thresh_default_is_below_paddles_own(tmp_path):
@@ -48,6 +60,7 @@ def test_env_engine_overrides_file(tmp_path, monkeypatch):
     path = _write(tmp_path, body)
     monkeypatch.setenv("PII_OCR_BACKEND", "paddle")
     monkeypatch.setenv("PII_CLASSIFIER", "guard-omni")
+    monkeypatch.setenv("PII_GUARD_OMNI", "true")
     cfg = load_config(path)
     assert (cfg.engine.ocr_backend, cfg.engine.classifier) == ("paddle", "guard-omni")
     assert cfg.engine.det_box_thresh == 0.5  # rest of the section kept

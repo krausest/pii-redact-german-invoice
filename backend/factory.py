@@ -8,8 +8,6 @@ and the CLI builds one per run.
 
 from __future__ import annotations
 
-import typing
-
 from backend.classifiers.base import Classifier
 from backend.config import ClassifierName, Config
 from backend.pipeline import RedactionPipeline
@@ -36,11 +34,11 @@ def _build_classifier(classifier: str, score_threshold: float):
     raise ValueError(f"unknown classifier {classifier!r}")
 
 
-def classifier_names() -> tuple[str, ...]:
+def classifier_names(config: Config) -> tuple[ClassifierName, ...]:
     """Every classifier a request may name. Published by ``/health`` and used by
     :mod:`backend.options` to validate ``?classifier=``, so the wire contract and
     what can actually be built are the same list."""
-    return typing.get_args(ClassifierName)
+    return config.engine.classifiers
 
 
 def _build_layout_detector(model_name: str, threshold: float, layout_nms: bool, engine: str):
@@ -69,7 +67,7 @@ def build_pipeline(config: Config) -> RedactionPipeline:
     # The unwarper next door is lazy for the same reason and for longer.
     threshold = config.redaction.score_threshold
     factories = {
-        name: (lambda n=name: _build_classifier(n, threshold)) for name in classifier_names()
+        name: (lambda n=name: _build_classifier(n, threshold)) for name in classifier_names(config)
     }
 
     def unwarper_factory():

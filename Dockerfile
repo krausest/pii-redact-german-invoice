@@ -43,7 +43,8 @@ ENV UV_COMPILE_BYTECODE=1 \
     PII_STATIC_DIR=/app/static
 
 # --- Dependency layer (cached across source changes) ---
-# `--no-default-groups` drops the dev group (pytest).
+# `--no-default-groups` drops the dev group (pytest) and the guard-omni group
+# (torch): the image offers presidio only.
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-default-groups --no-install-project
 
@@ -56,8 +57,8 @@ RUN uv sync --frozen --no-default-groups
 
 # --- Bake every model into the image (offline runtime) ---
 # HF_HUB_OFFLINE=0 is set for this step only so the models may download; the ENV
-# below forces offline at runtime. Populates /app/.paddle_cache and, for guard-omni,
-# /app/.hf_cache — under /app, not root's home, so the runtime user can read it.
+# below forces offline at runtime. Populates /app/.paddle_cache and /app/.hf_cache
+# — under /app, not root's home, so the runtime user can read it.
 # `--no-sync`: don't let `uv run` re-sync (which would re-add the dev group).
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 uv run --no-sync python warmup.py
 
@@ -70,7 +71,7 @@ EXPOSE 8000
 # download attempt at runtime is a missed bake — make it fail loudly.
 #
 # Four config keys are overridable per container without rebuilding or mounting a
-# config.toml: `-e PII_OCR_BACKEND=paddle|onnxruntime`, `-e PII_CLASSIFIER=presidio|guard-omni`, `-e PII_UNWARP=false` (skip the
+# config.toml: `-e PII_OCR_BACKEND=paddle|onnxruntime`, `-e PII_CLASSIFIER=presidio`, `-e PII_UNWARP=false` (skip the
 # dewarping model — much faster on flat scans and PDFs, and it is what makes a
 # CPU-only container usable) and `-e PII_REDACT_REGIONS=false` (the
 # letterhead/footer/sender-column pass). All are left unset here so the baked

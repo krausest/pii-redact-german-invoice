@@ -34,7 +34,7 @@ error messages. A flag you leave out takes its default from
 | `--json-output` | off | write the JSON report instead of the document |
 | `--pdf-dpi N` | `redaction.pdf_dpi` | rasterization DPI for PDF input (36–1200) |
 | `--jpeg-quality N` | `redaction.jpeg_quality` | quality of every JPEG produced (1–100) |
-| `--classifier NAME` | `engine.classifier` | `presidio` \| `guard-omni` |
+| `--classifier NAME` | `engine.classifier` | `presidio` \| `guard-omni` (needs `PII_GUARD_OMNI=true`) |
 | `--debug` | off | add the detection trace to the report (needs `--json-output`) |
 | `--debug-layout` | off | CLI only: write `<stem>_layout.jpg` (per page `_layout_pN.jpg`) with the detected layout regions drawn |
 

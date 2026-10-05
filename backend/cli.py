@@ -104,7 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--classifier",
         metavar="NAME",
         help="which model half to run: presidio | guard-omni (default: engine.classifier). "
-        "The first run naming one loads it, which takes a while",
+        "guard-omni needs PII_GUARD_OMNI=true. The first run naming one loads it, "
+        "which takes a while",
     )
     opts.add_argument(
         "--debug",
