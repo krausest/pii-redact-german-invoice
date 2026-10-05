@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import os
 import tomllib
+import typing
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 OCRBackend = Literal["paddle", "onnxruntime"]
 # The model half of the engine. Unlike the OCR backend this is selectable *per
@@ -47,6 +48,23 @@ class EngineConfig(BaseModel):
     # all — not too faint to read (its contrast matches the item table's), just
     # too thin over too wide a box. See `backend/ocr/paddle.py`.
     det_box_thresh: Annotated[float, Field(gt=0.0, le=1.0)] = 0.5
+    # Opt-in: its runtime (torch) is a separate uv group and not in the image.
+    guard_omni: bool = False
+
+    @property
+    def classifiers(self) -> tuple[ClassifierName, ...]:
+        """Every classifier this process offers, in `ClassifierName` order."""
+        return tuple(
+            n for n in typing.get_args(ClassifierName) if n != "guard-omni" or self.guard_omni
+        )
+
+    @model_validator(mode="after")
+    def _default_is_enabled(self) -> EngineConfig:
+        if self.classifier not in self.classifiers:
+            raise ValueError(
+                f"classifier {self.classifier!r} is disabled; set guard_omni = true (PII_GUARD_OMNI)"
+            )
+        return self
 
 
 class LayoutConfig(BaseModel):
@@ -122,6 +140,7 @@ class Config(BaseModel):
 _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "PII_OCR_BACKEND": ("engine", "ocr_backend"),
     "PII_CLASSIFIER": ("engine", "classifier"),
+    "PII_GUARD_OMNI": ("engine", "guard_omni"),
     "PII_UNWARP": ("redaction", "unwarp"),
     "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
 }

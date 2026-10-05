@@ -127,6 +127,8 @@ class RedactOptions(_QueryModel):
         # "body: Value error, ...".
         if opts.debug and not opts.json_output:
             raise ValueError("debug=true requires json-output=true")
+        if opts.classifier not in config.engine.classifiers:
+            raise ValueError(f"classifier {opts.classifier!r} is not enabled on this server")
         return opts
 
 

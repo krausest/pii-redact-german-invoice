@@ -55,7 +55,12 @@ class GuardOmniClassifier:
         # Constructing loads ~1 GB of weights, so this happens once per process
         # — and, unlike every other model here, only in a process that was
         # actually asked for this classifier (see RedactionPipeline's registry).
-        from gliner2 import GLiNER2
+        try:
+            from gliner2 import GLiNER2
+        except ImportError as e:
+            raise RuntimeError(
+                "guard-omni needs its runtime: `uv sync --group guard-omni`"
+            ) from e
 
         self._model = GLiNER2.from_pretrained(model_id)
         self._threshold = threshold

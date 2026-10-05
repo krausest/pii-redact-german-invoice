@@ -37,9 +37,9 @@ What the [`Dockerfile`](../Dockerfile) does:
 
 1. A Node stage builds the web UI (`frontend/dist`).
 2. A `python:3.13-slim` stage installs runtime dependencies only
-   (`uv sync --no-default-groups`).
-3. [`docker/warmup.py`](../docker/warmup.py) constructs every engine, both
-   classifiers and the dewarping model, which downloads all weights into the image.
+   (`uv sync --no-default-groups`) — no dev tools and no `guard-omni` runtime (torch).
+3. [`docker/warmup.py`](../docker/warmup.py) constructs every engine, the
+   presidio classifier and the dewarping model, which downloads all weights into the image.
    A model that cannot be fetched fails the build.
 4. The service runs as an unprivileged user, with `HF_HUB_OFFLINE=1` and a
    built-in `HEALTHCHECK` on `/health`.
@@ -65,7 +65,7 @@ docker exec pii curl -fsS http://localhost:8000/health
 | `WEB_CONCURRENCY` | `1` | Gunicorn worker processes; each loads the full model set (~4 GB RAM) |
 | `REQUEST_TIMEOUT` | `120` | Gunicorn request timeout in seconds |
 | `PII_OCR_BACKEND` | from `config.toml` | `paddle` \| `onnxruntime` |
-| `PII_CLASSIFIER` | from `config.toml` | default classifier: `presidio` \| `guard-omni` |
+| `PII_CLASSIFIER` | from `config.toml` | default classifier: `presidio` (the image does not ship `guard-omni`) |
 | `PII_UNWARP` | from `config.toml` | default for `?unwarp=`; `true` dewarps photographed pages (slower) |
 | `PII_REDACT_REGIONS` | from `config.toml` | `false` disables the layout-region pass |
 | `PII_LOG_LEVEL` | `INFO` | `DEBUG` logs the detection trace |

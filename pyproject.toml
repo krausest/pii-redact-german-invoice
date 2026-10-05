@@ -7,12 +7,6 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "de-core-news-lg",
     "fastapi>=0.115.0",
-    # guard-omni's runtime: a GLiNER2 zero-shot NER model, selectable per request
-    # as an alternative to Presidio (backend/classifiers/guard_omni.py). The
-    # `local` extra is what runs the model in-process — without it gliner2 2.x is
-    # only a client for their hosted API, and importing it fails on `torch`. That
-    # extra is what pulls torch + transformers; see the torch pin below.
-    "gliner2[local]>=2.0.0",
     "gunicorn>=23.0.0",
     "onnxruntime>=1.19.0",
     "paddleocr>=3.7.0",
@@ -37,6 +31,18 @@ packages = ["backend"]
 pii-redact = "backend.cli:main"
 
 [dependency-groups]
+# guard-omni's runtime: a GLiNER2 zero-shot NER model, opt-in per process
+# (`[engine].guard_omni`) as an alternative to Presidio
+# (backend/classifiers/guard_omni.py). A group, not a dependency, so the image's
+# `--no-default-groups` leaves torch out. The `local` extra is what runs the
+# model in-process — without it gliner2 2.x is only a client for their hosted
+# API, and importing it fails on `torch`; see the torch pin below.
+guard-omni = [
+    "gliner2[local]>=2.0.0",
+    # Direct only so the CPU index below applies — uv ignores sources on
+    # transitive dependencies.
+    "torch",
+]
 dev = [
     "httpx>=0.28.0",
     # Jupyter notebooks (dev only, not the runtime service). The notebooks call the
@@ -68,4 +74,5 @@ de-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/do
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.uv]
+default-groups = ["dev", "guard-omni"]
 exclude-newer = "0 days"

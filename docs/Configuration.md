@@ -13,6 +13,7 @@ process with a message naming the field. A typo is an error, not a no-op.
 | `PII_CONFIG` | path to the config file (default: `config.toml` in the repo root) |
 | `PII_OCR_BACKEND` | overrides `[engine].ocr_backend` |
 | `PII_CLASSIFIER` | overrides `[engine].classifier` |
+| `PII_GUARD_OMNI` | overrides `[engine].guard_omni` |
 | `PII_UNWARP` | overrides `[redaction].unwarp` |
 | `PII_REDACT_REGIONS` | overrides `[redaction].redact_regions` |
 | `PII_LOG_LEVEL` | log level of the `backend` logger (`INFO`); `DEBUG` logs the full detection trace |
@@ -24,7 +25,7 @@ The overriding variables are validated like the file. Booleans accept
 **Defaults vs. absolute values.** `unwarp`, `classifier`, `pdf_dpi`
 and `jpeg_quality` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
 (`--unwarp`) that names the option wins. `ocr_backend`, `det_box_thresh`,
-`redact_regions` and everything under `[api]` are fixed per process.
+`guard_omni`, `redact_regions` and everything under `[api]` are fixed per process.
 
 ## `[engine]`
 
@@ -32,6 +33,7 @@ and `jpeg_quality` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
 |---|---|---|
 | `ocr_backend` | `onnxruntime` | `paddle` \| `onnxruntime` — runtime for every Paddle model (OCR detection, recognition, layout) |
 | `classifier` | `presidio` | `presidio` \| `guard-omni` — default for `?classifier=` / `--classifier` |
+| `guard_omni` | `false` | offer the `guard-omni` classifier; needs the `guard-omni` uv group (not in the Docker image) |
 | `det_box_thresh` | `0.5` | minimum mean detector score for a text box (PaddleOCR's own default is 0.6) |
 
 The two axes combine freely. Both OCR backends run the same models and produce the

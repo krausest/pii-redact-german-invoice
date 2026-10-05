@@ -159,7 +159,7 @@ Selectable per request (`?classifier=`); the rules above run with either.
 | Classifier | Model | Notes |
 |---|---|---|
 | `presidio` *(default)* | spaCy `de_core_news_lg` NER + regex recognizers | entities `PERSON`, `DE_ADDRESS`, `EMAIL_ADDRESS`, `PHONE_NUMBER` (DE only), `IBAN_CODE`, `BIC_CODE`, `KONTO`, `CREDIT_CARD`. `LOCATION` is excluded. A `PERSON` needs ≥ 2 proper-noun tokens; pattern matches that only exist because two lines were joined are dropped |
-| `guard-omni` | `hivetrace/gliner-guard-omni` (GLiNER2, zero-shot) | curated label set ([`pii.py`](../backend/pii.py)); long pages are analysed in windows; no source for identifiers or salutations — the rules cover those |
+| `guard-omni` *(opt-in: `[engine].guard_omni`, not in the Docker image)* | `hivetrace/gliner-guard-omni` (GLiNER2, zero-shot) | curated label set ([`pii.py`](../backend/pii.py)); long pages are analysed in windows; no source for identifiers or salutations — the rules cover those |
 
 Both implement `Classifier.spans(text, trace) -> list[Span]`
 ([`classifiers/base.py`](../backend/classifiers/base.py)). The pipeline builds each

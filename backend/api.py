@@ -225,7 +225,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {
             "status": "ok",
             "engine": resolve_engine(config),
-            "classifiers": list(classifier_names()),
+            "classifiers": list(classifier_names(config)),
         }
 
     @app.post("/api/redact", description=REDACT_DESCRIPTION)

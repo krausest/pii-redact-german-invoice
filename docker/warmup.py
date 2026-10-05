@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import typing
 
-from backend.config import Config, EngineConfig, OCRBackend
+from backend.config import Config, EngineConfig, OCRBackend, load_config
 from backend.factory import build_pipeline, classifier_names, _build_classifier
 from backend.unwarp import DocUnwarper
 
@@ -39,10 +39,10 @@ def main() -> None:
     # The classifiers are the one thing `build_pipeline` no longer constructs:
     # they are chosen per request and built on first use, so a pipeline holds
     # factories, not models. That laziness is right at runtime and wrong here —
-    # the image has to carry every checkpoint a request may name. guard-omni's
-    # comes from HuggingFace, which is why `HF_HUB_OFFLINE=1` at runtime is a
-    # real network guard again rather than a no-op.
-    for name in classifier_names():
+    # the image has to carry every checkpoint a request may name — and only
+    # those: guard-omni is opt-in (`PII_GUARD_OMNI`) and its runtime is not
+    # installed in the image, so the enabled set is read from the config.
+    for name in classifier_names(load_config()):
         print(f"[warmup] constructing classifier (downloads models): {name}", flush=True)
         _build_classifier(name, Config().redaction.score_threshold)
         print(f"[warmup] done: {name}", flush=True)

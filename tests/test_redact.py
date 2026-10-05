@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from backend.api import create_app
-from backend.config import ApiConfig, Config
+from backend.config import ApiConfig, Config, EngineConfig
 from backend.models import Box
 from tests.conftest import FakePipeline, make_image_bytes, make_pdf_bytes as pdf_bytes
 
@@ -326,7 +326,7 @@ def test_the_classifier_can_be_chosen_per_request_and_the_report_says_which_ran(
     """The one axis of the engine that is *not* fixed per process. The report
     names it because the boxes depend on it — a report that hid which of two
     models found the PII would describe a result nobody could reproduce."""
-    client, _ = build_client()
+    client, _ = build_client(Config(engine=EngineConfig(guard_omni=True)))
     with client:
         r = client.post(
             f"{URL}?json-output=true&classifier=guard-omni",
@@ -335,6 +335,16 @@ def test_the_classifier_can_be_chosen_per_request_and_the_report_says_which_ran(
         )
     assert r.status_code == 200
     assert r.json()["classifier"] == "guard-omni"
+
+
+def test_a_disabled_classifier_is_a_400():
+    client, _ = build_client()
+    with client:
+        r = client.post(
+            f"{URL}?classifier=guard-omni", content=make_image_bytes("PNG"), headers=PNG
+        )
+    assert r.status_code == 400
+    assert "not enabled" in r.json()["detail"]
 
 
 def test_the_removed_region_ratio_is_an_unknown_parameter(png_bytes):
@@ -356,5 +366,13 @@ def test_health_reports_the_resolved_engine_and_what_a_request_may_ask_for():
     assert r.json() == {
         "status": "ok",
         "engine": {"ocr": "onnxruntime", "classifier": "presidio"},
-        "classifiers": ["presidio", "guard-omni"],
+        "classifiers": ["presidio"],
     }
+
+
+def test_health_lists_guard_omni_only_when_enabled():
+    """The web UI shows its model select only when this lists more than one."""
+    client, _ = build_client(Config(engine=EngineConfig(guard_omni=True)))
+    with client:
+        r = client.get("/health")
+    assert r.json()["classifiers"] == ["presidio", "guard-omni"]

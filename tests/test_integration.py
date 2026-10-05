@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageChops
 
-from backend.config import Config, RedactionConfig
+from backend.config import Config, EngineConfig, RedactionConfig
 from backend.factory import build_pipeline
 
 SAMPLE = Path(__file__).resolve().parent.parent / "example" / "GOÄ_Rechnung1.png"
@@ -25,7 +25,9 @@ def pipeline():
         pytest.skip(f"sample image not found: {SAMPLE}")
     # Unwarp on explicitly: the default is off, and the composition test below
     # pins redact() against unwarp -> compute_boxes -> apply_boxes.
-    return build_pipeline(Config(redaction=RedactionConfig(unwarp=True)))
+    return build_pipeline(
+        Config(engine=EngineConfig(guard_omni=True), redaction=RedactionConfig(unwarp=True))
+    )
 
 
 def _differs(a: Image.Image, b: Image.Image) -> bool:
