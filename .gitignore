@@ -27,6 +27,7 @@ output/
 tests/Arztrechnungen/
 Arztrechnung/
 Arztrechnung2/
+Arztrechnung3/
 tests/Arztrechnungen/
 
 # Frontend build + deps
