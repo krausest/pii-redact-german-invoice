@@ -11,12 +11,15 @@ the server stores nothing.
    processed, the whole upload is rejected with a list of the offending files.
 2. **Analyze:** each document goes to `POST /api/redact?json-output=true`, one
    after another. The response holds the clean page images and suggested boxes.
-3. **Review:** draw, select and delete boxes on each page. With several documents a
+3. **Review:** draw, select and delete boxes on each page. Notes (the birth year
+   printed over a redacted birthdate) are shown as the server will print them and
+   sent back unchanged; they are not editable. With several documents a
    side list shows their progress; finished ones open instantly.
 4. **Download:** `POST /api/assemble` turns the pages and kept boxes into the final
    PDF or JPEG — per document, or all finished documents as one ZIP.
 
-Resolution, dewarping and classifier are set per document; changing one re-runs
+Resolution, dewarping, *Whole blocks* (the region ratio rule, off sends
+`region-ratio=1`) and classifier are set per document; changing one re-runs
 the analysis for that document (asking first if boxes were edited). The footer's
 *Debug log* re-runs detection with `debug=true` and shows the trace without
 touching your edits.

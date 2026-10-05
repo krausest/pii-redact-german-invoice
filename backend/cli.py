@@ -107,6 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
         "The first run naming one loads it, which takes a while",
     )
     opts.add_argument(
+        "--region-ratio",
+        metavar="R",
+        help="blacken a whole text block once more than this share of its lines is "
+        "redacted, 0-1; 1 switches that off (default: redaction.layout.region_ratio)",
+    )
+    opts.add_argument(
         "--debug",
         action="store_true",
         default=None,

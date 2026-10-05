@@ -1,4 +1,4 @@
-import type { Box, Dpi, OutputFormat, Page } from './types'
+import type { Box, Dpi, Note, OutputFormat, Page } from './types'
 
 /**
  * Two endpoints, one job each. `/api/redact` runs the models and reports what it
@@ -35,6 +35,7 @@ interface ReportPage {
   width: number
   height: number
   boxes: Box[]
+  notes: Note[]
   image: { content_type: string; data: string }
 }
 
@@ -46,6 +47,8 @@ export interface AnalyzeOptions {
   unwarp: boolean
   /** Which model detects PII; `null` until `/health` named the server default. */
   classifier: string | null
+  /** Blacken a whole text block once enough of its lines are redacted (server ratio). */
+  wholeRegions: boolean
 }
 
 /** What the server offers: its default classifier and every one a request may name. */
@@ -77,6 +80,7 @@ export async function analyze(file: File, opts: AnalyzeOptions): Promise<Page[]>
     width: p.width,
     height: p.height,
     boxes: p.boxes,
+    notes: p.notes,
   }))
 }
 
@@ -104,6 +108,8 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
     unwarp: String(opts.unwarp),
   })
   if (opts.classifier) params.set('classifier', opts.classifier)
+  // Off is a ratio no block can exceed; on leaves the ratio to the server config.
+  if (!opts.wholeRegions) params.set('region-ratio', '1')
   if (debug) params.set('debug', 'true')
   const res = await fetch(`${REDACT_URL}?${params}`, {
     method: 'POST',
@@ -123,7 +129,7 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
  * or the PDF comes back at the wrong physical page size.
  */
 export async function render(
-  pages: { image: string; boxes: Box[] }[],
+  pages: { image: string; boxes: Box[]; notes: Note[] }[],
   format: OutputFormat,
   dpi: number,
   quality?: number,
@@ -134,7 +140,12 @@ export async function render(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      pages: pages.map((p) => ({ content_type: 'image/jpeg', data: p.image, boxes: p.boxes })),
+      pages: pages.map((p) => ({
+        content_type: 'image/jpeg',
+        data: p.image,
+        boxes: p.boxes,
+        notes: p.notes,
+      })),
     }),
   })
   if (!res.ok) throw await toError(res)

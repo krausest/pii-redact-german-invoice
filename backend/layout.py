@@ -18,9 +18,9 @@ turn them into boxes:
   (:data:`_ALWAYS_BLACKEN`) is blackened whole, whatever it holds. ``image`` is
   what pays for the QR/DataMatrix pass being switched off on this branch: a
   Girocode is a graphic, and the detector sees graphics.
-* every other region is blackened whole once at least
-  :data:`_MIN_REDACTED_RATIO` of its OCR lines were flagged by the per-line
-  pass. This is the generic replacement for block growth: a recipient address
+* every other region is blackened whole once *more than* ``ratio`` of its OCR
+  lines were flagged by the per-line pass (``region_ratio`` in the config,
+  ``?region-ratio=`` per request; 1.0 switches this rule off). This is the generic replacement for block growth: a recipient address
   block is a ``text`` region whose street and ZIP+city lines already match a
   static rule, so those hits carry the c/o line, the company name and the
   garbled name line with them — no gap factor anywhere, and it works the same
@@ -33,6 +33,7 @@ paddle.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFont
@@ -42,17 +43,15 @@ from backend.models import Box, Line
 # Blackened on sight, whatever they contain. The ratio rule below could never
 # reach `image` or `seal` anyway — a logo and a practice stamp are pixels, they
 # hold no OCR line, and 0 of 0 clears no bar — so for those two the type is the
-# only evidence there is. `header`/`footer` are here because page furniture
-# carries the sender's identity wherever it appears on the sheet.
-_ALWAYS_BLACKEN = frozenset({"image", "seal", "header", "footer","aside_text"})
+# only evidence there is. `footer` is here because the imprint carries the
+# sender's identity. `header` is not: the detector draws it around the whole
+# letterhead, specialty and practice name included, so it goes by the ratio rule.
+_ALWAYS_BLACKEN = frozenset({"image", "seal", "footer", "aside_text"})
 
-# How much of a region has to be flagged before the whole of it goes. Below a
-# half deliberately: a two-line sender block where only the line naming the
-# company matched is the common shape, and at a strict majority it survived.
-# Measured on the corpus at 0.4, 92 of 179 regions are blackened; the ones left
-# under the bar are 1/3 and 1/8 cases, and reaching those means going near 0.15,
-# where a fee table holding a couple of names goes black with them.
-_MIN_REDACTED_RATIO = 0.4
+# Graphics are blackened without holes: a stamp prints the doctor's name and
+# address around the specialty, and punching out a kept line would show them.
+_NO_HOLES = frozenset({"image", "seal"})
+
 
 _DEBUG_LINE_WIDTH = 4
 _DEBUG_LABEL_PAD = 4
@@ -312,13 +311,42 @@ def _padded(box: Box, padding: int) -> Box:
     return Box(box.x0 - padding, box.y0 - padding, box.x1 + padding, box.y1 + padding)
 
 
+def subtract(box: Box, holes: list[Box]) -> list[Box]:
+    """``box`` minus ``holes``, as rectangles: cut into horizontal bands at the
+    holes' edges, and each band into the x-intervals no hole covers."""
+    holes = [h for h in holes if h.x0 < box.x1 and h.x1 > box.x0 and h.y0 < box.y1 and h.y1 > box.y0]
+    if not holes:
+        return [box]
+    ys = sorted({box.y0, box.y1} | {min(max(y, box.y0), box.y1) for h in holes for y in (h.y0, h.y1)})
+    out: list[Box] = []
+    for y0, y1 in zip(ys, ys[1:]):
+        if y0 >= y1:
+            continue
+        x = box.x0
+        for h in sorted((h for h in holes if h.y0 <= y0 and h.y1 >= y1), key=lambda h: h.x0):
+            if h.x0 > x:
+                out.append(Box(x, y0, h.x0, y1))
+            x = max(x, h.x1)
+        if x < box.x1:
+            out.append(Box(x, y0, box.x1, y1))
+    return out
+
+
 def region_boxes(
     lines: list[Line],
     regions: list[LayoutRegion],
     redacted: set[int],
     padding: int,
+    ratio: float,
+    keep: set[int] | None = None,
 ) -> list[tuple[int, Box, str]]:
     """Whole-region boxes as ``(region index, box, why)``.
+
+    A non-furniture region qualifies when *more than* ``ratio`` of its lines are
+    redacted — strictly, so ``ratio=1.0`` disables the rule.
+
+    ``keep`` holds the lines that must stay readable; they are cut out of every
+    region box but a graphic's, so one region may yield several boxes.
 
     The index is what lets the trace say which *region* a box came from: the box
     itself is padded outwards and so no longer equals the region's own box.
@@ -328,24 +356,74 @@ def region_boxes(
     nothing can ever redact one, so counting them would only dilute a block
     below the threshold.
 
-    Note that ``table`` takes part in the ratio rule like any other region.
-    That is a deliberate trade, not an oversight: it keeps the rule without
-    exceptions, and it costs the invoice body on a page where enough of the item
-    rows carry a patient name — the case to watch on the corpus.
+    ``table`` takes part in the ratio rule like any other region; what keeps
+    the item rows readable on a page where enough of them carry a patient name
+    is that the pipeline passes them in ``keep``.
     """
+    holes = [
+        Box(ln.left, ln.top, ln.left + ln.width, ln.top + ln.height)
+        for i, ln in enumerate(lines)
+        if i in (keep or set()) and i not in redacted
+    ]
     out: list[tuple[int, Box, str]] = []
+
+    def blacken(r: int, region: LayoutRegion, why: str) -> None:
+        box = _padded(region.box, padding)
+        parts = [box] if region.label in _NO_HOLES else subtract(box, holes)
+        out.extend((r, part, why) for part in parts)
+
     for r, (region, idx) in enumerate(zip(regions, lines_by_region(lines, regions))):
         if region.label in _ALWAYS_BLACKEN:
-            out.append((r, _padded(region.box, padding), region.label))
+            blacken(r, region, region.label)
             continue
         counted = [i for i in idx if lines[i].text.strip()]
         if not counted:
             continue
         hits = sum(1 for i in counted if i in redacted)
-        if hits >= _MIN_REDACTED_RATIO * len(counted):
-            out.append(
-                (r, _padded(region.box, padding), f"{region.label} {hits}/{len(counted)} lines")
-            )
+        if hits > ratio * len(counted):
+            blacken(r, region, f"{region.label} {hits}/{len(counted)} lines")
+    return out
+
+
+# A closing formula; the signature is the gap between it and the typed name.
+SIGN_OFF = re.compile(
+    r"(?i)\bmit\s+(?:freundlichen|besten|herzlichen|kollegialen)\s+Gr(?:ü|u|ue)(?:ß|ss)en"
+    r"|\bHochachtungsvoll\b"
+)
+# How far below the closing formula a signature may reach, in its line heights,
+# when no typed name closes the gap — or the gap is wider than that.
+_SIGNATURE_HEIGHTS = 6
+
+
+def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tuple[int, Box]]:
+    """``(closing line index, box)`` over the handwritten signature under each
+    closing formula: the band down to the next line in its column, as wide as
+    the wider of the two and at least half again the formula's width. OCR has
+    no line for a signature and the layout model no class, so the gap the
+    letter leaves for it is the only evidence."""
+    out: list[tuple[int, Box]] = []
+    for i, ln in enumerate(lines):
+        if not SIGN_OFF.search(ln.text):
+            continue
+        bottom = ln.top + ln.height
+        x0, x1 = ln.left, ln.left + ln.width
+        below = [
+            other
+            for other in lines
+            if other.top >= bottom and other.text.strip()
+            and other.left < x1 and other.left + other.width > x0
+        ]
+        limit = bottom + _SIGNATURE_HEIGHTS * ln.height
+        nxt = min(below, key=lambda other: other.top, default=None)
+        if nxt is not None and nxt.top <= limit:
+            y1 = nxt.top
+            x0, x1 = min(x0, nxt.left), max(x1, nxt.left + nxt.width)
+        else:
+            y1 = limit
+        if y1 - bottom < ln.height / 2:  # no room was left for a signature
+            continue
+        x1 = min(max(x1, ln.left + int(1.5 * ln.width)), page_width)
+        out.append((i, Box(x0 - padding, bottom, x1 + padding, y1)))
     return out
 
 

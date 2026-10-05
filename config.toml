@@ -22,7 +22,7 @@ max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
 redact_regions = true      # also blacken whole detected layout regions
 # The whole-region pass. A trained layout detector (PP-DocLayout) finds typed
-# regions on the page; `image`, `seal`, `header`, `footer` and `aside_text` are
+# regions on the page; `image`, `seal`, `footer` and `aside_text` are
 # blackened on sight, every other once at least 40% of its OCR lines were flagged
 # by the per-line pass. That ratio rule covers the lines between the hits —
 # a c/o line, a company recipient, a garbled name line. It also covers a payment
@@ -34,6 +34,7 @@ model_name = "PP-DocLayout_plus-L"
 # fee table that scores 0.9+ on a scan scores 0.38-0.43 photographed.
 threshold = 0.35
 layout_nms = true          # prune the near-duplicate boxes a low threshold lets through
+region_ratio = 0.4         # blacken a text block once more than this share of its lines is; 1.0 = off
 
 [api]
 max_upload_bytes = 31457280          # 30 MiB — covers PDF uploads + /api/assemble payloads

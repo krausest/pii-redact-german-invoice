@@ -5,6 +5,12 @@ export type OutputFormat = 'pdf' | 'jpeg'
 /** [x0, y0, x1, y1] in the page image's own pixel space (matches the API). */
 export type Box = [number, number, number, number]
 
+/** Text the server prints white on its own black box — the birth year over a redacted birthdate. */
+export interface Note {
+  box: Box
+  text: string
+}
+
 /** A page as the editor holds it: what /api/redact returned, flattened. */
 export interface Page {
   /** base64 JPEG of the unwarped page (no data: prefix). */
@@ -12,6 +18,7 @@ export interface Page {
   width: number
   height: number
   boxes: Box[]
+  notes: Note[]
 }
 
 export const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'application/pdf'] as const

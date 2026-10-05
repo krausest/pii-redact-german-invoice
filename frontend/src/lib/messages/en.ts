@@ -54,6 +54,8 @@ export const en = {
     resolutionDisabledTitle: 'Resolution applies to PDF input only',
     unwarp: 'Unwarp',
     unwarpTitle: 'Flatten a photographed page before detecting text',
+    wholeRegions: 'Whole blocks',
+    wholeRegionsTitle: 'Blacken a whole text block once enough of its lines are redacted',
     classifier: 'Model',
     classifierTitle: 'The model that detects PII in the recognized text',
     language: 'Language',

@@ -73,6 +73,11 @@ class LayoutConfig(BaseModel):
     # Prunes the near-duplicate overlapping detections a low threshold lets
     # through — without it the same region comes back 3-4 times.
     layout_nms: bool = True
+    # A text/table region goes black whole once *more than* this share of its
+    # lines is redacted; 1.0 switches that off. Below a half on purpose: a
+    # two-line sender block where only the company line matched is the common
+    # shape. Default for `?region-ratio=`.
+    region_ratio: Annotated[float, Field(ge=0.0, le=1.0)] = 0.4
 
 
 class RedactionConfig(BaseModel):

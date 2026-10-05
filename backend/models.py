@@ -24,12 +24,16 @@ class Line:
 
 @dataclass(frozen=True)
 class Box:
-    """An axis-aligned rectangle to blacken, in image pixel coordinates."""
+    """An axis-aligned rectangle to blacken, in image pixel coordinates.
+
+    ``text`` makes it a *note*: the rectangle is blackened and the text printed
+    on it in white — the birth year over a redacted birthdate."""
 
     x0: int
     y0: int
     x1: int
     y1: int
+    text: str | None = None
 
     def as_list(self) -> list[int]:
         """``[x0, y0, x1, y1]`` — the JSON shape the API returns and the shape

@@ -35,6 +35,7 @@ error messages. A flag you leave out takes its default from
 | `--pdf-dpi N` | `redaction.pdf_dpi` | rasterization DPI for PDF input (36–1200) |
 | `--jpeg-quality N` | `redaction.jpeg_quality` | quality of every JPEG produced (1–100) |
 | `--classifier NAME` | `engine.classifier` | `presidio` \| `guard-omni` |
+| `--region-ratio R` | `redaction.layout.region_ratio` | whole-block threshold, 0–1; `1` switches it off |
 | `--debug` | off | add the detection trace to the report (needs `--json-output`) |
 | `--debug-layout` | off | CLI only: write `<stem>_layout.jpg` (per page `_layout_pN.jpg`) with the detected layout regions drawn |
 

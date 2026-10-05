@@ -33,6 +33,7 @@
     dpi: DEFAULT_DPI,
     unwarp: DEFAULT_UNWARP,
     classifier: null,
+    wholeRegions: true,
   })
   /** Empty until `/health` answers; then the select appears if there is a choice. */
   let classifiers = $state<string[]>([])
@@ -128,7 +129,12 @@
   }
 
   function sameOptions(a: AnalyzeOptions, b: AnalyzeOptions) {
-    return a.dpi === b.dpi && a.unwarp === b.unwarp && a.classifier === b.classifier
+    return (
+      a.dpi === b.dpi &&
+      a.unwarp === b.unwarp &&
+      a.classifier === b.classifier &&
+      a.wholeRegions === b.wholeRegions
+    )
   }
 
   /**
@@ -233,7 +239,7 @@
   function renderDoc(d: Doc): Promise<Blob> {
     const format: OutputFormat = d.kind === 'pdf' ? 'pdf' : 'jpeg'
     return render(
-      d.pages.map((p) => ({ image: p.image, boxes: p.boxes })),
+      d.pages.map((p) => ({ image: p.image, boxes: p.boxes, notes: p.notes })),
       format,
       d.options.dpi,
     )

@@ -13,9 +13,10 @@ the item-table gate, the name memory and the region pass are untouched by which
 model is behind this seam.
 
 What this model does *not* replace, whichever way that comparison goes: the
-deterministic rules decide questions that are not language questions. An invoice
-number must stay readable and an insurance number must not, and both are "a
-labeled number" to any zero-shot extractor. Measured live while porting this:
+deterministic rules decide questions that are not language questions. Which
+number is personal — an insurance or invoice number, not a fee number or an
+amount — is decided by the label printed beside it, and all of them are "a
+number" to any zero-shot extractor. Measured live while porting this:
 guard-omni tags an invoice number as ``document_id`` at 0.97.
 
 ``gliner2`` and ``torch`` are imported **inside the constructor**, never at

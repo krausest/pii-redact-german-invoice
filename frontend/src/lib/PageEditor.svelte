@@ -99,6 +99,21 @@
         onclick={(e) => onRectClick(i, e)}
       />
     {/each}
+    {#each page.notes as note, i (i)}
+      <rect
+        x={note.box[0]}
+        y={note.box[1]}
+        width={note.box[2] - note.box[0]}
+        height={note.box[3] - note.box[1]}
+        class="note"
+      />
+      <text
+        x={note.box[0]}
+        y={(note.box[1] + note.box[3]) / 2}
+        font-size={(note.box[3] - note.box[1]) * 0.85}
+        class="note-text">{note.text}</text
+      >
+    {/each}
     {#if draft}
       <rect
         x={Math.min(draft[0], draft[2])}
@@ -149,6 +164,16 @@
     stroke-width: 2.5;
     stroke-dasharray: 5 3;
     vector-effect: non-scaling-stroke;
+  }
+  /* A note is printed by the server as it stands; it is shown, not edited. */
+  .note {
+    fill: #000;
+    pointer-events: none;
+  }
+  .note-text {
+    fill: #fff;
+    dominant-baseline: central;
+    pointer-events: none;
   }
   .draft {
     fill: rgba(37, 99, 235, 0.2);

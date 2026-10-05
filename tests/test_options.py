@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.config import Config, RedactionConfig
+from backend.config import Config, LayoutConfig, RedactionConfig
 from backend.options import AssembleOptions, RedactOptions
 
 
@@ -24,6 +24,7 @@ def test_defaults_come_from_config():
     assert opts.jpeg_quality == 80
     assert opts.json_output is False
     assert opts.debug is False
+    assert opts.region_ratio == 0.4
 
     assert assemble({}, config).dpi == 150
     assert assemble({}, config).format == "pdf"
@@ -32,6 +33,12 @@ def test_defaults_come_from_config():
 @pytest.mark.parametrize("value,expected", [("true", True), ("1", True), ("false", False), ("0", False)])
 def test_booleans(value, expected):
     assert redact({"json-output": value}).json_output is expected
+
+
+def test_region_ratio_default_and_override():
+    config = Config(redaction=RedactionConfig(layout=LayoutConfig(region_ratio=0.25)))
+    assert redact({}, config).region_ratio == 0.25
+    assert redact({"region-ratio": "1"}, config).region_ratio == 1.0
 
 
 def test_hyphenated_wire_names():
@@ -53,6 +60,9 @@ def test_hyphenated_wire_names():
         {"jpeg-quality": "101"},
         {"pdf-dpi": "5"},
         {"pdf-dpi": "nope"},
+        {"region-ratio": "1.5"},
+        {"region-ratio": "-0.1"},
+        {"region_ratio": "0.5"},
     ],
 )
 def test_redact_rejects(raw):

@@ -38,6 +38,11 @@
     el.checked = options.unwarp
   }
 
+  function pickWholeRegions(el: HTMLInputElement) {
+    onChange({ ...options, wholeRegions: el.checked })
+    el.checked = options.wholeRegions
+  }
+
   function pickClassifier(el: HTMLSelectElement) {
     onChange({ ...options, classifier: el.value })
     el.value = options.classifier ?? ''
@@ -70,6 +75,17 @@
       onchange={(e) => pickUnwarp(e.currentTarget)}
     />
     <span class="caption">{m.settings.unwarp}</span>
+  </label>
+
+  <label class="check" class:disabled>
+    <input
+      type="checkbox"
+      checked={options.wholeRegions}
+      {disabled}
+      title={m.settings.wholeRegionsTitle}
+      onchange={(e) => pickWholeRegions(e.currentTarget)}
+    />
+    <span class="caption">{m.settings.wholeRegions}</span>
   </label>
 
   {#if classifiers.length > 1}

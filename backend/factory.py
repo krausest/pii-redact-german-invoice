@@ -81,6 +81,7 @@ def build_pipeline(config: Config) -> RedactionPipeline:
         ocr=ocr,
         classifier_factories=factories,
         default_classifier=config.engine.classifier,
+        region_ratio=config.redaction.layout.region_ratio,
         # Built lazily: `unwarp` is a per-request option, so the capability must
         # always be available, but only processes that use it pay for it.
         unwarper_factory=unwarper_factory,

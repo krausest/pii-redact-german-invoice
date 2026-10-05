@@ -33,7 +33,7 @@ class ConcurrencyProbe(FakePipeline):
         self._hold = hold
         self._lock = threading.Lock()
 
-    def compute_boxes(self, image, lines=None, known_names=None, trace=None, regions=None, classifier=None):
+    def compute_boxes(self, image, lines=None, known_names=None, trace=None, regions=None, classifier=None, region_ratio=None):
         with self._lock:
             self._live += 1
             self.peak = max(self.peak, self._live)

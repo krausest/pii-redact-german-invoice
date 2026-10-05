@@ -17,6 +17,8 @@ from backend.layout import (
     draw_layout_debug,
     region_boxes,
     region_parents,
+    signature_boxes,
+    subtract,
 )
 
 
@@ -94,7 +96,7 @@ def test_draw_layout_debug_returns_annotated_copy_without_mutating_source():
 
 def test_draw_layout_debug_tints_only_the_always_blackened_labels():
     regions = [
-        _region(10, 10, 180, 90, label="header"),
+        _region(10, 10, 180, 90, label="footer"),
         _region(10, 110, 180, 190, label="text"),
         _region(10, 210, 180, 290, label="table"),
     ]
@@ -102,7 +104,7 @@ def test_draw_layout_debug_tints_only_the_always_blackened_labels():
     out = draw_layout_debug(img, [], [], regions)
     # Sampled bottom-right in each region: clear of both the outline and the
     # label chip, which sit at the top-left.
-    r, g, b = out.getpixel((150, 75))  # header: blackened on sight -> reddish
+    r, g, b = out.getpixel((150, 75))  # footer: blackened on sight -> reddish
     assert (r, g, b) != (255, 255, 255)
     assert r > g == b
     # `text` and `table` are decided by the majority rule, which this view does
@@ -153,27 +155,35 @@ def test_region_boxes_always_blackens_the_graphic_and_furniture_types():
     # the only evidence available: a logo and a stamp carry no OCR line, so the
     # majority rule could never reach them.
     regions = [
-        _region(0, 0, 100, 20, label="header"),
         _region(0, 30, 100, 50, label="image"),
         _region(0, 60, 100, 80, label="footer"),
         _region(0, 90, 100, 110, label="seal"),
     ]
-    boxes = region_boxes([], regions, set(), padding=0)
+    boxes = region_boxes([], regions, set(), padding=0, ratio=0.4)
     assert [b for _, b, _ in boxes] == [r.box for r in regions]
-    assert [why for _, _, why in boxes] == ["header", "image", "footer", "seal"]
+    assert [why for _, _, why in boxes] == ["image", "footer", "seal"]
+
+
+def test_a_header_goes_by_the_ratio_rule():
+    # The detector draws it around the whole letterhead, specialty included.
+    lines = [_line("name", left=10, top=10), _line("practice", left=10, top=40)]
+    regions = [_region(0, 0, 300, 100, label="header")]
+    assert region_boxes(lines, regions, set(), padding=0, ratio=0.4) == []
+    assert region_boxes(lines, regions, {0, 1}, padding=0, ratio=1.0) == []
+    assert region_boxes(lines, regions, {0}, padding=0, ratio=0.4)
 
 
 def test_region_boxes_pads_outwards():
     regions = [_region(10, 10, 90, 40, label="image")]
-    (_, box, _), = region_boxes([], regions, set(), padding=3)
+    (_, box, _), = region_boxes([], regions, set(), padding=3, ratio=0.4)
     assert box == Box(7, 7, 93, 43)
 
 
 def test_region_boxes_needs_enough_of_the_lines():
     lines = [_line(c, left=10, top=10 + 30 * i) for i, c in enumerate("abc")]
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes(lines, regions, {0}, padding=0) == []  # 1/3 is under the bar
-    assert region_boxes(lines, regions, {0, 1}, padding=0)[0][1] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {0}, padding=0, ratio=0.4) == []  # 1/3 is under the bar
+    assert region_boxes(lines, regions, {0, 1}, padding=0, ratio=0.4)[0][1] == Box(0, 0, 300, 100)
 
 
 def test_region_boxes_takes_a_two_line_block_on_one_hit():
@@ -182,15 +192,23 @@ def test_region_boxes_takes_a_two_line_block_on_one_hit():
     # this survived, which is why the bar sits below a half.
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes(lines, regions, {0}, padding=0)[0][1] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {0}, padding=0, ratio=0.4)[0][1] == Box(0, 0, 300, 100)
 
 
-def test_region_boxes_treats_the_ratio_as_inclusive():
-    # Exactly _MIN_REDACTED_RATIO counts: 2 of 5 is 0.4, and it goes.
+def test_region_boxes_treats_the_ratio_as_strict():
+    # More than the ratio is needed: 2 of 5 is exactly 0.4 and stays, 3 of 5 goes.
     lines = [_line(str(i), left=10, top=10 + 30 * i) for i in range(5)]
     regions = [_region(0, 0, 300, 200, label="text")]
-    assert region_boxes(lines, regions, {0, 1}, padding=0)
-    assert region_boxes(lines, regions, {0}, padding=0) == []
+    assert region_boxes(lines, regions, {0, 1}, padding=0, ratio=0.4) == []
+    assert region_boxes(lines, regions, {0, 1, 2}, padding=0, ratio=0.4)
+
+
+def test_region_ratio_one_switches_the_ratio_rule_off():
+    # Even a fully redacted block is not blackened whole; furniture still is.
+    lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
+    regions = [_region(0, 0, 300, 100, label="text"), _region(0, 200, 300, 220, label="footer")]
+    boxes = region_boxes(lines, regions, {0, 1}, padding=0, ratio=1.0)
+    assert [why for _, _, why in boxes] == ["footer"]
 
 
 def test_region_boxes_ignores_blank_lines_in_the_ratio():
@@ -198,20 +216,75 @@ def test_region_boxes_ignores_blank_lines_in_the_ratio():
     # would drag a fully-redacted block below the threshold.
     lines = [_line("a", left=10, top=10), _line("   ", left=10, top=40), _line("", left=10, top=70)]
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes(lines, regions, {0}, padding=0)
+    assert region_boxes(lines, regions, {0}, padding=0, ratio=0.4)
 
 
 def test_region_boxes_skips_a_region_holding_no_lines():
     regions = [_region(0, 0, 300, 100, label="text")]
-    assert region_boxes([], regions, set(), padding=0) == []
+    assert region_boxes([], regions, set(), padding=0, ratio=0.4) == []
 
 
 def test_region_boxes_treats_a_table_like_any_other_region():
-    # A deliberate trade: the rule has no exceptions, and it costs the invoice
-    # body on a page where most item rows carry a name.
+    # The ratio rule has no exceptions; what saves the item rows on such a page
+    # is that the pipeline passes them as `keep` (see the next tests).
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
     regions = [_region(0, 0, 300, 100, label="table")]
-    assert region_boxes(lines, regions, {0, 1}, padding=0)[0][1] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {0, 1}, padding=0, ratio=0.4)[0][1] == Box(0, 0, 300, 100)
+
+
+def test_a_kept_line_is_cut_out_of_a_region_box():
+    # A letterhead: the header goes black, the specialty line under the name
+    # stays readable, with the header blackened around it.
+    lines = [_line("name", left=10, top=10, width=100), _line("specialty", left=10, top=40, width=100)]
+    regions = [_region(0, 0, 300, 100, label="header")]
+    boxes = [b for _, b, _ in region_boxes(lines, regions, {0}, padding=0, ratio=0.4, keep={1})]
+    assert boxes == [
+        Box(0, 0, 300, 40),
+        Box(0, 40, 10, 60),
+        Box(110, 40, 300, 60),
+        Box(0, 60, 300, 100),
+    ]
+
+
+def test_a_kept_line_that_was_redacted_is_not_cut_out():
+    lines = [_line("a", left=10, top=10)]
+    regions = [_region(0, 0, 300, 100, label="header")]
+    assert region_boxes(lines, regions, {0}, padding=0, ratio=0.4, keep={0})[0][1] == Box(0, 0, 300, 100)
+
+
+def test_a_stamp_is_never_cut_open():
+    # A stamp prints the doctor's name around the specialty; a hole would show it.
+    lines = [_line("specialty", left=10, top=10)]
+    regions = [_region(0, 0, 300, 100, label="seal")]
+    assert [b for _, b, _ in region_boxes(lines, regions, set(), padding=0, ratio=0.4, keep={0})] == [
+        Box(0, 0, 300, 100)
+    ]
+
+
+def test_subtract_without_overlap_returns_the_box():
+    assert subtract(Box(0, 0, 10, 10), [Box(20, 20, 30, 30)]) == [Box(0, 0, 10, 10)]
+
+
+# -- the signature ------------------------------------------------------------ #
+def test_the_signature_is_the_gap_between_the_greeting_and_the_typed_name():
+    lines = [
+        _line("Mit freundlichen Grüßen", left=100, top=500, width=200, height=20),
+        _line("Dr. med. Andrea Muster", left=100, top=580, width=180, height=20),
+    ]
+    assert signature_boxes(lines, page_width=1000, padding=2) == [(0, Box(98, 520, 402, 580))]
+
+
+def test_a_signature_without_a_typed_name_reaches_six_line_heights():
+    lines = [_line("Hochachtungsvoll", left=100, top=500, width=200, height=20)]
+    assert signature_boxes(lines, page_width=350, padding=0) == [(0, Box(100, 520, 350, 640))]
+
+
+def test_no_signature_when_the_name_follows_directly():
+    lines = [
+        _line("Mit freundlichen Grüßen", left=100, top=500, width=200, height=20),
+        _line("Ihre Praxis", left=100, top=522, width=100, height=20),
+    ]
+    assert signature_boxes(lines, page_width=1000, padding=0) == []
 
 
 # -- reading order ---------------------------------------------------------- #

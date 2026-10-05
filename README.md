@@ -22,8 +22,8 @@ locally, in seconds, with an optional UI.**
 
 Share a doctor's bill with your insurer, your tax advisor or a support forum without
 sharing the patient. The tool protects the people an invoice is *about* — recipient,
-patient, insured person — and leaves the medical content and the invoice number
-readable.
+patient, insured person — and the doctor's identity, and leaves the medical content,
+the dates, the specialty and the clearing house readable.
 
 ## Why this one
 

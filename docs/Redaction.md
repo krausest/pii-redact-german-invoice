@@ -63,11 +63,12 @@ The heart of the pipeline, per page:
    stay together) and orders them in bands, so the two columns of a letter do not
    interleave. `document.build_document` joins the lines into **one text** with a
    newline per line and remembers each line's character range.
-2. **Item table.** `rules.item_table_indices` finds the fee table geometrically:
-   lines with German amounts form rows, rows cluster by vertical gap, and a cluster
-   of ≥ 2 rows spans the table. Inside it the classifier's findings are ignored —
-   a two-word service text looks exactly like a name to a model — while the rules
-   still apply.
+2. **Item table and kept lines.** `rules.item_table_indices` finds the fee table
+   geometrically: lines with German amounts form rows, rows cluster by vertical
+   gap, and a cluster of ≥ 2 rows spans the table. Inside it the classifier's
+   findings are ignored — a two-word service text looks exactly like a name to a
+   model — while the rules still apply. `rules.keep_indices` extends that to every
+   line that must stay readable ([below](#what-stays-readable)).
 3. **Pass one — what each line says.**
    - `rules.rule_spans` runs the deterministic rules per line (see below).
    - The classifier analyses the whole page text once and returns `Span`s;
@@ -75,12 +76,17 @@ The heart of the pipeline, per page:
 4. **Pass two — name memory.** `harvest.harvest` collects surnames named by pass one
    (patient label, title, salutation, birth-date line, or a classifier `PERSON`
    outside the item table). `harvest.name_spans` then marks every other line on the
-   page that mentions one of them. The memory is shared across the pages of a
-   document, so a name labelled on page 1 is caught bare on page 2 (forward only).
+   page that mentions one of them (except specialty and clearing-house lines). The
+   memory is shared across the pages of a document, so a name labelled on page 1
+   is caught bare on page 2 (forward only).
 5. **Line boxes.** Every line that carries at least one span gets a box over the
-   whole line, plus `padding`.
-6. **Region boxes.** `layout.region_boxes` adds the only boxes not tied to an OCR
-   line ([details](#layout-regions)).
+   whole line, plus `padding`; the padding is clipped where it would reach into a
+   kept line, the line's own box never is. A line holding a birthdate also gets a *note*: the
+   birth year (`YYYY`), printed white where the date stood (`rules.birth_year_note`;
+   a two-digit year is written out, several dates without a birth marker give none).
+6. **Region and signature boxes.** `layout.region_boxes` and
+   `layout.signature_boxes` add the only boxes not tied to an OCR line
+   ([details](#layout-regions)).
 7. **Trace.** `trace.trace_page` writes the commentary: region, its text, each line
    with its spans and verdict.
 
@@ -102,7 +108,8 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 | `TITLE_NAME` | a title and name (`Dr. med. Max Mustermann`) |
 | `NAME_DATE` | `Surname,Forename DD.MM.YY` — an unlabelled patient table row |
 | `DE_STREET`, `DE_PLZ_CITY` | German street + number, postcode + city |
-| `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail/phone, registry and bank identifiers |
+| `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
+| `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail, registry and bank identifiers |
 | labelled values | spatial label ↔ value pairs (below) |
 
 **Labelled values** (`labeled_value_indices`) pair a label with a value in a
@@ -113,10 +120,35 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
   (`geb. 01.02.1980`, `*01.02.1980`). A bare `geb.` is not a label (it also means
   *Gebühren*), and treatment dates stay visible.
 - **Identifiers** — insurance, patient, case, admission, member and contract numbers
-  next to their label. The invoice number is deliberately kept.
+  next to their label.
+- **References** — invoice, receipt and customer number (`Rechnungsnummer`,
+  `Rg.-Nr.`, `Kd.-Nr.`, …): glued to the label, in the cell right of a label cell,
+  or under it. A date or an amount is never taken for one, so the invoice date in
+  the same row stays.
+- **Sender identifiers in their own cell** — the value beside or under a
+  `Steuernummer:`, `USt-IdNr.:`, `IK:`, `LANR:` or `BSNR:` cell (`IMPRINT` covers
+  the one-line form).
+- **Phone in its own cell** — the number beside or under a `Telefon:`/`Fax:` cell.
 - **Names** — `Patient:` alone in its cell makes the name in the next cell (or the
   column below) a value, plus the person's details under it (e.g. the birth date
   under the name).
+
+## What stays readable
+
+`rules.keep_indices` names the lines that must survive — the classifier and the
+whole-region boxes leave them alone, and a deterministic rule still wins (a kept
+line carrying a street or a labelled birthdate is redacted all the same):
+
+| Reason | Lines |
+|---|---|
+| `item table` | the fee table: positions, descriptions, treatment dates, amounts |
+| `DATE` | `Rechnungsdatum`, `Behandlungsdatum`/`-zeitraum`, `Leistungsdatum`, `Datum` and the date cell beside or under it |
+| `DIAG` | a `Diagnose(n)`/`ICD` label and the left-aligned block under it |
+| `PVS` | the clearing house's name (`…verrechnung…`, `Abrechnungsstelle`, `PVS`, `Rechenzentrum`); `ORG_LEGAL` yields there, its address and bank data do not |
+| `FACH` | a line made only of specialty words (`Facharzt für Orthopädie`); any other word — a practice name — and it is not kept |
+
+The name memory skips `PVS` and `FACH` lines too. The trace and the replay
+snapshots show the reason as `-> keep (DIAG)`.
 
 ## Classifiers
 
@@ -136,15 +168,26 @@ one on first use and keeps it (`RedactionPipeline.classifier`).
 `layout.region_boxes` blackens whole regions from PP-DocLayout
 (`[redaction].redact_regions`, on by default):
 
-- **`image`, `seal`, `header`, `footer`, `aside_text`** — always. This covers a
+- **`image`, `seal`, `footer`, `aside_text`** — always. This covers a
   letterhead logo, a stamp and a payment QR code: graphics OCR never reports.
-- **Any other region** — once ≥ 40 % of its non-empty lines were flagged by the
-  per-line pass. This catches the lines *between* hits in an address or sender
-  block (a c/o line, a company name, a garbled line).
+- **Any other region**, `header` included — once *more than* `region_ratio` (default 0.4) of its
+  non-empty lines were flagged by the per-line pass. This catches the lines
+  *between* hits in an address or sender block (a c/o line, a company name, a
+  garbled line). `?region-ratio=1` (the web UI's *Whole blocks* checkbox, unticked)
+  switches this rule off; the always-blackened types above are unaffected.
 
-A line belongs to the smallest region containing its centre. There is no exception
-for `table`: a fee table where most rows carry a patient name goes black. The
-CLI flag `--debug-layout` draws what the detector saw.
+Kept lines ([above](#what-stays-readable)) are cut out of every region box, so a
+letterhead goes black around its specialty line and a fee table around its rows.
+`image` and `seal` are never cut open: a stamp prints the doctor's name around the
+specialty.
+
+A line belongs to the smallest region containing its centre. The CLI flag
+`--debug-layout` draws what the detector saw.
+
+**Signatures** have no layout class and no OCR line. `layout.signature_boxes`
+blackens the gap under a closing formula (`Mit freundlichen Grüßen`,
+`Hochachtungsvoll`) down to the next line in its column — usually the typed name —
+or six line heights when there is none.
 
 ## Models
 

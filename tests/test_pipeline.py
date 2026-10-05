@@ -191,6 +191,53 @@ def test_regions_are_off_without_a_detector():
     assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 10, 90, 20)]
 
 
+# -- what must stay readable ---------------------------------------------- #
+def test_the_clearing_house_keeps_its_name_but_not_its_address():
+    lines = [
+        _line("Muster VerrechnungsSysteme GmbH", top=10),
+        _line("Muster VerrechnungsSysteme GmbH - 12345 Musterhausen", top=30),
+    ]
+    assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 30, 90, 40)]
+
+
+def test_a_specialty_line_survives_the_letterhead():
+    """The header goes black around it, and neither the model nor the name
+    memory reaches it."""
+    lines = [_line("Dr. med. Andrea Muster", top=10), _line("Fachärztin für Orthopädie", top=30)]
+    regions = [_region("header", 0, 0, 100, 50)]
+    p = _pipeline(lines, ["Orthopädie"], padding=0, layout=StubLayoutDetector(regions))
+    boxes = p.compute_boxes(_page())
+    assert Box(10, 30, 90, 40) not in boxes
+    assert Box(0, 0, 100, 30) in boxes and Box(0, 40, 100, 50) in boxes
+
+
+def test_a_kept_line_clips_the_padding_of_the_line_below_it():
+    """The invoice date sits on the tax number's row edge; the tax number's
+    padding must not cut into the date, its own box still covers it whole."""
+    lines = [
+        _line("Rechnungsdatum: 19.03.2026", top=10, height=20),
+        _line("Musterstrasse 7", top=28, height=20),
+    ]
+    boxes = _pipeline(lines, [], padding=4).compute_boxes(_page())
+    own = Box(10, 28, 90, 48)
+    assert own in boxes  # the redacted line itself, unpadded
+    date = Box(10, 10, 90, 30)
+    others = [b for b in boxes if b != own]
+    assert not any(b.x0 < date.x1 and b.x1 > date.x0 and b.y0 < date.y1 and b.y1 > date.y0 for b in others)
+    assert Box(6, 30, 94, 52) in others  # the padding away from the date stays
+
+
+def test_the_birth_year_is_printed_over_the_redacted_birthdate():
+    lines = [_line("Geburtsdatum: 26.06.1975", top=10, width=240, height=20)]
+    p = _pipeline(lines, [], padding=0, fill=(0, 0, 0))
+    boxes = p.compute_boxes(_page())
+    assert boxes == [Box(10, 10, 250, 30), Box(150, 10, 250, 30, text="1975")]
+    out = p.apply_boxes(Image.new("RGB", (300, 300), (255, 255, 255)), boxes)
+    printed = [out.getpixel((x, y)) for x in range(150, 250) for y in range(10, 30)]
+    assert (255, 255, 255) in printed  # the year, white on black
+    assert all(out.getpixel((x, 20)) == (0, 0, 0) for x in range(10, 150))  # day and month
+
+
 # -- composition ------------------------------------------------------------ #
 def test_compute_boxes_never_unwarps():
     """The coordinate rule: boxes are in the space of the image passed in."""

@@ -49,6 +49,8 @@ export const de: Messages = {
     resolutionDisabledTitle: 'Die Auflösung gilt nur für PDF-Dateien',
     unwarp: 'Entzerren',
     unwarpTitle: 'Fotografierte Seite vor der Texterkennung begradigen',
+    wholeRegions: 'Ganze Blöcke',
+    wholeRegionsTitle: 'Einen Textblock ganz schwärzen, sobald genug seiner Zeilen geschwärzt sind',
     classifier: 'Modell',
     classifierTitle: 'Das Modell, das personenbezogene Daten im erkannten Text findet',
     language: 'Sprache',
