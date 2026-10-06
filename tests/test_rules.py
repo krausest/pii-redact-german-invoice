@@ -75,6 +75,16 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("Rechn.Nr. 1234 5678 9012 34", {I}),
     ("Nummer: 12/3456", {I}),
     ("Nummer 3 der Anlage", set()),
+    # OCR damages the "r" of "Nr" and reads the dot as a comma.
+    ("Rechnungs-Nz, 12345/2026-1234", {I}),
+    ("Rechnungs-Nr, 4711", {I}),
+    ("Rechnungsnachweis 2026", set()),
+    # A tax number is identified by its slash groups, whatever OCR did to its label.
+    ("Steuez-Nz. 123/456/78901", {I}),
+    ("St.-Nr.123/456/78901", {I}),
+    ("123/4567/8901", {I}),
+    ("Pos. 12/345/1", set()),
+    ("Faktor 2,3 / 1,8 / 2,5", set()),
     ("Re.-Datum: 12.03.2026", set()),
     ("Rechnung 12.03.2026", set()),
     # A sentence asking for the number carries none.

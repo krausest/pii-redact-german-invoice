@@ -100,6 +100,7 @@ RULE_LABELS: dict[str, PiiLabel] = {
     "CONTACT": PiiLabel.CONTACT,
     "PHONE": PiiLabel.CONTACT,
     "IMPRINT": PiiLabel.BANK,
+    "TAX_NUMBER": PiiLabel.ID,
 }
 
 

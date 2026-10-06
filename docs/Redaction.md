@@ -111,6 +111,7 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 | `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
 | `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
 | `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail, registry and bank identifiers |
+| `TAX_NUMBER` | a tax number in slash groups (`123/456/78901`, `123/4567/8901`), whatever its label |
 | labelled values | spatial label ↔ value pairs (below) |
 
 **Labelled values** (`labeled_value_indices`) pair a label with a value in a
@@ -124,7 +125,7 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
   next to their label.
 - **References** — invoice, receipt and customer number (`Rechnungsnummer`,
   `Rg.-Nr.`, `Re.-Nr.`, `BFS-Nr.`, `Kd.-Nr.`, …): glued to the label, in the cell right of a label cell,
-  or under it. A line starting with `Rechnung` or `Nummer:` followed by a value of three
+  or under it. An OCR-damaged `Nr` (`Nz`) and a comma after the label still count. A line starting with `Rechnung` or `Nummer:` followed by a value of three
   or more digits counts as well. A date or an amount is never taken for one, so the invoice date in
   the same row stays.
 - **Sender identifiers in their own cell** — the value beside or under a

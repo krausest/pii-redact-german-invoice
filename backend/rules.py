@@ -221,10 +221,13 @@ NAME_DATE = re.compile(_NAME_PART + r"\s*,\s*" + _NAME_PART + r"\s+" + DATE_RE.p
 # hyphenated/abbreviated forms ("Fall-Nr.", "Pat.-Nr:"). Sender-side identifiers
 # (IK, LANR, BSNR, Steuer-Nr, ...) live in IMPRINT; the invoice and customer
 # numbers are REF_LABEL below.
+# "Nr" with its second letter damaged by OCR ("Nz") is still the abbreviation:
+# a capital N and one lowercase letter, as a token of its own behind the label.
+_NR = r"(?:Nr|Nummer|(?-i:N[a-z]))"
 ID_LABEL = re.compile(
     r"(?i)\b(?:Versicherten|Versicherungs(?:schein)?|Patienten|Pat\.?"
     r"|Fall|Aufnahme|Mitglieds?|Vertrags)"
-    r"[-\s.]*(?:Nr|Nummer)\b"
+    rf"[-\s.]*{_NR}\b"
 )
 # A date or an amount sitting in the same row as an identifier label is the
 # invoice date or the total, never the identifier — and both have to stay.
@@ -241,7 +244,7 @@ ID_VALUE = re.compile(rf"(?<![\d./-]){_NOT_DATE_OR_MONEY}\b[A-Z]?\d(?:[ ./-]?\d)
 # only as a label cell beside a cell holding nothing but the value — a sentence
 # asking to quote the invoice number labels nothing, and an address in the
 # same row is not its value.
-_REF = r"(?:Rechnungs?|Rechn|Re|Rg|BFS|Beleg|Kunden|Kd)[-\s.]*(?:Nr|Nummer)"
+_REF = rf"(?:Rechnungs?|Rechn|Re|Rg|BFS|Beleg|Kunden|Kd)[-\s.]*{_NR}"
 _REF_TOKEN = rf"(?<![^\s:]){_NOT_DATE_OR_MONEY}(?=[^\s\d]*\d)[A-Za-z0-9][\w/.:-]*"
 REF_LABEL_CELL = re.compile(rf"(?i)^\s*{_REF}\.?\s*:?\s*$")
 REF_VALUE = re.compile(rf"^\s*{_REF_TOKEN}\s*$")
@@ -249,7 +252,8 @@ REF_VALUE = re.compile(rf"^\s*{_REF_TOKEN}\s*$")
 # without "Nr": only at the line's start and with three digits or more, so
 # "Rechnung 1 von 2" stays.
 _REF_TITLE = rf"^\s*(?:Rechnung(?:\s*:)?\s+|Nummer\s*:\s*)(?=(?:[^\s\d]*\d){{3}}){_REF_TOKEN}"
-REF_MERGED = re.compile(rf"(?i)\b{_REF}\b\.?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}")
+# OCR reads the label's dot as a comma.
+REF_MERGED = re.compile(rf"(?i)\b{_REF}\b[.,]?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}")
 
 # An IK label, also "IK-Zeichen" or "IK Musterstelle" naming whose IK it is.
 _IK = r"(?-i:\bIK)(?:[-\s.]?(?:Nr|Nummer|Zeichen))?\.?(?:\s+[A-Za-zÄÖÜäöüß]+){0,3}"
@@ -315,6 +319,11 @@ PHONE = re.compile(
 PHONE_LABEL_CELL = re.compile(r"(?i)^\s*(?:Tel(?:efon)?|Telefax|Fax|Mobil)\.?\s*:?\s*$")
 PHONE_VALUE = re.compile(r"^\s*[(+]?\d(?:[\s()/\-.|]*\d){5,}\s*$")
 
+# A German tax number written in slash groups ("123/456/78901", "123/4567/8901").
+# The shape is the evidence, so a label OCR garbled ("Steuez-Nz.") or abbreviated
+# ("St.-Nr.") does not matter; dates and amounts never take three slash groups.
+TAX_NUMBER = re.compile(r"(?<![\d/])\d{2,3}/\d{3,4}/\d{4,5}(?!\d)")
+
 # Registry / banking identifiers — the footer imprint block.
 IMPRINT = re.compile(
     r"(?i)\bHR[AB]\s*\d|(?-i:\b(?:GnR|VR|PR)\s?\d)|\w*register(?:nummer|[-\s.]*Nr)\b"
@@ -372,6 +381,7 @@ STATIC_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("CONTACT", CONTACT),
     ("PHONE", PHONE),
     ("IMPRINT", IMPRINT),
+    ("TAX_NUMBER", TAX_NUMBER),
 )
 
 
