@@ -122,9 +122,14 @@ TITLE_NAME = re.compile(
 # plus a street suffix plus a house number is what identifies the line, not its
 # case. Only the suffix is `(?i:...)`, so the leading capital is still required
 # and a lowercase word in running text cannot match.
+# The suffix may also stand as a capitalized word of its own ("Musterer Straße
+# 12") — but only the suffixes that are no everyday noun; "Weg", "Ring" and
+# "Damm" occur in a Leistungstext. OCR reads ß as B ("StraBe").
+_STREET_WORD = r"stra(?:ße|sse|be)|str|platz|gasse|allee"
 DE_STREET = re.compile(
     r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß.\-]+"
-    r"(?i:stra(?:ße|sse)|str|weg|platz|gasse|allee|ring|damm)\.?\s*\d+[a-zA-Z]?\b"
+    rf"(?:(?i:{_STREET_WORD}|weg|ring|damm)|\s+(?=[A-ZÄÖÜ])(?i:{_STREET_WORD})\b)"
+    r"\.?\s*\d+[a-zA-Z]?\b"
 )
 # German ZIP + city: "12345 Musterstadt", "54321 MUSTERSTADT". A city is written
 # either capitalized ("Musterstadt", "Ulm") or all caps, and the two need
@@ -148,6 +153,16 @@ _NOT_MID_TOKEN = r"(?<![\d/])(?<!\d-)"
 # shape, not a new one — while the token boundary above still keeps the tail of a
 # position number out.
 DE_PLZ_CITY = re.compile(rf"{_NOT_MID_TOKEN}\b\d{{5}}\s*{_CITY}(?:[ \-]{_CITY})?\b")
+
+# A street needs no suffix ("Am Musteranger 3a", "Musterau 12") — what marks it
+# is the postal block: the line directly above a ZIP+city line that is nothing
+# else, left-aligned with it. Both cells are anchored, so a sender line with an
+# inline city or a heading above the block cannot pair.
+CITY_CELL = re.compile(rf"^\s*(?:D\s?-\s?)?{DE_PLZ_CITY.pattern}\s*$")
+STREET_CELL = re.compile(
+    r"^\s*[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß.\-]*(?:\s+[A-ZÄÖÜa-zäöüß.\-]+){0,4}"
+    r"\s*\d{1,4}\s?[a-zA-Z]?(?:\s*[-/–]\s*\d{1,4}\s?[a-zA-Z]?)?\s*$"
+)
 
 # Date of birth: the "Geburtstag/Geburtsdatum/geboren" label and the date sit in
 # different columns, so they are separate OCR lines — matched spatially below.
@@ -621,6 +636,31 @@ def _left_neighbour(lines: list[Line], cell: Line) -> Line | None:
     )
 
 
+def street_above_city_indices(lines: list[Line], table: set[int] | None = None) -> set[int]:
+    """Street lines of a postal block (see :data:`CITY_CELL`): the nearest line
+    above a ZIP+city cell, sharing its left edge within a line height and no more
+    than a line height above it. The item table pairs nothing."""
+    table = table or set()
+    found: set[int] = set()
+    for c, city in enumerate(lines):
+        if c in table or not CITY_CELL.search(city.text):
+            continue
+        above = [
+            (i, ln)
+            for i, ln in enumerate(lines)
+            if ln.text.strip()
+            and ln.top + ln.height / 2 <= city.top
+            and city.top - ln.top - ln.height <= city.height
+            and abs(ln.left - city.left) <= city.height
+        ]
+        if not above:
+            continue
+        i, street = max(above, key=lambda pair: pair[1].top + pair[1].height)
+        if i not in table and STREET_CELL.search(street.text):
+            found.add(i)
+    return found
+
+
 def labeled_value_indices(
     lines: list[Line],
     table: set[int] | None = None,
@@ -851,6 +891,8 @@ def rule_spans(
 
     for i, kind in labeled_value_indices(lines, table).items():
         whole_line(i, PiiLabel(kind), "labeled-value")
+    for i in sorted(street_above_city_indices(lines, table)):
+        whole_line(i, PiiLabel.ADDRESS, "rule STREET_ABOVE_CITY")
 
     return spans
 

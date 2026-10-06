@@ -107,7 +107,8 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 | `PATIENT_NAME` | a person label with the name on the same line (`Patient: Muster, Andrea`) |
 | `TITLE_NAME` | a title and name (`Dr. med. Max Mustermann`) |
 | `NAME_DATE` | `Surname,Forename DD.MM.YY` — an unlabelled patient table row |
-| `DE_STREET`, `DE_PLZ_CITY` | German street + number, postcode + city |
+| `DE_STREET`, `DE_PLZ_CITY` | German street + number (suffix glued or as its own word: `Musterstr. 1`, `Musterer Straße 12`), postcode + city |
+| `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
 | `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
 | `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail, registry and bank identifiers |
 | labelled values | spatial label ↔ value pairs (below) |

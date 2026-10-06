@@ -45,9 +45,17 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("AUGSBURGERSTR.23", {A}),
     ("GOETHEALLEE 12a", {A}),
     ("12345 Musterhausen", {A}),
+    # The suffix written as a word of its own, and OCR reading ß as B.
+    ("Musterer Straße 12", {A}),
+    ("MUSTERER PLATZ 17", {A}),
+    ("Muster-StraBe 10", {A}),
+    ("Musterstrabe 5", {A}),
+    ("Äußere Musterer Straße 8 - 10", {A}),
     # ...but a capitalized word plus a number is not a street. These are the
     # invoice's own vocabulary and must survive.
     ("Gesamtbetrag 23", set()),
+    ("die Straße 3 mal überqueren", set()),
+    ("Gehtraining Weg 200 m", set()),
     ("MwSt. 19", set()),
     ("Beleg 12", set()),
     # -- the invoice's references ---------------------------------------------
@@ -289,6 +297,62 @@ def test_an_invoice_number_under_a_narrower_label_cell():
         _cell("000123/045678", 462, 502, width=85, height=14),
     ]
     assert labeled_value_indices(lines) == {1: PiiLabel.ID}
+
+
+# -- the street above its city ----------------------------------------------- #
+def _block(street, city="12345 Musterstadt", left=10, gap=4):
+    return [
+        _cell("Frau", 10, 100),
+        _cell("Andrea Muster", 10, 124),
+        _cell(street, left, 148),
+        _cell(city, 10, 168 + gap),
+    ]
+
+
+@pytest.mark.parametrize(
+    "street", ["Musterau 12", "Am Musteranger 3a", "Unter den Mustern 4", "Musterhof 8 - 10"]
+)
+def test_a_street_without_suffix_above_its_city_is_an_address(street):
+    from backend.rules import street_above_city_indices
+
+    assert street_above_city_indices(_block(street)) == {2}
+
+
+def test_the_street_above_its_city_is_a_named_rule_span():
+    lines = _block("Musterau 12")
+    _, bounds = build_document(lines)
+    spans = [s for s in rule_spans(lines, bounds) if s.source == "rule STREET_ABOVE_CITY"]
+    assert [(s.label, s.text) for s in spans] == [(A, "Musterau 12")]
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        # in another column
+        _block("Musterau 12", left=300),
+        # too far above
+        _block("Musterau 12", gap=40),
+        # no house number
+        _block("Musterau"),
+        # the city is only part of its line
+        _block("Musterau 12", city="Praxis Muster, 12345 Musterstadt"),
+        # headings and running text above a city line
+        _block("Rechnung"),
+        _block("Liquidation vom 12.03.2026 für"),
+        _block("Gesamtbetrag 23,40"),
+    ],
+)
+def test_no_street_above_a_city_without_the_shape(lines):
+    from backend.rules import street_above_city_indices
+
+    assert street_above_city_indices(lines) == set()
+
+
+def test_no_street_above_a_city_inside_the_item_table():
+    from backend.rules import street_above_city_indices
+
+    assert street_above_city_indices(_block("Musterau 12"), table={2}) == set()
+    assert street_above_city_indices(_block("Musterau 12"), table={3}) == set()
 
 
 # -- the birth year ---------------------------------------------------------- #
