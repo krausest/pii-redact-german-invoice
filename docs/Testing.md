@@ -55,7 +55,7 @@ per OCR line**:
 - `keep` — ≤ 10 %
 - `PARTIAL` — anything in between; matches neither expectation and needs a look
 
-Each verdict names its reason (`static-rule`, `labeled-value`, `name-memory`,
+Each verdict names its reason (`static-rule`, `labeled-value`, `name-memory`, `birthdate-memory`,
 `classifier`, or `overlap` for a neighbour's padding), so a diff shows what changed. Asserting `keep`
 matters as much as `REDACT`: it catches over-redaction.
 

@@ -76,9 +76,15 @@ The heart of the pipeline, per page:
 4. **Pass two — name memory.** `harvest.harvest` collects surnames named by pass one
    (patient label, title, salutation, birth-date line, or a classifier `PERSON`
    outside the item table). `harvest.name_spans` then marks every other line on the
-   page that mentions one of them (except specialty and clearing-house lines). The
-   memory is shared across the pages of a document, so a name labelled on page 1
-   is caught bare on page 2 (forward only).
+   page that mentions one of them (except specialty and clearing-house lines). Label
+   words on an evidence line (`Datum`, `Geburtsdatum`, `Patient`, …) are never taken
+   for a name. A birth-date line (birth label, `geb.`/`*` mark, `Surname,Forename
+   date` row) also teaches its *date*: `harvest.birthdate_spans` marks every other
+   line holding that date in any spelling (`01.02.1980`, `1.2.1980`, `01.02.80`).
+   A line with several dates teaches none, and a classifier's birthdate never
+   feeds it. The memory (`harvest.Memory`) is shared across the pages of a
+   document, so a name or birthdate labelled on page 1 is caught bare on page 2
+   (forward only).
 5. **Line boxes.** Every line that carries at least one span gets a box over the
    whole line, plus `padding`; the padding is clipped where it would reach into a
    kept line, the line's own box never is. A line holding a birthdate also gets a *note*: the
@@ -120,7 +126,9 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 - **Birth date** — the date beside a `Geburtsdatum`/`geboren`/`Geb.Dat.` label, the
   dates in a column under a `Geburtsdatum` header, or one line with label and date
   (`geb. 01.02.1980`, `*01.02.1980`). A bare `geb.` is not a label (it also means
-  *Gebühren*), and treatment dates stay visible.
+  *Gebühren*), and treatment dates stay visible. A date in the birth label's row
+  that an invoice or treatment date label owns more closely (left of it in the row,
+  or as the header above it) is not a birthdate.
 - **Identifiers** — insurance, patient, case, admission, member and contract numbers
   next to their label.
 - **References** — invoice, receipt and customer number (`Rechnungsnummer`,

@@ -32,7 +32,7 @@ from backend.layout import (
     signature_boxes,
     subtract,
 )
-from backend.harvest import harvest, name_spans
+from backend.harvest import Memory, birthdate_spans, harvest, harvest_birthdates, name_spans
 from backend.pii import Span
 from backend.rules import birth_year_note, item_table_indices, keep_indices, rule_spans
 from backend.trace import Trace, trace_page
@@ -161,7 +161,7 @@ class RedactionPipeline:
         self,
         image: Image.Image,
         lines: list[Line] | None = None,
-        known_names: set[str] | None = None,
+        memory: Memory | None = None,
         trace: Trace | None = None,
         regions: list[LayoutRegion] | None = None,
         classifier: str | None = None,
@@ -177,10 +177,10 @@ class RedactionPipeline:
         at one size and boxed at another is the one way to get a silently
         misplaced rectangle.
 
-        ``known_names`` is the name-memory accumulator: names harvested from this
-        page are added *to the passed set*, so a caller looping over a document's
-        pages shares one set and a surname labeled on page 1 is redacted bare on
-        page 2. The carry is forward-only — a name first seen on page 2 does not
+        ``memory`` is the accumulator of names and birthdates: what this page
+        names is added *to the passed* :class:`~backend.harvest.Memory`, so a
+        caller looping over a document's pages shares one and a surname labeled
+        on page 1 is redacted bare on page 2. The carry is forward-only — a name first seen on page 2 does not
         re-redact page 1 — which suffices because the labeled occurrence leads.
         ``None`` keeps the memory page-local.
 
@@ -242,9 +242,21 @@ class RedactionPipeline:
         # from spreading down its own line. `names` is the caller's accumulator
         # when there is one, mutated in place: a name labeled on page 1 is caught
         # bare on page 2.
-        names = known_names if known_names is not None else set()
-        names |= harvest(ordered, hits)
-        memory_by_line = spans_to_lines(name_spans(ordered, bounds, names), bounds)
+        memory = memory if memory is not None else Memory()
+        for name, source in harvest(ordered, hits).items():
+            if name not in memory.names:
+                trace.add("    name memory %r <- %r", name, source)
+                memory.names.add(name)
+        # A birth line teaches its date as well, never its label.
+        for key, (printed, source) in harvest_birthdates(ordered, hits).items():
+            if key not in memory.birthdates:
+                trace.add("    birthdate memory %r <- %r", printed, source)
+                memory.birthdates.add(key)
+        memory_by_line = spans_to_lines(
+            name_spans(ordered, bounds, memory.names)
+            + birthdate_spans(ordered, bounds, memory.birthdates),
+            bounds,
+        )
         for pos, i in enumerate(order):
             if keep.get(i) not in ("FACH", "PVS"):
                 hits[pos] += memory_by_line[pos]

@@ -9,8 +9,10 @@ order in ``test_layout.py``, and the real documents in the corpus replay
 
 from __future__ import annotations
 
+import pytest
 from PIL import Image
 
+from backend.harvest import Memory
 from backend.layout import LayoutRegion
 from backend.models import Box, Line
 from backend.pii import PiiLabel, Span
@@ -123,11 +125,11 @@ def test_the_item_table_gates_the_classifier_and_only_the_classifier():
 def test_the_name_memory_carries_a_surname_across_pages():
     """A name the rules labelled on page 1 is redacted bare on page 2, through
     the accumulator the caller threads between pages."""
-    names: set[str] = set()
+    memory = Memory()
     p1 = _pipeline([_line("Patient Mustermann, Max", top=10)], [], padding=0)
-    p1.compute_boxes(_page(), known_names=names)
+    p1.compute_boxes(_page(), memory=memory)
     p2 = _pipeline([_line("Diagnose Mustermann", top=10)], [], padding=0)
-    assert p2.compute_boxes(_page(), known_names=names) == [Box(10, 10, 90, 20)]
+    assert p2.compute_boxes(_page(), memory=memory) == [Box(10, 10, 90, 20)]
 
 
 def test_a_name_only_the_model_found_still_redacts_its_bare_recurrence():
@@ -164,6 +166,121 @@ def test_a_model_hit_inside_the_item_table_never_feeds_the_memory():
     lines = [*rows, *money, _line("Cleed Agar", top=100), _line("Cleed", top=250)]
     assert _pipeline(lines, ["Cleed Agar"], padding=0).compute_boxes(_page()) == []
 
+
+
+def test_a_label_word_on_an_evidence_line_is_not_remembered():
+    """A birthdate line is evidence, so its tokens are harvested — but "Datum" in
+    "Geb.-Datum" is the label, and remembering it blackened every date label and
+    the item table's "Datum" header."""
+    lines = [
+        _line("Geb.-Datum: 01.02.1980", top=10),
+        _line("Re.-Datum: 01.03.2026", top=100),
+        _line("Datum", top=200),
+    ]
+    boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
+    assert [b for b in boxes if b.text is None] == [Box(10, 10, 90, 20)]  # no year note
+
+
+def test_the_name_beside_a_label_word_is_still_remembered():
+    lines = [
+        _line("Patient: Andrea Muster Datum 01.03.2026", top=10),
+        _line("Betrifft: Muster", top=100),
+        _line("Datum", top=200),
+    ]
+    boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
+    assert boxes == [Box(10, 10, 90, 20), Box(10, 100, 90, 110)]
+
+
+def test_the_trace_names_what_the_memory_harvested_and_where():
+    lines = [_line("Patient Muster, Andrea", top=10), _line("Betrifft: Muster", top=100)]
+    trace = Trace(collect=True)
+    _pipeline(lines, [], padding=0).compute_boxes(_page(), trace=trace)
+    out = trace.collected
+    assert "name memory 'Muster' <- 'Patient Muster, Andrea'" in out
+    # the recurrence quotes the name that matched, not the whole line
+    assert "PERSON 'Muster' [name-memory 1.00]" in out
+
+
+# -- the birthdate memory: a birth line teaches its date, not its label ------ #
+def _black(boxes):
+    """The redaction rectangles, without the birth-year notes drawn over them."""
+    return [b for b in boxes if b.text is None]
+
+
+class _BirthdateStub:
+    """Reports the first occurrence of ``sub`` as a DATE_OF_BIRTH span — a model
+    calling a date a birthdate."""
+
+    def __init__(self, sub):
+        self._sub = sub
+
+    def spans(self, text, trace):  # noqa: ARG002
+        start = text.find(self._sub)
+        end = start + len(self._sub)
+        return [Span(PiiLabel.DATE_OF_BIRTH, start, end, self._sub, "stub", 0.9)]
+
+
+@pytest.mark.parametrize("recurrence", ["01.02.1980", "1.2.1980", "01.02.80", "Befund 01.02.1980"])
+def test_a_birthdate_is_remembered_and_its_bare_recurrence_redacted(recurrence):
+    lines = [
+        _line("Geb.-Datum: 01.02.1980", top=10),
+        _line(recurrence, top=100),
+        _line("01.03.2026", top=200),
+    ]
+    boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
+    assert _black(boxes) == [Box(10, 10, 90, 20), Box(10, 100, 90, 110)]
+
+
+def test_the_birthdate_memory_carries_across_pages():
+    memory = Memory()
+    _pipeline([_line("Muster,Andrea 01.02.80", top=10)], [], padding=0).compute_boxes(
+        _page(), memory=memory
+    )
+    p2 = _pipeline([_line("01.02.1980", top=10)], [], padding=0)
+    assert _black(p2.compute_boxes(_page(), memory=memory)) == [Box(10, 10, 90, 20)]
+
+
+def test_a_birth_line_with_two_dates_teaches_no_date():
+    """OCR glued the invoice date onto the birth line: which one is the birthdate
+    is unknown, so neither is remembered."""
+    lines = [
+        _line("Geb.-Datum: 01.02.1980 Re.-Datum: 01.03.2026", top=10),
+        _line("01.02.1980", top=100),
+        _line("01.03.2026", top=200),
+    ]
+    boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
+    assert _black(boxes) == [Box(10, 10, 90, 20)]
+
+
+def test_a_model_birthdate_never_feeds_the_memory():
+    """A model calling a treatment date a birthdate would otherwise black out
+    every repetition of it in the item table."""
+    lines = [_line("Kontrolle 01.02.2026", top=10), _line("01.02.2026", top=100)]
+    p = RedactionPipeline(ocr=StubOCR(lines), classifier=_BirthdateStub("01.02.2026"), padding=0)
+    assert _black(p.compute_boxes(_page())) == [Box(10, 10, 90, 20)]
+
+
+def test_the_trace_names_the_remembered_birthdate_and_where():
+    lines = [_line("Geb.-Datum: 01.02.1980", top=10), _line("1.2.1980", top=100)]
+    trace = Trace(collect=True)
+    _pipeline(lines, [], padding=0).compute_boxes(_page(), trace=trace)
+    out = trace.collected
+    assert "birthdate memory '01.02.1980' <- 'Geb.-Datum: 01.02.1980'" in out
+    assert "DATE_OF_BIRTH '1.2.1980' [birthdate-memory 1.00]" in out
+
+
+def test_the_memory_does_not_learn_an_invoice_date_beside_a_birth_row():
+    """The invoice date shares the birth label's row but sits under its own
+    header; once it is no birthdate, its repetition elsewhere stays readable."""
+    lines = [
+        _line("Geb.datum:", 618, left=148, width=92, height=18),
+        _line("01.02.1980", 618, left=271, width=94, height=18),
+        _line("Rechnungsdatum:", 597, left=821, width=124, height=20),
+        _line("01.03.2026", 621, left=836, width=93, height=18),
+        _line("01.03.2026", 900, left=82, width=85, height=17),
+    ]
+    boxes = _black(_pipeline(lines, [], padding=0).compute_boxes(Image.new("RGB", (1000, 1000))))
+    assert boxes == [Box(271, 618, 365, 636)]
 
 # -- regions ---------------------------------------------------------------- #
 def test_a_graphic_region_is_blackened_although_it_holds_no_text():

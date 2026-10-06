@@ -411,6 +411,17 @@ def line_matches_static_rule(text: str) -> bool:
     return static_rule_match(text) is not None
 
 
+# The invoice and treatment dates. The value is anchored to a date cell — "vom
+# 15.04.2026 bis 28.04.2026" at most — so a row that also holds a name is never
+# kept for the date beside it. "Geburtsdatum" cannot match: no word boundary
+# before its "datum", and "Geburts" is not one of the prefixes ("Geb.-Datum"
+# does — a rival below therefore excludes the rule's own label). Defined here
+# because the birthdate row needs them as rivals.
+_DATE_KEEP = r"(?:Rechnungs|Behandlungs|Leistungs|Ausstellungs)?datum|Behandlungs(?:zeitraum|tag)"
+DATE_KEEP_LABEL = re.compile(rf"(?i)\b(?:{_DATE_KEEP})\b")
+DATE_KEEP_CELL = re.compile(rf"(?i)^\s*(?:{_DATE_KEEP})\s*:?\s*$")
+
+
 @dataclass(frozen=True)
 class LabeledId:
     """One kind of labeled value: a ``label`` marks the line (or column
@@ -425,7 +436,10 @@ class LabeledId:
     value continue with the person's other details (:data:`PERSON_DETAIL`).
     ``cell`` is for a value too plain to be told apart from its neighbours (a
     bare "11"): it pairs only with the cell directly left of it, and a column
-    under its label may also be one sharing the label's left edge."""
+    under its label may also be one sharing the label's left edge. ``rival``
+    and ``rival_header`` are another kind's labels for the same values: a value
+    paired by row alone goes to whichever label is nearer (see
+    :func:`_nearer_rival`)."""
 
     kind: str  # a PiiLabel, or a keep reason in KEEP_IDS
     label: re.Pattern[str]
@@ -434,6 +448,8 @@ class LabeledId:
     header: re.Pattern[str] | None = None
     details: bool = False
     cell: bool = False
+    rival: re.Pattern[str] | None = None
+    rival_header: re.Pattern[str] | None = None
 
 
 # The label ↔ value pairings labeled_value_indices matches. Birthdate is row
@@ -461,6 +477,8 @@ LABELED_IDS: tuple[LabeledId, ...] = (
         merged=BIRTH_MARK,
         header=BIRTH_LABEL_CELL,
         details=True,
+        rival=DATE_KEEP_LABEL,
+        rival_header=DATE_KEEP_CELL,
     ),
     LabeledId(PiiLabel.ID, label=ID_LABEL, value=ID_VALUE),
     LabeledId(
@@ -671,6 +689,41 @@ def street_above_city_indices(lines: list[Line], table: set[int] | None = None) 
     return found
 
 
+def _nearer_rival(
+    lines: list[Line], i: int, rule: LabeledId, table: set[int], gap: float
+) -> bool:
+    """Whether a rival label owns ``lines[i]`` more closely than the rule's own
+    label does. A label owns a value in its row from the left (the horizontal
+    gap), and a rival header owns the column under it (gap 0); a label right of
+    the value owns nothing. Ties go to the rule."""
+    value = lines[i]
+    center = value.top + value.height / 2
+    tol = value.height / 2
+
+    def row_gaps(is_label) -> list[float]:
+        return [
+            max(0, value.left - ln.left - ln.width)
+            for ln in lines
+            if ln is not value and is_label(ln.text)
+            and ln.top - tol <= center <= ln.top + ln.height + tol
+            and ln.left < value.left + value.width / 2
+        ]
+
+    def is_rival(text: str) -> bool:
+        return bool(rule.rival and rule.rival.search(text)) and not rule.label.search(text)
+
+    rivals = row_gaps(is_rival)
+    if rule.rival_header is not None:
+        rivals += [
+            0
+            for ln in lines
+            if rule.rival_header.search(ln.text) and not rule.label.search(ln.text)
+            and i in _column_below(lines, ln, rule.value, gap, table)
+        ]
+    own = row_gaps(lambda text: bool(rule.label.search(text)))
+    return bool(rivals) and min(rivals) < min(own, default=float("inf"))
+
+
 def labeled_value_indices(
     lines: list[Line],
     table: set[int] | None = None,
@@ -728,6 +781,10 @@ def labeled_value_indices(
                 paired = left is not None and bool(rule.label.search(left.text))
             else:
                 paired = any(y0 - tol <= center <= y1 + tol for y0, y1 in label_spans)
+                # the row is the weakest pairing: a nearer date label of another
+                # kind (the invoice date under its header) owns the value instead
+                if paired and rule.rival is not None:
+                    paired = not _nearer_rival(lines, i, rule, table, gap)
             if paired:
                 found.add(i)
                 if rule.details:
@@ -753,13 +810,6 @@ def labeled_value_indices(
 # them alone. A deterministic rule still wins — a kept line carrying a street or
 # a labeled birthdate is redacted all the same.
 
-# The invoice and treatment dates. The value is anchored to a date cell — "vom
-# 15.04.2026 bis 28.04.2026" at most — so a row that also holds a name is never
-# kept for the date beside it. "Geburtsdatum" cannot match: no word boundary
-# before its "datum", and "Geburts" is not one of the prefixes.
-_DATE_KEEP = r"(?:Rechnungs|Behandlungs|Leistungs|Ausstellungs)?datum|Behandlungs(?:zeitraum|tag)"
-DATE_KEEP_LABEL = re.compile(rf"(?i)\b(?:{_DATE_KEEP})\b")
-DATE_KEEP_CELL = re.compile(rf"(?i)^\s*(?:{_DATE_KEEP})\s*:?\s*$")
 DATE_KEEP_VALUE = re.compile(
     rf"(?i)^\s*(?:(?:{_DATE_KEEP})\s*:?\s*)?(?:vom\s+)?{DATE_RE.pattern}"
     rf"(?:\s*(?:-|–|bis)\s*{DATE_RE.pattern})?\s*$"
@@ -917,6 +967,24 @@ def _full_year(digits: str) -> str:
     return f"{19 if yy > date.today().year % 100 else 20}{digits}"
 
 
+def birth_date_in(text: str) -> re.Match[str] | None:
+    """The birthdate on a line already known to carry one: the date the mark or
+    the name row points at, else the line's only date — ``None`` when several
+    dates leave it open."""
+    marked = BIRTH_MARK.search(text) or NAME_DATE.search(text)
+    if marked is not None:
+        return DATE_RE.search(text, marked.start())
+    dates = list(DATE_RE.finditer(text))
+    return dates[0] if len(dates) == 1 else None
+
+
+def date_key(text: str) -> tuple[int, int, int]:
+    """A date as (day, month, full year), so "01.02.80" and "1.2.1980" compare
+    equal."""
+    day, month, year = re.split(r"\.\s?", text)
+    return int(day), int(month), int(_full_year(year))
+
+
 def birth_year_note(line: Line, spans: list[Span]) -> Box | None:
     """A note printing the birth year where the birthdate stood on a redacted
     ``line`` — only the day and month are personal enough to hide. The position
@@ -927,13 +995,8 @@ def birth_year_note(line: Line, spans: list[Span]) -> Box | None:
         s.label is PiiLabel.DATE_OF_BIRTH or s.source == "rule NAME_DATE" for s in spans
     ):
         return None
-    marked = BIRTH_MARK.search(text) or NAME_DATE.search(text)
-    if marked is not None:
-        found = DATE_RE.search(text, marked.start())
-    else:
-        dates = list(DATE_RE.finditer(text))
-        found = dates[0] if len(dates) == 1 else None
-    if found is None or not text:
+    found = birth_date_in(text)
+    if found is None:
         return None
     year = _full_year(re.split(r"\.\s?", found.group())[-1])
     x0 = line.left + line.width * found.start() // len(text)

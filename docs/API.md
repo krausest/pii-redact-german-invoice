@@ -117,7 +117,10 @@ A region of a blackened-whole type (`footer`, `image`, …) ends with
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,
-or the classifier (`presidio`, `guard-omni`). Lines in no region follow under
+`birthdate-memory`, or the classifier (`presidio`, `guard-omni`). A `name-memory`
+or `birthdate-memory` span quotes the remembered name or date it matched; each
+enters the memory with a page-level line `name memory 'Muster' <- '<line>'` or
+`birthdate memory '01.02.1980' <- '<line>'` before the regions. Lines in no region follow under
 `--- unclaimed lines ---`; pages are separated by `=== page N ===`. See
 [Redaction](Redaction.md) for what each detector does.
 

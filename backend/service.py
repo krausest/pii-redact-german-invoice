@@ -29,6 +29,7 @@ from typing import Any
 from PIL import Image
 
 from backend.config import Config
+from backend.harvest import Memory
 from backend.models import Box
 from backend.options import AssembleOptions, RedactOptions
 from backend.pdf import assemble_pdf, encode_jpeg, rasterize_pdf
@@ -128,9 +129,9 @@ def run_redaction(
     )
 
     results: list[PageResult] = []
-    # Name memory is per document: a surname the rules label on page 1 is
-    # redacted bare on every following page (see compute_boxes).
-    known_names: set[str] = set()
+    # Name and birthdate memory are per document: a surname the rules label on
+    # page 1 is redacted bare on every following page (see compute_boxes).
+    memory = Memory()
     # One trace per document, for the same reason: read as one narrative, with
     # the pages marked off inside it rather than split across N of them.
     trace = Trace(collect=opts.debug)
@@ -152,7 +153,7 @@ def run_redaction(
             image,
             lines=lines,
             regions=regions,
-            known_names=known_names,
+            memory=memory,
             trace=trace,
             classifier=opts.classifier,
         )

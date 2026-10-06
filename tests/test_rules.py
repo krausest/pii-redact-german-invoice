@@ -365,6 +365,82 @@ def test_no_street_above_a_city_inside_the_item_table():
     assert street_above_city_indices(_block("Musterau 12"), table={3}) == set()
 
 
+# -- a date belongs to its nearest date label --------------------------------- #
+def _grid():
+    """A patient block as a two-row grid: the birth label beside its date, the
+    invoice date under its own column header — but in the birth label's row."""
+    return [
+        _cell("Patient:", 145, 596, width=63, height=21),
+        _cell("Geb.datum:", 148, 618, width=92, height=18),
+        _cell("Andrea Muster", 270, 596, width=143, height=23),
+        _cell("01.02.1980", 271, 618, width=94, height=18),
+        _cell("Rechnungs-Nr.:", 589, 596, width=107, height=20),
+        _cell("AB1234", 599, 620, width=87, height=18),
+        _cell("Rechnungsdatum:", 821, 597, width=124, height=20),
+        _cell("01.03.2026", 836, 621, width=93, height=18),
+    ]
+
+
+def _birthdates(lines):
+    from backend.rules import labeled_value_indices
+
+    return {
+        lines[i].text for i, k in labeled_value_indices(lines).items() if k is PiiLabel.DATE_OF_BIRTH
+    }
+
+
+def test_the_invoice_date_under_its_header_is_no_birthdate():
+    assert _birthdates(_grid()) == {"01.02.1980"}
+
+
+def test_in_one_row_each_date_belongs_to_the_label_left_of_it():
+    lines = [
+        _cell("Geburtsdatum:", 10, 100),
+        _cell("01.02.1980", 120, 100),
+        _cell("Rechnungsdatum:", 240, 100, width=120),
+        _cell("01.03.2026", 370, 100),
+    ]
+    assert _birthdates(lines) == {"01.02.1980"}
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [_cell("Geburtsdatum:", 10, 100), _cell("01.02.1980", 120, 100)],
+        # the label printed just above the date, the rows overlapping
+        [_cell("geboren am", 503, 381, width=73, height=17), _cell("01.02.1980", 507, 396, width=69, height=17)],
+        # a treatment-period sentence under the birth row owns nothing
+        [
+            _cell("Geburtsdatum:", 315, 1546, width=331, height=51),
+            _cell("01.02.1980", 806, 1541, width=252, height=53),
+            _cell("Behandlungszeitraum von 01.03.2026 bis 05.03.2026", 312, 1661, width=1179, height=64),
+        ],
+    ],
+    ids=["beside", "above", "sentence-below"],
+)
+def test_a_birthdate_still_pairs_with_its_label(lines):
+    assert "01.02.1980" in _birthdates(lines)
+
+
+# -- which date on a birth line is the birthdate ------------------------------ #
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Geb.-Datum: 01.02.1980", "01.02.1980"),
+        ("Muster,Andrea 01.02.80", "01.02.80"),
+        # the mark says which date: the treatment date before it does not count
+        ("12.03.2026 Andrea Muster *01.02.1980", "01.02.1980"),
+        ("Geb.-Datum: 01.02.1980 Re.-Datum: 01.03.2026", None),
+        ("Geburtsdatum", None),
+    ],
+)
+def test_the_birthdate_on_a_birth_line(text, expected):
+    from backend.rules import birth_date_in
+
+    found = birth_date_in(text)
+    assert (found.group() if found else None) == expected
+
+
 # -- the birth year ---------------------------------------------------------- #
 def _note(text):
     from backend.pii import Span

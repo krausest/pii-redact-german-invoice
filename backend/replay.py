@@ -76,6 +76,7 @@ from PIL import Image
 
 from backend.classifiers.base import Classifier
 from backend.config import Config
+from backend.harvest import Memory
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace, format_line
@@ -343,10 +344,10 @@ def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
 def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
     """Run the detection passes over frozen pages, in document order.
 
-    One ``known_names`` set spans the pages exactly as ``run_redaction`` does it,
+    One :class:`~backend.harvest.Memory` spans the pages exactly as ``run_redaction`` does it,
     which is what makes the forward-only name memory (labeled on page 1, bare on
     page 2) part of what the snapshot pins."""
-    known_names: set[str] = set()
+    memory = Memory()
     outcomes: list[Outcome] = []
     for page in pages:
         trace = Trace(collect=True)
@@ -356,7 +357,7 @@ def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
         boxes = pipeline.compute_boxes(
             canvas,
             lines=list(page.lines),
-            known_names=known_names,
+            memory=memory,
             trace=trace,
         )
         outcomes.append(_outcome(page, boxes, trace.collected or ""))
