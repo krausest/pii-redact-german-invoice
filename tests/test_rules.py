@@ -168,15 +168,6 @@ def test_a_span_quotes_what_it_matched_and_names_the_rule() -> None:
     assert (span.label, span.text, span.source) == (C, "praxis-muster.de", "rule CONTACT")
 
 
-def test_every_rule_has_a_label() -> None:
-    """A new pattern added to STATIC_RULES without a row in RULE_LABELS would
-    raise a KeyError on the first page carrying it, in production."""
-    from backend.pii import RULE_LABELS
-    from backend.rules import STATIC_RULES
-
-    assert {name for name, _ in STATIC_RULES} == set(RULE_LABELS)
-
-
 # -- what must stay readable ------------------------------------------------- #
 def _cell(text, left, top, width=100, height=20):
     return Line(text=text, left=left, top=top, width=width, height=height)

@@ -24,7 +24,7 @@ from datetime import date
 from statistics import median
 
 from backend.models import Box, Line
-from backend.pii import RULE_LABELS, PiiLabel, Span
+from backend.pii import PiiLabel, Span
 
 # Anrede: any line containing a salutation word is redacted — lone ("Herrn" above
 # the address) or with a name ("Herr Mustermann", where NER only tags the single
@@ -59,9 +59,9 @@ _PERSON_LABEL = (
 )
 
 PATIENT_NAME = re.compile(
-    r"\b" + _PERSON_LABEL + r"\b\.?\s*:?\s*"
+    rf"\b{_PERSON_LABEL}\b\.?\s*:?\s*"
     r"(?:[A-ZÄÖÜ]\.\s*)*"  # optional initials: "Pat. M. Mustermann"
-    + _NAME_PART
+    rf"{_NAME_PART}"
 )
 
 # The same label standing *alone in its cell* ("Patient:", "Versicherte"), which
@@ -76,7 +76,7 @@ PATIENT_NAME = re.compile(
 # label noun ("Beratung Person", "Leistung Name") from becoming a label and
 # blackening whatever sits beside it.
 PERSON_LABEL_CELL = re.compile(
-    r"^\s*(?:[A-ZÄÖÜ][a-zäöüß]+e[rnsm]?\s+)?" + _PERSON_LABEL + r"\s*\.?\s*:?\s*$"
+    rf"^\s*(?:[A-ZÄÖÜ][a-zäöüß]+e[rnsm]?\s+)?{_PERSON_LABEL}\s*\.?\s*:?\s*$"
 )
 
 # Surname and forename are written spaced or comma-joined: "Max Mustermann",
@@ -185,21 +185,21 @@ BIRTH_LABEL_CELL = re.compile(r"(?i)^\s*(?:geburts(?:datum|tag)|geb[.\s-]*dat(?:
 # "Geb.Nr. 5" or "Geb.-Nr. 3306", never "geb. 13.08.1964". Nothing anchors this at
 # a word start beyond \b, because OCR routinely glues the abbreviation to the name
 # in front of it — "Patient Mustermann, Max'geb. 13.08.1964" is one OCR line.
-GEB_DATE = re.compile(r"(?i)\bgeb\.?\s*(?:am\s+)?" + DATE_RE.pattern)
+GEB_DATE = re.compile(rf"(?i)\bgeb\.?\s*(?:am\s+)?{DATE_RE.pattern}")
 
 # The genealogical birth mark: "*13.03.1975", "* 13.03.1975". On German
 # paperwork an asterisk in front of a date reads "geboren", and it is the one
 # birth marker that needs no word at all — which is why a form prints it where
 # there is no room for a label. The date must follow the star directly (only
 # whitespace between), so a footnote marker introducing a sentence does not match.
-STAR_DATE = re.compile(r"\*\s*" + DATE_RE.pattern)
+STAR_DATE = re.compile(rf"\*\s*{DATE_RE.pattern}")
 
 # Same-line evidence that a date is a *birth* date rather than a treatment date:
 # the abbreviation glued to it, or the star. Both are "merged" forms — the label
 # and its value in one OCR line — so they share the one slot for that in
 # LABELED_IDS, and both count as name evidence for the same reason: a name on the
 # line is there *because* the birthdate is.
-BIRTH_MARK = re.compile(GEB_DATE.pattern + r"|" + STAR_DATE.pattern)
+BIRTH_MARK = re.compile(rf"{GEB_DATE.pattern}|{STAR_DATE.pattern}")
 
 # "Muster,Andrea 05.03.11" — surname, forename and birthdate as one OCR line
 # carrying no label of any kind, the way a patient table row is written. Nothing
@@ -213,7 +213,7 @@ BIRTH_MARK = re.compile(GEB_DATE.pattern + r"|" + STAR_DATE.pattern)
 # date than a birthdate — it is the *pair* that is unambiguous. Double surnames
 # are allowed on either side ("Müller-Lüdenscheidt,Anna-Lena"), and either name
 # may be all caps, which is how a lab prints the row ("MUSTER, ANDREA 26.06.75").
-NAME_DATE = re.compile(_NAME_PART + r"\s*,\s*" + _NAME_PART + r"\s+" + DATE_RE.pattern)
+NAME_DATE = re.compile(rf"{_NAME_PART}\s*,\s*{_NAME_PART}\s+{DATE_RE.pattern}")
 
 # Patient-side identifier labels: the numbers that tie the paper to a person or a
 # treatment episode, across the neighbouring document types (dental, hospital,
@@ -336,7 +336,7 @@ IMPRINT = re.compile(
 
 # Loose organisation nouns: strong evidence of a sender *inside a sender block*,
 # but too common in body text to redact page-wide ("Zentrum", "Labor", "Institut"
-# all show up in Leistungstexte). Not used by :func:`static_rule_match`; exported
+# all show up in Leistungstexte). Not part of ``STATIC_RULES``; exported
 # for a caller that already knows it is looking at sender-shaped content.
 #
 # German compounds defeat a plain word list — ``\bPraxis\b`` never matches
@@ -370,46 +370,19 @@ ORG_MEDICAL = re.compile(
 # worth knowing about a wrong box is *which* pattern drew it. Keys are the
 # module-level names on purpose — a trace line is then a grep away from the
 # regex that produced it.
-STATIC_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("SALUT", SALUT),
-    ("PATIENT_NAME", PATIENT_NAME),
-    ("TITLE_NAME", TITLE_NAME),
-    ("NAME_DATE", NAME_DATE),
-    ("DE_STREET", DE_STREET),
-    ("DE_PLZ_CITY", DE_PLZ_CITY),
-    ("ORG_LEGAL", ORG_LEGAL),
-    ("CONTACT", CONTACT),
-    ("PHONE", PHONE),
-    ("IMPRINT", IMPRINT),
-    ("TAX_NUMBER", TAX_NUMBER),
-)
-
-
-def static_rule_match(text: str) -> tuple[str, str] | None:
-    """The first per-line deterministic rule that fires on ``text``, as
-    ``(rule name, matched text)`` — or ``None`` if none does.
-
-    The rules are salutation, patient label, titled name,
-    surname+forename+birthdate, German street / ZIP+city, and sender identity
-    (legal form, contact details, registry/banking identifiers). Birthdates and
-    labeled identifiers need the whole page, so they are handled separately by
-    :func:`labeled_value_indices`.
-
-    Returning the match rather than a bool is what lets the trace name the rule
-    *and* quote the substring it fired on: those two together are the whole
-    diagnosis of an unexpected box."""
-    for name, pattern in STATIC_RULES:
-        match = pattern.search(text)
-        if match is not None:
-            return name, match.group()
-    return None
-
-
-def line_matches_static_rule(text: str) -> bool:
-    """Whether any per-line deterministic rule fires — see
-    :func:`static_rule_match`, which callers that report *why* use instead."""
-    return static_rule_match(text) is not None
-
+STATIC_RULES: list[tuple[PiiLabel, str, re.Pattern[str]]] = [
+    (PiiLabel.SALUTATION, "SALUT", SALUT),
+    (PiiLabel.PERSON, "PATIENT_NAME", PATIENT_NAME),
+    (PiiLabel.PERSON, "TITLE_NAME", TITLE_NAME),
+    (PiiLabel.PERSON, "NAME_DATE", NAME_DATE),
+    (PiiLabel.ADDRESS, "DE_STREET", DE_STREET),
+    (PiiLabel.ADDRESS, "DE_PLZ_CITY", DE_PLZ_CITY),
+    (PiiLabel.ORG, "ORG_LEGAL", ORG_LEGAL),
+    (PiiLabel.CONTACT, "CONTACT", CONTACT),
+    (PiiLabel.CONTACT, "PHONE", PHONE),
+    (PiiLabel.BANK, "IMPRINT", IMPRINT),
+    (PiiLabel.ID, "TAX_NUMBER", TAX_NUMBER),
+]
 
 # The invoice and treatment dates. The value is anchored to a date cell — "vom
 # 15.04.2026 bis 28.04.2026" at most — so a row that also holds a name is never
@@ -928,8 +901,7 @@ def rule_spans(
     ``Line`` boxes for the same reason; their line indices become whole-line
     spans here.
 
-    Unlike :func:`static_rule_match`, which reports only the first rule that
-    fires, this reports **all** of them — so the trace can say a line carries
+    It reports **all** of the matches — so the trace can say a line carries
     both an address and a company name instead of naming whichever came first in
     the table.
     """
@@ -939,15 +911,19 @@ def rule_spans(
         lo, hi = bounds[i]
         spans.append(Span(label, lo, hi, lines[i].text, source))
 
-    for i, line in enumerate(lines):
+    for line,bound in zip(lines, bounds):
         if not line.text.strip():
             continue
-        lo = bounds[i][0]
-        for name, pattern in STATIC_RULES:
+        lo = bound[0]
+        for rule, regex_name, pattern in STATIC_RULES:
             for m in pattern.finditer(line.text):
                 spans.append(
-                    Span(RULE_LABELS[name], lo + m.start(), lo + m.end(), m.group(), f"rule {name}")
+                    Span(rule, lo + m.start(), lo + m.end(), m.group(), f"rule {regex_name}")
                 )
+
+    print(f"Intermediate {spans}")
+    print(f"labeled_value_indices(lines, table) {labeled_value_indices(lines, table)}")
+    print(f"sorted(street_above_city_indices(lines, table)) {sorted(street_above_city_indices(lines, table))}")
 
     for i, kind in labeled_value_indices(lines, table).items():
         whole_line(i, PiiLabel(kind), "labeled-value")

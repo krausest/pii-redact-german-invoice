@@ -82,27 +82,6 @@ PRESIDIO_LABELS: dict[str, PiiLabel] = {
     "CREDIT_CARD": PiiLabel.BANK,
 }
 
-# `backend.rules.STATIC_RULES` name -> our label. The rule names stay as they
-# are: a trace line still quotes the regex that fired, because "ADDRESS" does
-# not tell you whether to go and look at DE_STREET or DE_PLZ_CITY.
-#
-# SALUT gets its own label rather than folding into PERSON: "Herrn" on its own
-# is not a person, it marks the recipient block — and the harvest must never
-# take it for a name to look for elsewhere on the page.
-RULE_LABELS: dict[str, PiiLabel] = {
-    "SALUT": PiiLabel.SALUTATION,
-    "PATIENT_NAME": PiiLabel.PERSON,
-    "TITLE_NAME": PiiLabel.PERSON,
-    "NAME_DATE": PiiLabel.PERSON,
-    "DE_STREET": PiiLabel.ADDRESS,
-    "DE_PLZ_CITY": PiiLabel.ADDRESS,
-    "ORG_LEGAL": PiiLabel.ORG,
-    "CONTACT": PiiLabel.CONTACT,
-    "PHONE": PiiLabel.CONTACT,
-    "IMPRINT": PiiLabel.BANK,
-    "TAX_NUMBER": PiiLabel.ID,
-}
-
 
 # GLiNER2 label -> our label, for `backend.classifiers.guard_omni`. The keys are
 # also *what we ask the model for* (`GLINER2_LABELS` is this table's keys), so a

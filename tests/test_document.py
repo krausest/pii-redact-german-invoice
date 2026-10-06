@@ -19,7 +19,7 @@ def _line(text):
 def _span(label, start, end, text):
     return Span(label=label, start=start, end=end, text=text, source="test")
 
-
+#ok
 def test_lines_are_joined_by_a_newline_never_a_space():
     """Two words on separate OCR lines must not fuse into one token — a phone
     number ending a line and a house number starting the next would read as a
@@ -29,13 +29,14 @@ def test_lines_are_joined_by_a_newline_never_a_space():
     assert bounds == [(0, 7), (8, 13)]
     assert text[bounds[1][0] : bounds[1][1]] == "34 56"
 
-
+#ok
 def test_an_empty_line_still_takes_a_position():
     """`bounds` is index-aligned with the lines it was built from; a detector
     shifting its offsets by `bounds[i][0]` depends on that alignment holding for
     every line, including one OCR returned empty."""
     text, bounds = build_document([_line("a"), _line(""), _line("b")])
     assert text == "a\n\nb"
+    assert bounds == [(0, 1), (2,2), (3, 4)]
     assert len(bounds) == 3
 
 
