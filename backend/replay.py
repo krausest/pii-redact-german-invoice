@@ -254,8 +254,8 @@ def coverage(line: Line, boxes: Sequence[Box]) -> float:
     mask = np.zeros((line.height, line.width), dtype=bool)
     for box in boxes:
         x0, y0 = max(line.left, box.x0), max(line.top, box.y0)
-        x1 = min(line.left + line.width, box.x1)
-        y1 = min(line.top + line.height, box.y1)
+        x1 = min(line.right, box.x1)
+        y1 = min(line.bottom, box.y1)
         if x0 >= x1 or y0 >= y1:
             continue
         mask[y0 - line.top : y1 - line.top, x0 - line.left : x1 - line.left] = True

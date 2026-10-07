@@ -70,6 +70,10 @@ EXPOSE 8000
 # Offline is enforced, not assumed: warmup.py baked every model above, so any
 # download attempt at runtime is a missed bake — make it fail loudly.
 #
+# Presidio's EmailRecognizer calls tldextract, which fetches the Public Suffix List
+# without a timeout; behind a dropping firewall that hangs ~2 min per address. An
+# empty URL list makes it use its bundled snapshot.
+#
 # Four config keys are overridable per container without rebuilding or mounting a
 # config.toml: `-e PII_OCR_BACKEND=paddle|onnxruntime`, `-e PII_CLASSIFIER=presidio`, `-e PII_UNWARP=false` (skip the
 # dewarping model — much faster on flat scans and PDFs, and it is what makes a
@@ -79,7 +83,8 @@ EXPOSE 8000
 # at startup rather than being ignored. Note PII_UNWARP only sets the *default* for
 # `?unwarp=` — a request that names the parameter still wins.
 ENV WEB_CONCURRENCY=1 REQUEST_TIMEOUT=120 \
-    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+    TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
 

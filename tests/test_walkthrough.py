@@ -14,7 +14,9 @@ from backend.classifiers.presidio import PII_ENTITIES, PresidioClassifier
 from backend.document import build_document
 from backend.models import Line
 from backend.pii import PiiLabel
-from backend.rules import DE_PLZ_CITY, DE_STREET, STATIC_RULES, rule_spans
+from backend.rules import rule_spans
+from backend.rules.line_rules import STATIC_RULES
+from backend.rules.patterns import DE_PLZ_CITY, DE_STREET
 from backend.trace import Trace
 
 pytestmark = pytest.mark.slow

@@ -106,7 +106,7 @@ PRESIDIO_LABELS: dict[str, PiiLabel] = {
 # * `passport`/`national_id`/`document_id` are out, so **`ID` has no model
 #   source at all**. They uniquely drew 11 boxes, one of them an invoice number
 #   and one a postage line. Telling an insurance number from an invoice number
-#   is not a language question — `backend.rules.LABELED_IDS` answers it by the
+#   is not a language question — `backend.rules.labeled.LABELED_VALUES` answers it by the
 #   label printed beside the value, and no zero-shot extractor can. The two
 #   genuine catches were sender identifiers (an IK number, a VAT ID) that
 #   `IMPRINT` is meant to cover; the fix for those is that rule, not a label
@@ -119,7 +119,7 @@ PRESIDIO_LABELS: dict[str, PiiLabel] = {
 #   drops the classifier there, as the item-table gate does for Leistungstexte.
 #
 # Note what has no key at all: **SALUTATION**. GLiNER2 has no label for "Herrn"
-# or "Sehr geehrte", so `backend.rules.SALUT` stays load-bearing whichever
+# or "Sehr geehrte", so `backend.rules.patterns.SALUT` stays load-bearing whichever
 # classifier runs — including as the name memory's evidence for the person named
 # beside it.
 GUARD_OMNI_LABELS: dict[str, PiiLabel] = {

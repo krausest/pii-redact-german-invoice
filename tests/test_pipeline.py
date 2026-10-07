@@ -2,7 +2,7 @@
 
 Acceptance-level: every test here states a behaviour a user of the redactor
 would notice, using stub OCR/classifier/layout so no model loads. The
-line-by-line correctness of the rules lives in ``test_rules.py``, the reading
+line-by-line correctness of the rules lives in ``test_rules_*.py``, the reading
 order in ``test_layout.py``, and the real documents in the corpus replay
 (``pytest --regression``).
 """

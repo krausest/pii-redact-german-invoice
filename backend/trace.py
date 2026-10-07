@@ -109,6 +109,7 @@ def trace_page(
     region_hits: list[tuple[int, "Box", str]],
     signatures: list[tuple[int, "Box"]],
     notes: dict[int, "Box"],
+    dropped: dict[int, list["Span"]] | None = None,
 ) -> None:
     """Narrate one page: every detected region, the text it contributed, the
     lines inside it with their spans and verdict, then the region's own verdict.
@@ -123,7 +124,8 @@ def trace_page(
     the page rather than the way the detector happened to emit its boxes.
 
     ``keep`` names why a line was spared (``item table``, ``DATE``, ...), which
-    is what a ``-> keep (...)`` verdict quotes.
+    is what a ``-> keep (...)`` verdict quotes, and ``dropped`` the candidate
+    spans that reason rejected on it.
     """
     from backend.layout import lines_by_region
 
@@ -146,6 +148,10 @@ def trace_page(
             for span in found.get(i, []):
                 trace.add(
                     "      %s %r [%s %.2f]", span.label, span.text, span.source, span.score
+                )
+            for span in (dropped or {}).get(i, []):
+                trace.add(
+                    "      rejected %s %r [%s %.2f]", span.label, span.text, span.source, span.score
                 )
             if i in found:
                 trace.add("      -> REDACT")

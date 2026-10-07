@@ -137,8 +137,8 @@ class PaddleLayoutDetector:
 
 
 def _center_in(line: Line, box: Box) -> bool:
-    cx = line.left + line.width / 2
-    cy = line.top + line.height / 2
+    cx = line.mid_x
+    cy = line.mid_y
     return box.x0 <= cx < box.x1 and box.y0 <= cy < box.y1
 
 
@@ -268,7 +268,7 @@ def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[int]:
         """Line indices of one region's subtree, in reading order."""
         items: list[tuple[int, int, int, int]] = []
         for i in per_region[region_index]:
-            items.append((lines[i].top, lines[i].top + lines[i].height, lines[i].left, i))
+            items.append((lines[i].top, lines[i].bottom, lines[i].left, i))
         for c in children[region_index]:
             box = regions[c].box
             # Encoded as ~child so a band item can say "this is a subtree, not a
@@ -282,7 +282,7 @@ def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[int]:
 
     claimed = {i for group in per_region for i in group}
     top: list[tuple[int, int, int, int]] = [
-        (lines[i].top, lines[i].top + lines[i].height, lines[i].left, i)
+        (lines[i].top, lines[i].bottom, lines[i].left, i)
         for i in range(len(lines))
         if i not in claimed
     ]
@@ -342,7 +342,7 @@ def region_boxes(
     flagged: a kept line that was redacted all the same is not cut out.
     """
     holes = [
-        Box(ln.left, ln.top, ln.left + ln.width, ln.top + ln.height)
+        Box(ln.left, ln.top, ln.right, ln.bottom)
         for i, ln in enumerate(lines)
         if i in (keep or set()) and i not in redacted
     ]
@@ -377,19 +377,19 @@ def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tu
     for i, ln in enumerate(lines):
         if not SIGN_OFF.search(ln.text):
             continue
-        bottom = ln.top + ln.height
-        x0, x1 = ln.left, ln.left + ln.width
+        bottom = ln.bottom
+        x0, x1 = ln.left, ln.right
         below = [
             other
             for other in lines
             if other.top >= bottom and other.text.strip()
-            and other.left < x1 and other.left + other.width > x0
+            and other.left < x1 and other.right > x0
         ]
         limit = bottom + _SIGNATURE_HEIGHTS * ln.height
         nxt = min(below, key=lambda other: other.top, default=None)
         if nxt is not None and nxt.top <= limit:
             y1 = nxt.top
-            x0, x1 = min(x0, nxt.left), max(x1, nxt.left + nxt.width)
+            x0, x1 = min(x0, nxt.left), max(x1, nxt.right)
         else:
             y1 = limit
         if y1 - bottom < ln.height / 2:  # no room was left for a signature
@@ -402,8 +402,8 @@ def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tu
 def _tight_bbox(lines: list[Line], idx: list[int]) -> Box:
     left = min(lines[i].left for i in idx)
     top = min(lines[i].top for i in idx)
-    right = max(lines[i].left + lines[i].width for i in idx)
-    bottom = max(lines[i].top + lines[i].height for i in idx)
+    right = max(lines[i].right for i in idx)
+    bottom = max(lines[i].bottom for i in idx)
     return Box(left, top, right, bottom)
 
 

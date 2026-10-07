@@ -18,7 +18,7 @@ import re
 from collections.abc import Sequence
 from typing import Protocol
 
-from backend.rules import DE_PLZ_CITY
+from backend.rules.patterns import DE_PLZ_CITY
 from backend.pii import PRESIDIO_LABELS, PiiLabel, Span
 from backend.trace import Trace
 
@@ -50,7 +50,7 @@ _DOTTED_DATE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}[\s\d.\-/]*")
 # An undelimited run of digits is an identifier (a lab or order number), not a
 # phone number: on these documents a real number is written with a separator or
 # carries a Tel/Fax label, and a labeled one is already caught deterministically
-# by backend.rules.CONTACT before the classifier ever runs. python-phonenumbers
+# by backend.rules.patterns.CONTACT before the classifier ever runs. python-phonenumbers
 # scores such a run at exactly the 0.4 threshold, with no context to spare.
 _BARE_DIGITS = re.compile(r"\d+")
 
@@ -187,7 +187,7 @@ def build_analyzer():
             patterns=[
                 Pattern(
                     "de_street",
-                    # Kept in step with backend.rules.DE_STREET: the name part
+                    # Kept in step with backend.rules.patterns.DE_STREET: the name part
                     # allows upper case throughout and the suffix is matched
                     # case-insensitively, so an all-caps "MUSTERSTR.23" is
                     # found as well as "Musterstrasse 23".
@@ -196,7 +196,7 @@ def build_analyzer():
                 ),
                 Pattern(
                     "de_plz_city",
-                    # backend.rules.DE_PLZ_CITY itself, so the two cannot drift:
+                    # backend.rules.patterns.DE_PLZ_CITY itself, so the two cannot drift:
                     # this pattern used to allow a two-letter all-caps tail and so
                     # matched the "15118 MID" its own comment promised to keep out.
                     DE_PLZ_CITY.pattern,

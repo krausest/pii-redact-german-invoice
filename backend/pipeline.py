@@ -34,17 +34,35 @@ from backend.layout import (
 )
 from backend.harvest import Memory, birthdate_spans, harvest, harvest_birthdates, name_spans
 from backend.pii import Span
-from backend.rules import birth_year_note, item_table_indices, keep_indices, rule_spans
+from backend.rules import birth_year_note, item_table_indices, keep_indices, rejected, rule_spans
 from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
 
 
 def _rect(line: Line) -> Box:
-    return Box(line.left, line.top, line.left + line.width, line.top + line.height)
+    return Box(line.left, line.top, line.right, line.bottom)
 
 
 def _inside(inner: Box, outer: Box) -> bool:
     return outer.x0 <= inner.x0 and outer.y0 <= inner.y0 and inner.x1 <= outer.x1 and inner.y1 <= outer.y1
+
+
+def _sift(
+    candidates: list[list[Span]],
+    order: list[int],
+    keep: dict[int, str],
+    dropped: dict[int, list[Span]],
+) -> list[list[Span]]:
+    """The candidate spans per reading position that survive their line's keep
+    reason (:func:`~backend.rules.rejected`); the rest go to ``dropped``, by line."""
+    survivors: list[list[Span]] = []
+    for pos, i in enumerate(order):
+        why = keep.get(i)
+        survivors.append([s for s in candidates[pos] if not rejected(s, why)])
+        lost = [s for s in candidates[pos] if rejected(s, why)]
+        if lost:
+            dropped.setdefault(i, []).extend(lost)
+    return survivors
 
 
 def _print_note(draw: ImageDraw.ImageDraw, box: Box) -> None:
@@ -219,24 +237,22 @@ class RedactionPipeline:
         table_idx = item_table_indices(lines)
         keep = keep_indices(lines, table_idx)
 
-        # --- pass one: what each line carries on its own ------------------- #
-        # Two span sources, kept apart on purpose: inside the item table the
-        # classifier's findings are dropped and the rules' are not. A fee table
-        # is a grid of two-word service texts, which in German look exactly like
-        # a forename/surname pair to a model — while a rule that fires there
-        # (a labeled patient line) is still evidence.
+        # --- candidates, then what a kept line rejects ----------------------- #
+        # Every source proposes spans; `rejected` is the one place a kept line
+        # drops them. A fee table is a grid of two-word service texts, which in
+        # German look exactly like a forename/surname pair to a model — while a
+        # rule that fires there (a labeled patient line) is still evidence.
+        dropped: dict[int, list[Span]] = {}
         rules_by_line = spans_to_lines(
             rule_spans(ordered, bounds, self._table_in_order(order, table_idx)), bounds
         )
         model = self.classifier(classifier)
         model_by_line = spans_to_lines(model.spans(text, trace), bounds)
-        hits: list[list[Span]] = [
-            [s for s in rules_by_line[pos] if keep.get(i) != "PVS" or s.source != "rule ORG_LEGAL"]
-            + ([] if i in keep else model_by_line[pos])
-            for pos, i in enumerate(order)
-        ]
+        hits = _sift(
+            [r + m for r, m in zip(rules_by_line, model_by_line)], order, keep, dropped
+        )
 
-        # --- pass two: the names pass one named, everywhere else ----------- #
+        # --- the names the survivors named, everywhere else ---------------- #
         # Harvested from the *surviving* hits, so a model's find inside the item
         # table cannot spread across the document the way it was just stopped
         # from spreading down its own line. `names` is the caller's accumulator
@@ -257,9 +273,8 @@ class RedactionPipeline:
             + birthdate_spans(ordered, bounds, memory.birthdates),
             bounds,
         )
-        for pos, i in enumerate(order):
-            if keep.get(i) not in ("FACH", "PVS"):
-                hits[pos] += memory_by_line[pos]
+        recalled = _sift(memory_by_line, order, keep, dropped)
+        hits = [h + m for h, m in zip(hits, recalled)]
 
         pad = self._padding
         boxes: list[Box] = []
@@ -276,8 +291,8 @@ class RedactionPipeline:
             padded = Box(
                 line.left - pad,
                 line.top - pad,
-                line.left + line.width + pad,
-                line.top + line.height + pad,
+                line.right + pad,
+                line.bottom + pad,
             )
             parts = subtract(padded, holes)
             if parts != [padded]:
@@ -293,7 +308,8 @@ class RedactionPipeline:
         region_hits = region_boxes(lines, regions, redacted, pad, set(keep))
         signatures = signature_boxes(lines, image.width, pad)
         trace_page(
-            trace, lines, regions, order, spoken, found, keep, region_hits, signatures, notes
+            trace, lines, regions, order, spoken, found, keep, region_hits, signatures, notes,
+            dropped,
         )
         boxes.extend(box for _, box, _ in region_hits)
         boxes.extend(box for _, box in signatures)

@@ -42,7 +42,8 @@ from dataclasses import dataclass, field
 
 from backend.models import Line
 from backend.pii import PiiLabel, Span
-from backend.rules import (
+from backend.rules.birth_year import birth_date_in, date_key
+from backend.rules.patterns import (
     BIRTH_LABEL,
     BIRTH_MARK,
     DATE_KEEP_LABEL,
@@ -52,8 +53,6 @@ from backend.rules import (
     PERSON_LABEL_CELL,
     SALUT,
     TITLE_NAME,
-    birth_date_in,
-    date_key,
 )
 
 # A name-shaped token: starts with a capital, at least four letters, and may be
@@ -185,7 +184,7 @@ def name_spans(
 @dataclass
 class Memory:
     """What a document has said so far, carried from page to page: the names
-    and the birthdates (as :func:`~backend.rules.date_key`)."""
+    and the birthdates (as :func:`~backend.rules.birth_year.date_key`)."""
 
     names: set[str] = field(default_factory=set)
     birthdates: set[tuple[int, int, int]] = field(default_factory=set)

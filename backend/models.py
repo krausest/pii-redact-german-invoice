@@ -21,6 +21,22 @@ class Line:
     height: int
     conf: float | None = None
 
+    @property
+    def right(self) -> int:
+        return self.left + self.width
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.height
+
+    @property
+    def mid_x(self) -> float:
+        return self.left + self.width / 2
+
+    @property
+    def mid_y(self) -> float:
+        return self.top + self.height / 2
+
 
 @dataclass(frozen=True)
 class Box:

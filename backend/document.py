@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 from backend.models import Line
 from backend.pii import Span
 
-
+#ok
 def build_document(lines: Sequence[Line]) -> tuple[str, list[tuple[int, int]]]:
     """Join every line's text with ``"\\n"`` and return the joined text
     alongside each line's ``(start, end)`` char-offset span in it.
