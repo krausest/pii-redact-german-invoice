@@ -76,13 +76,13 @@ The heart of the pipeline, per page:
      `Document.per_line` maps them back to lines.
    - `rules.rejected` drops the candidates a kept line does not allow
      ([below](#what-stays-readable)); the trace lists them as `rejected …`.
-4. **Name memory.** `harvest.harvest` collects surnames named by the surviving spans
+4. **Name memory.** `Memory.learn` collects surnames named by the surviving spans
    (patient label, title, salutation, birth-date line, or a classifier `PERSON`
-   outside the item table). `harvest.name_spans` then marks every other line on the
+   outside the item table). `Memory.recall` then marks every other line on the
    page that mentions one of them; these candidates pass `rules.rejected` too. Label
    words on an evidence line (`Datum`, `Geburtsdatum`, `Patient`, …) are never taken
    for a name. A birth-date line (birth label, `geb.`/`*` mark, `Surname,Forename
-   date` row) also teaches its *date*: `harvest.birthdate_spans` marks every other
+   date` row) also teaches its *date*, and `Memory.recall` marks every other
    line holding that date in any spelling (`01.02.1980`, `1.2.1980`, `01.02.80`).
    A line with several dates teaches none, and a classifier's birthdate never
    feeds it. The memory (`harvest.Memory`) is shared across the pages of a
@@ -96,8 +96,8 @@ The heart of the pipeline, per page:
 6. **Region and signature boxes.** `layout.region_boxes` and
    `layout.signature_boxes` add the only boxes not tied to an OCR line
    ([details](#layout-regions)).
-7. **Trace.** `trace.trace_page` writes the commentary: region, its text, each line
-   with its spans and verdict.
+7. **Trace.** Steps 2–6 produce one `verdict.PageVerdict`; `trace.trace_page` narrates it:
+   region, its text, each line with its spans and verdict.
 
 ### 5. Output
 
@@ -181,6 +181,26 @@ Selectable per request (`?classifier=`); the rules above run with either.
 | `presidio` *(default)* | spaCy `de_core_news_lg` NER + regex recognizers | entities `PERSON`, `DE_ADDRESS`, `EMAIL_ADDRESS`, `PHONE_NUMBER` (DE only), `IBAN_CODE`, `BIC_CODE`, `KONTO`, `CREDIT_CARD`. `LOCATION` is excluded. A `PERSON` needs ≥ 2 proper-noun tokens; pattern matches that only exist because two lines were joined are dropped |
 | `guard-omni` *(opt-in: `[engine].guard_omni`, not in the Docker image)* | `hivetrace/gliner-guard-omni` (GLiNER2, zero-shot) | curated label set ([`pii.py`](../backend/pii.py)); long pages are analysed in windows; no source for identifiers or salutations — the rules cover those |
 
+**guard-omni's label set** was cut by measuring each of GLiNER2's labels over the
+48-document corpus — spans produced, lines it alone redacts:
+
+- `title` and `alias` are out: they feed the name memory, where a wrong entry
+  blackens every recurrence. 9 of 12 `title` tokens were no names ("Prof",
+  "Kollegen", "Geschäftsführer"); `alias` harvested a BIC.
+- `passport`/`national_id`/`document_id` are out, so `ID` has no model source:
+  they drew 11 boxes alone, one an invoice number. Only the label beside a value
+  tells an insurance number from an invoice number — the rules' job.
+- `media` and `region` never were the only reason for a box.
+- `product` stays: the lines only it redacted were specialty lines and
+  clearing-house names, which are now kept.
+- There is no label for a salutation; `SALUT` covers it with either classifier.
+
+**Windows** (`classifiers/windows.py`) are about cost, not truncation: the
+encoder has no 512-token cap (an entity at 99 % of a 1600-word page is found),
+but attention cost is quadratic — 204 words 0.2 s, 804 words 0.9 s, 1604 words
+3.4 s, 3200 words over ten minutes. The longest corpus page has 345 words, one
+window.
+
 Both implement `Classifier.spans(text, trace) -> list[Span]`
 ([`classifiers/base.py`](../backend/classifiers/base.py)). The pipeline builds each
 one on first use and keeps it (`RedactionPipeline.classifier`).
@@ -230,6 +250,7 @@ backend/
   cli.py          batch CLI (flags = /api/redact query parameters)
   service.py      framework-free core shared by API and CLI
   pipeline.py     RedactionPipeline: unwarp / read_lines / regions / compute_boxes / apply_boxes
+  verdict.py      PageVerdict: what one page decided, and its boxes
   factory.py      builds the pipeline from the config
   config.py       config.toml schema and env overrides
   options.py      query and body validation
@@ -244,7 +265,7 @@ backend/
   pdf.py          rasterize / assemble PDFs
   unwarp.py       UVDoc dewarping
   ocr/            PaddleOCR backend
-  classifiers/    presidio, guard-omni
+  classifiers/    presidio, guard-omni, windows (long pages in parts)
 frontend/         web UI (see Frontend)
 docker/warmup.py  bakes the models into the Docker image
 tests/            see Testing

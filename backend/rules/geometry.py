@@ -17,7 +17,8 @@ def column_gap(lines: list[Line]) -> float:
 
 def in_row(anchor: Line, ln: Line) -> bool:
     """Whether ``ln``'s middle lies within ``anchor``'s height, give or take
-    half of ``ln``'s own."""
+    half of ``ln``'s own. Looser than :func:`left_neighbour`'s row test, which
+    compares the two middles."""
     return anchor.top - ln.height / 2 <= ln.mid_y <= anchor.bottom + ln.height / 2
 
 

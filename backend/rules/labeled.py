@@ -42,14 +42,15 @@ class LabeledValue:
     ``header``: the label alone in its cell — only then may its value sit beneath it.
     ``cell``: the value is too plain to stand alone ("11"), so in the row it must be
     right of the label, and beneath it may share the label's left edge.
-    ``below``: the pattern and kind of a line directly under each claimed value."""
+    ``below``: a line directly under each claimed value, claimed as ``below_kind``."""
 
     kind: PiiLabel | KeepReason
     label: re.Pattern[str]
     value: re.Pattern[str]
     header: re.Pattern[str] | None = None
     cell: bool = False
-    below: tuple[re.Pattern[str], PiiLabel] | None = None
+    below: re.Pattern[str] | None = None
+    below_kind: PiiLabel | None = None
 
 
 LABELED_VALUES: list[LabeledValue] = [
@@ -73,7 +74,8 @@ LABELED_VALUES: list[LabeledValue] = [
         label=PERSON_LABEL_CELL,
         value=NAME_VALUE,
         header=PERSON_LABEL_CELL,
-        below=(DATE_VALUE, PiiLabel.DATE_OF_BIRTH),
+        below=DATE_VALUE,
+        below_kind=PiiLabel.DATE_OF_BIRTH,
     ),
 ]
 
@@ -92,10 +94,9 @@ def labeled_values(
         values = _paired_values(lines, rule, table, gap)
         for i in sorted(values):
             found.setdefault(lines[i], rule.kind)
-        if rule.below is not None:
-            pattern, kind = rule.below
-            for i in sorted(_lines_below(lines, values, pattern, table, gap)):
-                found.setdefault(lines[i], kind)
+        if rule.below is not None and rule.below_kind is not None:
+            for i in sorted(_lines_below(lines, values, rule.below, table, gap)):
+                found.setdefault(lines[i], rule.below_kind)
     return found
 
 
@@ -118,15 +119,20 @@ def _paired_values(lines: list[Line], rule: LabeledValue, table: set[Line], gap:
 
 def _row_value(lines: list[Line], label: Line, rule: LabeledValue) -> int | None:
     """The value in ``label``'s row nearest to it."""
-    row: list[tuple[float, float, int]] = []
-    for i, ln in enumerate(lines):
-        if ln is label or not _is_value(ln, rule) or not in_row(label, ln):
-            continue
-        if rule.cell and ln.left < label.right - label.height:
-            continue
-        gap_x = max(0, ln.left - label.right, label.left - ln.right)
-        row.append((gap_x, abs(ln.mid_y - label.mid_y), i))
-    return min(row)[2] if row else None
+    row = [
+        i
+        for i, ln in enumerate(lines)
+        if ln is not label
+        and _is_value(ln, rule)
+        and in_row(label, ln)
+        and not (rule.cell and ln.left < label.right - label.height)
+    ]
+
+    def distance(i: int) -> tuple[float, float]:
+        ln = lines[i]
+        return max(0, ln.left - label.right, label.left - ln.right), abs(ln.mid_y - label.mid_y)
+
+    return min(row, key=distance) if row else None
 
 
 def _column_value(
@@ -134,17 +140,20 @@ def _column_value(
 ) -> int | None:
     """The value nearest beneath ``label`` — centred under it, or for a ``cell``
     rule sharing its left edge — within ``gap`` and outside ``table``."""
-    column: list[tuple[float, int]] = []
-    for i, ln in enumerate(lines):
-        if ln is label or ln in table or not _is_value(ln, rule):
-            continue
-        if ln.mid_y < label.bottom or ln.top - label.bottom > gap:
-            continue
-        centred = label.left <= ln.mid_x <= label.right
-        aligned = rule.cell and abs(ln.left - label.left) <= label.height
-        if centred or aligned:
-            column.append((ln.top - label.bottom, i))
-    return min(column)[1] if column else None
+    column = [
+        i
+        for i, ln in enumerate(lines)
+        if ln is not label
+        and ln not in table
+        and _is_value(ln, rule)
+        and label.bottom <= ln.mid_y
+        and ln.top - label.bottom <= gap
+        and (
+            label.left <= ln.mid_x <= label.right
+            or rule.cell and abs(ln.left - label.left) <= label.height
+        )
+    ]
+    return min(column, key=lambda i: lines[i].top) if column else None
 
 
 def _lines_below(
@@ -154,14 +163,10 @@ def _lines_below(
     found: set[int] = set()
     for i in values:
         above = lines[i]
-        below = [
-            (ln.top - above.bottom, j)
-            for j, ln in enumerate(lines)
-            if box_is_above(above, ln, gap, above.height)
-        ]
+        below = [j for j, ln in enumerate(lines) if box_is_above(above, ln, gap, above.height)]
         if not below:
             continue
-        j = min(below)[1]
+        j = min(below, key=lambda j: lines[j].top)
         if lines[j] not in table and pattern.search(lines[j].text):
             found.add(j)
     return found

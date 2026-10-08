@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -155,12 +156,8 @@ def lines_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list
     inside a page-wide text region), and the tighter box is the more specific
     claim.
     """
-    return [[lines[i] for i in group] for group in _indices_by_region(lines, regions)]
-
-
-def _indices_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list[int]]:
-    per_region: list[list[int]] = [[] for _ in regions]
-    for i, line in enumerate(lines):
+    per_region: list[list[Line]] = [[] for _ in regions]
+    for line in lines:
         best: int | None = None
         for r, region in enumerate(regions):
             if _center_in(line, region.box) and (
@@ -168,7 +165,7 @@ def _indices_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[l
             ):
                 best = r
         if best is not None:
-            per_region[best].append(i)
+            per_region[best].append(line)
     return per_region
 
 
@@ -225,23 +222,37 @@ def region_parents(regions: list[LayoutRegion]) -> list[int | None]:
     return parents
 
 
-def _bands(items: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int, int, int]]]:
-    """Group ``(top, bottom, left, payload)`` items into reading bands.
+@dataclass(frozen=True)
+class _BandItem:
+    """What reading order places: a line, or a child region entering as a whole."""
 
-    Items whose vertical extents overlap belong to the same band, and a band is
-    read left to right. This is what makes a table row read *across*: on a
-    photographed page the cells of one row differ by a few pixels in ``top``, and
-    a plain ``(top, left)`` sort would order the whole page column by column
-    instead — pulling "Datum" and "Betrag" apart and gluing each to the value
-    below it.
+    top: int
+    bottom: int
+    left: int
+    line: Line | None = None
+    region: int | None = None
 
-    The band grows with its members: a tall item (a nested block) pulls in
-    everything beside it, which is the intent — those things really are on the
-    same visual row.
+    @classmethod
+    def of_line(cls, line: Line) -> _BandItem:
+        return cls(line.top, line.bottom, line.left, line=line)
+
+    @classmethod
+    def of_region(cls, index: int, box: Box) -> _BandItem:
+        return cls(box.y0, box.y1, box.x0, region=index)
+
+
+def _bands(items: list[_BandItem]) -> list[list[_BandItem]]:
+    """Group items into reading bands, each read left to right.
+
+    Items whose vertical extents overlap belong to the same band. This is what
+    makes a table row read *across*: on a photographed page the cells of one row
+    differ by a few pixels in ``top``, and a plain ``(top, left)`` sort would read
+    the page column by column. The band grows with its members: a tall item (a
+    nested block) pulls in everything beside it.
     """
-    bands: list[list[tuple[int, int, int, int]]] = []
-    for item in sorted(items, key=lambda it: (it[0], it[2])):
-        if bands and item[0] < max(b[1] for b in bands[-1]):
+    bands: list[list[_BandItem]] = []
+    for item in sorted(items, key=lambda it: (it.top, it.left)):
+        if bands and item.top < max(b.bottom for b in bands[-1]):
             bands[-1].append(item)
         else:
             bands.append([item])
@@ -260,48 +271,32 @@ def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[Line]
     Lines no region claimed are ordered among the top-level items by their own
     box, so nothing is dropped: the result is a permutation of ``lines``.
     """
-    per_region = _indices_by_region(lines, regions)
+    per_region = lines_by_region(lines, regions)
     parents = region_parents(regions)
     children: list[list[int]] = [[] for _ in regions]
     roots: list[int] = []
     for r, parent in enumerate(parents):
         (children[parent] if parent is not None else roots).append(r)
 
-    def walk(region_index: int) -> list[int]:
-        """Line indices of one region's subtree, in reading order."""
-        items: list[tuple[int, int, int, int]] = []
-        for i in per_region[region_index]:
-            items.append((lines[i].top, lines[i].bottom, lines[i].left, i))
-        for c in children[region_index]:
-            box = regions[c].box
-            # Encoded as ~child so a band item can say "this is a subtree, not a
-            # line" without a second parallel list.
-            items.append((box.y0, box.y1, box.x0, ~c))
-        out: list[int] = []
+    def read(items: list[_BandItem]) -> list[Line]:
+        out: list[Line] = []
         for band in _bands(items):
-            for _, _, _, payload in sorted(band, key=lambda it: it[2]):
-                out.extend(walk(~payload) if payload < 0 else [payload])
+            for item in sorted(band, key=lambda it: it.left):
+                out.extend(walk(item.region) if item.region is not None else [item.line])
         return out
 
-    claimed = {i for group in per_region for i in group}
-    top: list[tuple[int, int, int, int]] = [
-        (lines[i].top, lines[i].bottom, lines[i].left, i)
-        for i in range(len(lines))
-        if i not in claimed
-    ]
-    for r in roots:
-        box = regions[r].box
-        top.append((box.y0, box.y1, box.x0, ~r))
+    def walk(r: int) -> list[Line]:
+        """One region's subtree, in reading order."""
+        return read(
+            [_BandItem.of_line(ln) for ln in per_region[r]]
+            + [_BandItem.of_region(c, regions[c].box) for c in children[r]]
+        )
 
-    order: list[int] = []
-    for band in _bands(top):
-        for _, _, _, payload in sorted(band, key=lambda it: it[2]):
-            order.extend(walk(~payload) if payload < 0 else [payload])
-    return [lines[i] for i in order]
-
-
-def _padded(box: Box, padding: int) -> Box:
-    return Box(box.x0 - padding, box.y0 - padding, box.x1 + padding, box.y1 + padding)
+    claimed = {ln for group in per_region for ln in group}
+    return read(
+        [_BandItem.of_line(ln) for ln in lines if ln not in claimed]
+        + [_BandItem.of_region(r, regions[r].box) for r in roots]
+    )
 
 
 def subtract(box: Box, holes: list[Box]) -> list[Box]:
@@ -325,38 +320,46 @@ def subtract(box: Box, holes: list[Box]) -> list[Box]:
     return out
 
 
+class RegionBox(NamedTuple):
+    """A box blackening (part of) region number ``region``, of type ``label``.
+    The index tells the trace which region it was: the box itself is padded."""
+
+    region: int
+    box: Box
+    label: str
+
+
+class SignatureBox(NamedTuple):
+    """The gap left for a signature under the ``closing`` formula."""
+
+    closing: Line
+    box: Box
+
+
 def region_boxes(
     lines: list[Line],
     regions: list[LayoutRegion],
     redacted: set[Line],
     padding: int,
     keep: set[Line] | None = None,
-) -> list[tuple[int, Box, str]]:
-    """Whole-region boxes as ``(region index, box, why)``, one region of
-    :data:`_ALWAYS_BLACKEN` type at a time.
+) -> list[RegionBox]:
+    """Whole-region boxes, one region of :data:`_ALWAYS_BLACKEN` type at a time.
 
     ``keep`` holds the lines that must stay readable; they are cut out of every
     region box but a graphic's, so one region may yield several boxes.
 
-    The index is what lets the trace say which *region* a box came from: the box
-    itself is padded outwards and so no longer equals the region's own box.
-
     ``redacted`` holds the lines the per-line pass flagged: a kept line that
     was redacted all the same is not cut out.
     """
-    holes = [
-        Box(ln.left, ln.top, ln.right, ln.bottom)
-        for ln in lines
-        if ln in (keep or set()) and ln not in redacted
-    ]
-    out: list[tuple[int, Box, str]] = []
+    holes = [ln.box for ln in lines if ln in (keep or set()) and ln not in redacted]
+    out: list[RegionBox] = []
 
     for r, region in enumerate(regions):
         if region.label not in _ALWAYS_BLACKEN:
             continue
-        box = _padded(region.box, padding)
+        box = region.box.padded(padding)
         parts = [box] if region.label in _NO_HOLES else subtract(box, holes)
-        out.extend((r, part, region.label) for part in parts)
+        out.extend(RegionBox(r, part, region.label) for part in parts)
     return out
 
 
@@ -370,13 +373,13 @@ SIGN_OFF = re.compile(
 _SIGNATURE_HEIGHTS = 6
 
 
-def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tuple[Line, Box]]:
-    """``(closing line, box)`` over the handwritten signature under each
+def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[SignatureBox]:
+    """A box over the handwritten signature under each
     closing formula: the band down to the next line in its column, as wide as
     the wider of the two and at least half again the formula's width. OCR has
     no line for a signature and the layout model no class, so the gap the
     letter leaves for it is the only evidence."""
-    out: list[tuple[Line, Box]] = []
+    out: list[SignatureBox] = []
     for ln in lines:
         if not SIGN_OFF.search(ln.text):
             continue
@@ -398,7 +401,7 @@ def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tu
         if y1 - bottom < ln.height / 2:  # no room was left for a signature
             continue
         x1 = min(max(x1, ln.left + int(1.5 * ln.width)), page_width)
-        out.append((ln, Box(x0 - padding, bottom, x1 + padding, y1)))
+        out.append(SignatureBox(ln, Box(x0 - padding, bottom, x1 + padding, y1)))
     return out
 
 

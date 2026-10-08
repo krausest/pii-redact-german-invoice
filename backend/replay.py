@@ -70,6 +70,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image
@@ -451,7 +452,20 @@ def _ocr_files(targets: list[str]) -> list[Path]:
     return files
 
 
-def _plan_dumps(targets: list[str], out_dir: str | None) -> tuple[list[tuple[Path, Path]], int]:
+class _Dump(NamedTuple):
+    sample: Path
+    out: Path
+
+
+@dataclass
+class _DumpPlan:
+    """The samples to dump, and whether planning already had to skip one."""
+
+    dumps: list[_Dump]
+    status: int
+
+
+def _plan_dumps(targets: list[str], out_dir: str | None) -> _DumpPlan:
     """Pair each sample with the dump it will be written to.
 
     Worked out *before* the models load, because a whole corpus is the normal
@@ -462,7 +476,7 @@ def _plan_dumps(targets: list[str], out_dir: str | None) -> tuple[list[tuple[Pat
     paying for its OCR."""
     from backend.cli import collect_input_files
 
-    plan: list[tuple[Path, Path]] = []
+    dumps: list[_Dump] = []
     claimed: dict[Path, Path] = {}
     status = 0
     for sample in collect_input_files(targets):
@@ -472,10 +486,10 @@ def _plan_dumps(targets: list[str], out_dir: str | None) -> tuple[list[tuple[Pat
             status = 1
             continue
         claimed[out] = sample
-        plan.append((sample, out))
-    for directory in {out.parent for _, out in plan}:
+        dumps.append(_Dump(sample, out))
+    for directory in {dump.out.parent for dump in dumps}:
         directory.mkdir(parents=True, exist_ok=True)
-    return plan, status
+    return _DumpPlan(dumps, status)
 
 
 def _read_pages(sample: Path, config: Config) -> list[Image.Image]:
@@ -505,15 +519,16 @@ def _dump(targets: list[str], out_dir: str | None) -> int:
     from backend.config import load_config
     from backend.factory import build_pipeline
 
-    plan, status = _plan_dumps(targets, out_dir)
-    if not plan:
+    plan = _plan_dumps(targets, out_dir)
+    status = plan.status
+    if not plan.dumps:
         print("no samples found")
         return 1
 
     config = load_config()
     pipeline = build_pipeline(config)
     ocr_backend = config.engine.ocr_backend
-    for sample, out in plan:
+    for sample, out in plan.dumps:
         try:
             pages = _read_pages(sample, config)
             text = [

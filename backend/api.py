@@ -43,13 +43,7 @@ from backend.factory import build_pipeline, classifier_names, resolve_engine
 from backend.models import Box
 from backend.options import AssembleBody, AssembleOptions, RedactOptions
 from backend.pipeline import RedactionPipeline
-from backend.service import (
-    MEDIA_TYPE_BY_FORMAT,
-    PDF_MEDIA_TYPE,
-    assemble,
-    produce_output,
-    run_redaction,
-)
+from backend.service import IMAGE_FORMATS, FileKind, assemble, produce_output, run_redaction
 
 REDACT_DESCRIPTION = """
 Find the PII in a document and black it out. Send the **raw file** — PNG, JPEG or
@@ -198,7 +192,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise ApiError(400, "image exceeds the maximum allowed pixel count")
         except (UnidentifiedImageError, OSError, ValueError):
             raise ApiError(400, "request body is not a valid image")
-        if fmt not in MEDIA_TYPE_BY_FORMAT:
+        if fmt not in IMAGE_FORMATS:
             raise ApiError(415, f"unsupported image format: {fmt}")
         # Apply the EXIF orientation before anything else sees the page: a phone
         # photo stores its pixels sideways, and neither PIL nor our JPEG output
@@ -247,7 +241,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         opts = _options(RedactOptions, request, config)
         data = await _read_capped(request, api.max_upload_bytes)
 
-        if content_type == PDF_MEDIA_TYPE:
+        if content_type == FileKind.PDF.media_type:
             if not data.lstrip()[:5].startswith(b"%PDF"):
                 raise ApiError(400, "request body is not a valid PDF")
             source: bytes | Image.Image = data
@@ -260,17 +254,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             return produce_output(run_redaction(pipeline, source, opts, config), opts)
 
         try:
-            media_type, body = await _run(work)
+            output = await _run(work)
         except ValueError as e:  # rasterization guards (too many pages / oversized)
             raise ApiError(400, str(e))
 
         logger.info(
             "POST /api/redact exit: %s, %d bytes in %.2fs",
-            media_type,
-            len(body),
+            output.kind.media_type,
+            len(output.data),
             time.perf_counter() - started,
         )
-        return Response(content=body, media_type=media_type)
+        return Response(content=output.data, media_type=output.kind.media_type)
 
     @app.post("/api/assemble", description=ASSEMBLE_DESCRIPTION)
     async def assemble_route(
@@ -304,17 +298,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         ]
 
         try:
-            media_type, out = await _run(lambda: assemble(pipeline, images, boxes, opts))
+            output = await _run(lambda: assemble(pipeline, images, boxes, opts))
         except ValueError as e:
             raise ApiError(400, str(e))
         logger.info(
             "POST /api/assemble exit: %d pages -> %s, %d bytes in %.2fs",
             len(images),
-            media_type,
-            len(out),
+            output.kind.media_type,
+            len(output.data),
             time.perf_counter() - started,
         )
-        return Response(content=out, media_type=media_type)
+        return Response(content=output.data, media_type=output.kind.media_type)
 
     @app.exception_handler(ApiError)
     async def _api_error_handler(_request: Request, exc: ApiError):

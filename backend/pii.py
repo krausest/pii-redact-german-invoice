@@ -1,16 +1,8 @@
 """The one vocabulary every PII source speaks: a labeled, scored character span.
 
-Three detectors have to agree on what they found before the pipeline can treat
-them alike — the deterministic German regexes in :mod:`backend.rules`, the
-Presidio classifier, and (later) the guard-omni zero-shot model. Each one names
-its findings differently: presidio says ``IBAN_CODE``, a regex is called
-``IMPRINT``, guard-omni says ``bank_account``. This module is where all three
-land in the same small set of labels, so that everything downstream — the
-redaction decision, the trace, and the cross-line harvest — is written once
-rather than per detector.
-
-Deliberately free of heavy imports: :mod:`backend.rules` and the tests use it
-without pulling in presidio, spaCy or torch.
+The rules, presidio and guard-omni each name their findings differently
+(``IMPRINT``, ``IBAN_CODE``, ``bank_account``); here they land in one small set of
+labels, so everything downstream is written once. Free of heavy imports.
 """
 
 from __future__ import annotations
@@ -40,6 +32,18 @@ class PiiLabel(str, Enum):
         return self.value
 
 
+# Span sources besides the classifiers' own names ("presidio", "guard-omni").
+LABELED_VALUE = "labeled-value"
+NAME_MEMORY = "name-memory"
+BIRTHDATE_MEMORY = "birthdate-memory"
+_RULE_PREFIX = "rule "
+
+
+def rule_source(name: str) -> str:
+    """The source of a span a named rule drew: ``rule SALUT``."""
+    return _RULE_PREFIX + name
+
+
 @dataclass(frozen=True)
 class Span:
     """One finding, in character offsets of the text it was found in.
@@ -63,14 +67,20 @@ class Span:
     source: str
     score: float = 1.0
 
+    @property
+    def is_rule(self) -> bool:
+        """Drawn by a deterministic rule, on its line or across cells."""
+        return self.source.startswith(_RULE_PREFIX) or self.source == LABELED_VALUE
+
+    @property
+    def is_memory(self) -> bool:
+        """Drawn by the name or birthdate memory."""
+        return self.source in (NAME_MEMORY, BIRTHDATE_MEMORY)
+
 
 # -- what the detectors call things ---------------------------------------- #
 
-# Presidio entity type -> our label. Note what is NOT here: ``LOCATION``.
-# `presidio.PII_ENTITIES` excludes it deliberately, because the NLP model fires
-# it on letterhead vocabulary and jurisdiction cities, while a real recipient
-# address is already caught precisely by the custom ``DE_ADDRESS`` recognizer.
-# Adding a row for it here would quietly undo that decision.
+# Presidio entity type -> our label. No ``LOCATION`` on purpose (see presidio.PII_ENTITIES).
 PRESIDIO_LABELS: dict[str, PiiLabel] = {
     "PERSON": PiiLabel.PERSON,
     "DE_ADDRESS": PiiLabel.ADDRESS,
@@ -84,44 +94,10 @@ PRESIDIO_LABELS: dict[str, PiiLabel] = {
 
 
 # GLiNER2 label -> our label, for `backend.classifiers.guard_omni`. The keys are
-# also *what we ask the model for* (`GLINER2_LABELS` is this table's keys), so a
-# label is either requested and mapped or neither — there is no third state to
-# get wrong. That is the fix for the shape of bug the wholetext experiment
-# carried: its harvest table keyed on `full_name`/`street_address`/`iban`, none
-# of which are in GLiNER2's fixed vocabulary, so four of its nine rules could
-# never fire and nothing said so.
-#
-# The table was first written with all 30 labels and then cut by measuring each
-# one over the 48-document corpus: how many spans it produces, how many lines it
-# helps redact, and — the number that decides — how many lines *only* it redacts.
-# Four groups did not survive, and two survived against expectation:
-#
-# * `title` and `alias` are out because they feed the **name memory**, where a
-#   wrong entry blackens every recurrence in the whole document rather than one
-#   line. Measured: 9 of the 12 tokens `title` harvested are not names
-#   ("Prof", "Kollegen", "Partner", "Geschäftsführer", "Leiter") and one is
-#   "Allgemein", the exact collision `backend.harvest` documents; `alias`
-#   harvested a BIC and OCR shrapnel. `person`/`first_name`/`last_name` were
-#   clean over 95/70/42 distinct tokens, which is why they carry PERSON alone.
-# * `passport`/`national_id`/`document_id` are out, so **`ID` has no model
-#   source at all**. They uniquely drew 11 boxes, one of them an invoice number
-#   and one a postage line. Telling an insurance number from an invoice number
-#   is not a language question — `backend.rules.labeled.LABELED_VALUES` answers it by the
-#   label printed beside the value, and no zero-shot extractor can. The two
-#   genuine catches were sender identifiers (an IK number, a VAT ID) that
-#   `IMPRINT` is meant to cover; the fix for those is that rule, not a label
-#   that would also fire on amounts and fee numbers.
-# * `media` produced 12 spans and helped redact nothing at all; `region`
-#   produced 5 and was never the only reason for a box. Dead weight.
-# * `product` stays, against the prediction that it would fire on Leistungstexte:
-#   all 10 lines only it redacted were letterhead specialty lines and
-#   clearing-house names. Both are now kept (`backend.rules.kept_lines`), which
-#   drops the classifier there, as the item-table gate does for Leistungstexte.
-#
-# Note what has no key at all: **SALUTATION**. GLiNER2 has no label for "Herrn"
-# or "Sehr geehrte", so `backend.rules.patterns.SALUT` stays load-bearing whichever
-# classifier runs — including as the name memory's evidence for the person named
-# beside it.
+# also what the model is asked for, so a label is requested and mapped or neither.
+# Cut to what measurably helps (docs/Redaction.md, Classifiers): no `title`/`alias`
+# (they poison the name memory), no ID labels (only the rules tell an insurance
+# number from an invoice number), no SALUTATION (no such label: `SALUT` covers it).
 GUARD_OMNI_LABELS: dict[str, PiiLabel] = {
     "person": PiiLabel.PERSON,
     "first_name": PiiLabel.PERSON,

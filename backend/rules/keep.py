@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from backend.models import Line
-from backend.pii import Span
+from backend.pii import Span, rule_source
 from backend.rules.geometry import column_gap, left_neighbour
 from backend.rules.labeled import LabeledValue, labeled_values
 from backend.rules.patterns import (
@@ -40,9 +40,6 @@ KEEP_VALUES: list[LabeledValue] = [
     LabeledValue(KeepReason.DATE, label=DATE_KEEP_LABEL, value=DATE_KEEP_VALUE, header=DATE_KEEP_CELL),
 ]
 
-_MEMORY_SOURCES = ("name-memory", "birthdate-memory")
-
-
 def kept_lines(lines: list[Line], table: set[Line] | None = None) -> dict[Line, KeepReason]:
     """Lines that must stay readable, mapped to why. The first reason wins."""
     table = table or set()
@@ -69,9 +66,9 @@ def rejected(span: Span, keep: str | None) -> bool:
     which hold no name. The classifier yields on every kept line."""
     if keep is None:
         return False
-    if span.source.startswith("rule ") or span.source == "labeled-value":
-        return keep == KeepReason.PVS and span.source == "rule ORG_LEGAL"
-    if span.source in _MEMORY_SOURCES:
+    if span.is_rule:
+        return keep == KeepReason.PVS and span.source == rule_source("ORG_LEGAL")
+    if span.is_memory:
         return keep in (KeepReason.FACH, KeepReason.PVS)
     return True
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from typing import NamedTuple
 
 from backend.models import Box, Line
-from backend.pii import PiiLabel, Span
+from backend.pii import PiiLabel, Span, rule_source
 from backend.rules.patterns import BIRTH_MARK, DATE_RE, NAME_DATE
 
 
@@ -15,7 +16,7 @@ def birth_year_note(line: Line, spans: list[Span]) -> Box | None:
     """A note with the birth year where the birthdate stood on ``line``, its
     position estimated from the date's share of the text. ``None`` without a
     birthdate, or with several dates and nothing saying which one it is."""
-    if not any(s.label is PiiLabel.DATE_OF_BIRTH or s.source == "rule NAME_DATE" for s in spans):
+    if not any(s.label is PiiLabel.DATE_OF_BIRTH or s.source == rule_source("NAME_DATE") for s in spans):
         return None
     found = birth_date_in(line.text)
     if found is None:
@@ -36,10 +37,18 @@ def birth_date_in(text: str) -> re.Match[str] | None:
     return dates[0] if len(dates) == 1 else None
 
 
-def date_key(text: str) -> tuple[int, int, int]:
-    """A date as (day, month, full year): "01.02.80" equals "1.2.1980"."""
+class DateKey(NamedTuple):
+    """A printed date, comparable across spellings: "01.02.80" equals "1.2.1980".
+    Not a ``datetime.date``: OCR also reads impossible dates ("31.02.")."""
+
+    day: int
+    month: int
+    year: int
+
+
+def date_key(text: str) -> DateKey:
     day, month, year = re.split(r"\.\s?", text)
-    return int(day), int(month), int(_full_year(year))
+    return DateKey(int(day), int(month), int(_full_year(year)))
 
 
 def _full_year(digits: str) -> str:

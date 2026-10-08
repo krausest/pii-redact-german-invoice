@@ -40,8 +40,11 @@ below. It is a flag, not a marker, so it combines with either `-m` selection.
 | `test_rules_keep.py` | lines kept readable, and the candidates they reject |
 | `test_rules_birth_year.py` | which date is the birthdate, and the year printed over it |
 | `test_document.py` | joining a page into one text and mapping spans back to lines |
+| `test_harvest.py` | the name and birthdate memory: what it learns, what it recalls |
+| `test_verdict.py` | the boxes of one page, in drawing order |
+| `test_windows.py` | classifying a long page in line-aligned windows |
 | `test_layout.py` | line-to-region assignment, reading order, region boxes |
-| `test_presidio.py` | presidio-specific guards (wrapped spans, PERSON token count) |
+| `test_presidio.py` | presidio-specific guards (wrapped spans, PERSON token count, name fragments, phone false hits) |
 | `test_trace.py` | the debug trace collector |
 | `test_pdf.py` | PDF rasterization and assembly (PyMuPDF only) |
 | `test_integration.py`, `test_redact_integration.py` | *slow* — end-to-end with real models |

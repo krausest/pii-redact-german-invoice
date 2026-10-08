@@ -54,8 +54,8 @@ def test_01_rules_and_presidio_on_one_line(presidio):
     print(f"\nline:   {LINE!r}\nrange:  {doc.range_of(lines[0])}")
 
     _header("A  backend.rules: every STATIC_RULES regex on its own")
-    for _, name, pattern in STATIC_RULES:
-        print(f"  {name:13} {[m.group() for m in pattern.finditer(LINE)]}")
+    for rule in STATIC_RULES:
+        print(f"  {rule.name:13} {[m.group() for m in rule.pattern.finditer(LINE)]}")
 
     _header("B  rule_spans -> Span (per line, score 1.0)")
     rules = rule_spans(doc)
