@@ -38,14 +38,14 @@ def test_assign_lines_groups_by_containing_region():
         _line("also in A", left=10, top=40),
     ]
     regions = [_region(0, 0, 300, 100), _region(0, 200, 300, 300)]
-    assert assign_lines(lines, regions) == [[0, 2], [1]]
+    assert assign_lines(lines, regions) == [[lines[0], lines[2]], [lines[1]]]
 
 
 def test_assign_lines_uses_the_line_center_not_its_corner():
     # Line box starts outside the region but its center (60, 110) is inside.
     lines = [_line("straddler", left=10, top=100, width=100, height=20)]
     regions = [_region(50, 0, 300, 300)]
-    assert assign_lines(lines, regions) == [[0]]
+    assert assign_lines(lines, regions) == [[lines[0]]]
 
 
 def test_assign_lines_smallest_region_wins_on_nesting():
@@ -56,11 +56,11 @@ def test_assign_lines_smallest_region_wins_on_nesting():
         _region(0, 0, 1000, 1000, label="text"),
         _region(50, 50, 300, 200, label="table"),
     ]
-    assert assign_lines(lines, regions) == [[0]]
+    assert assign_lines(lines, regions) == [[lines[0]]]
     # ...and the group belongs to the table region: with another line only in
     # the big region, two groups come back in region order.
     lines.append(_line("outside table", left=500, top=500))
-    assert assign_lines(lines, regions) == [[1], [0]]
+    assert assign_lines(lines, regions) == [[lines[1]], [lines[0]]]
 
 
 def test_assign_lines_uncontained_line_becomes_a_singleton():
@@ -69,27 +69,26 @@ def test_assign_lines_uncontained_line_becomes_a_singleton():
         _line("orphan", left=10, top=500),
     ]
     regions = [_region(0, 0, 300, 100)]
-    assert assign_lines(lines, regions) == [[0], [1]]
+    assert assign_lines(lines, regions) == [[lines[0]], [lines[1]]]
 
 
 def test_assign_lines_is_a_full_partition():
     lines = [_line(f"l{i}", left=10, top=10 + 60 * i) for i in range(6)]
     regions = [_region(0, 0, 300, 100), _region(0, 150, 300, 250)]
     groups = assign_lines(lines, regions)
-    seen = sorted(i for g in groups for i in g)
-    assert seen == list(range(len(lines)))
+    assert sorted(ln.text for g in groups for ln in g) == sorted(ln.text for ln in lines)
 
 
 def test_assign_lines_with_no_regions_yields_only_singletons():
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=50)]
-    assert assign_lines(lines, []) == [[0], [1]]
+    assert assign_lines(lines, []) == [[lines[0]], [lines[1]]]
 
 
 def test_draw_layout_debug_returns_annotated_copy_without_mutating_source():
     lines = [_line("a", left=10, top=10)]
     regions = [_region(5, 5, 200, 50)]
     img = Image.new("RGB", (300, 300), color=(255, 255, 255))
-    out = draw_layout_debug(img, lines, assign_lines(lines, regions), regions)
+    out = draw_layout_debug(img, assign_lines(lines, regions), regions)
     assert out.size == img.size
     assert img.getpixel((5, 5)) == (255, 255, 255)  # source untouched
     assert out.getpixel((5, 5)) == _DEBUG_PALETTE[0]  # region outline drawn
@@ -102,7 +101,7 @@ def test_draw_layout_debug_tints_only_the_always_blackened_labels():
         _region(10, 210, 180, 290, label="table"),
     ]
     img = Image.new("RGB", (200, 300), color=(255, 255, 255))
-    out = draw_layout_debug(img, [], [], regions)
+    out = draw_layout_debug(img, [], regions)
     # Sampled bottom-right in each region: clear of both the outline and the
     # label chip, which sit at the top-left.
     r, g, b = out.getpixel((150, 75))  # footer: blackened on sight -> reddish
@@ -123,7 +122,7 @@ def test_draw_layout_debug_names_each_region_in_a_readable_chip():
     fill = _DEBUG_PALETTE[0]
 
     def chip(label):
-        out = draw_layout_debug(img, [], [], [_region(10, 10, 550, 300, label=label)])
+        out = draw_layout_debug(img, [], [_region(10, 10, 550, 300, label=label)])
         top = 10 + _DEBUG_LINE_WIDTH  # the chip starts just inside the outline
         # The chip's padding rows/columns are solid fill, so its extent is the
         # run of fill along the row under its top edge and down its right edge.
@@ -144,7 +143,7 @@ def test_draw_layout_debug_cycles_colors_past_the_palette_length():
     n = len(_DEBUG_PALETTE) + 1
     regions = [_region(10, 10 + i * 100, 200, 60 + i * 100) for i in range(n)]
     img = Image.new("RGB", (300, 10 + n * 100 + 50), color=(255, 255, 255))
-    out = draw_layout_debug(img, [], [], regions)
+    out = draw_layout_debug(img, [], regions)
     assert out.getpixel((10, 10)) == _DEBUG_PALETTE[0]
     assert out.getpixel((10, 10 + 100)) == _DEBUG_PALETTE[1]
     assert out.getpixel((10, 10 + (n - 1) * 100)) == _DEBUG_PALETTE[0]  # wrapped
@@ -169,7 +168,7 @@ def test_region_boxes_always_blackens_the_graphic_and_furniture_types():
 def test_a_fully_flagged_content_region_is_not_blackened_whole(label):
     lines = [_line("a", left=10, top=10), _line("b", left=10, top=40)]
     regions = [_region(0, 0, 300, 100, label=label)]
-    assert region_boxes(lines, regions, {0, 1}, padding=0) == []
+    assert region_boxes(lines, regions, set(lines), padding=0) == []
 
 
 def test_region_boxes_pads_outwards():
@@ -188,7 +187,7 @@ def test_a_kept_line_is_cut_out_of_a_region_box():
     # readable, with the footer blackened around it.
     lines = [_line("name", left=10, top=10, width=100), _line("specialty", left=10, top=40, width=100)]
     regions = [_region(0, 0, 300, 100, label="footer")]
-    boxes = [b for _, b, _ in region_boxes(lines, regions, {0}, padding=0, keep={1})]
+    boxes = [b for _, b, _ in region_boxes(lines, regions, {lines[0]}, padding=0, keep={lines[1]})]
     assert boxes == [
         Box(0, 0, 300, 40),
         Box(0, 40, 10, 60),
@@ -200,14 +199,14 @@ def test_a_kept_line_is_cut_out_of_a_region_box():
 def test_a_kept_line_that_was_redacted_is_not_cut_out():
     lines = [_line("a", left=10, top=10)]
     regions = [_region(0, 0, 300, 100, label="footer")]
-    assert region_boxes(lines, regions, {0}, padding=0, keep={0})[0][1] == Box(0, 0, 300, 100)
+    assert region_boxes(lines, regions, {lines[0]}, padding=0, keep={lines[0]})[0][1] == Box(0, 0, 300, 100)
 
 
 def test_a_stamp_is_never_cut_open():
     # A stamp prints the doctor's name around the specialty; a hole would show it.
     lines = [_line("specialty", left=10, top=10)]
     regions = [_region(0, 0, 300, 100, label="seal")]
-    assert [b for _, b, _ in region_boxes(lines, regions, set(), padding=0, keep={0})] == [
+    assert [b for _, b, _ in region_boxes(lines, regions, set(), padding=0, keep={lines[0]})] == [
         Box(0, 0, 300, 100)
     ]
 
@@ -222,12 +221,12 @@ def test_the_signature_is_the_gap_between_the_greeting_and_the_typed_name():
         _line("Mit freundlichen Grüßen", left=100, top=500, width=200, height=20),
         _line("Dr. med. Andrea Muster", left=100, top=580, width=180, height=20),
     ]
-    assert signature_boxes(lines, page_width=1000, padding=2) == [(0, Box(98, 520, 402, 580))]
+    assert signature_boxes(lines, page_width=1000, padding=2) == [(lines[0], Box(98, 520, 402, 580))]
 
 
 def test_a_signature_without_a_typed_name_reaches_six_line_heights():
     lines = [_line("Hochachtungsvoll", left=100, top=500, width=200, height=20)]
-    assert signature_boxes(lines, page_width=350, padding=0) == [(0, Box(100, 520, 350, 640))]
+    assert signature_boxes(lines, page_width=350, padding=0) == [(lines[0], Box(100, 520, 350, 640))]
 
 
 def test_no_signature_when_the_name_follows_directly():
@@ -253,7 +252,7 @@ def test_a_table_row_reads_across_although_its_cells_are_offset():
         _line("3,15", left=500, top=845),
     ]
     regions = [_region(50, 800, 650, 880, label="table")]
-    assert [lines[i].text for i in document_order(lines, regions)] == [
+    assert [ln.text for ln in document_order(lines, regions)] == [
         "Datum", "Ziffer", "Betrag", "18.02.", "2", "3,15",
     ]
 
@@ -269,7 +268,7 @@ def test_two_columns_at_the_same_height_stay_whole():
         _line("Max Muster", left=100, top=140),
     ]
     regions = [_region(580, 90, 900, 190), _region(80, 100, 400, 200)]
-    assert [lines[i].text for i in document_order(lines, regions)] == [
+    assert [ln.text for ln in document_order(lines, regions)] == [
         "Herrn", "Max Muster", "Absender GmbH", "Musterweg 1",
     ]
 
@@ -285,7 +284,7 @@ def test_a_nested_block_stays_contiguous():
     ]
     regions = [_region(50, 0, 600, 350, label="text"), _region(100, 100, 500, 140, label="table")]
     assert region_parents(regions) == [None, 0]
-    assert [lines[i].text for i in document_order(lines, regions)] == [
+    assert [ln.text for ln in document_order(lines, regions)] == [
         "Ueberschrift", "Datum", "Betrag", "Schluss",
     ]
 
@@ -303,4 +302,4 @@ def test_every_line_survives_the_ordering():
     the top-level items rather than dropped."""
     lines = [_line(f"l{n}", left=10 * n, top=37 * n) for n in range(12)]
     regions = [_region(0, 0, 100, 200), _region(0, 300, 200, 400)]
-    assert sorted(document_order(lines, regions)) == list(range(12))
+    assert sorted(ln.text for ln in document_order(lines, regions)) == sorted(ln.text for ln in lines)

@@ -47,7 +47,7 @@ class Span:
     Offsets are always relative to *the whole page's* joined text by the time
     the pipeline sees a span: a detector working per line is responsible for
     shifting its own offsets (see :func:`backend.rules.rule_spans`), so that
-    :func:`backend.document.spans_to_lines` only ever has one coordinate system
+    :meth:`backend.document.Document.per_line` only ever has one coordinate system
     to map back from.
 
     ``source`` names *who* found it ("rule SALUT", "presidio", "guard-omni") and
@@ -115,7 +115,7 @@ PRESIDIO_LABELS: dict[str, PiiLabel] = {
 #   produced 5 and was never the only reason for a box. Dead weight.
 # * `product` stays, against the prediction that it would fire on Leistungstexte:
 #   all 10 lines only it redacted were letterhead specialty lines and
-#   clearing-house names. Both are now kept (`backend.rules.keep_indices`), which
+#   clearing-house names. Both are now kept (`backend.rules.kept_lines`), which
 #   drops the classifier there, as the item-table gate does for Leistungstexte.
 #
 # Note what has no key at all: **SALUTATION**. GLiNER2 has no label for "Herrn"

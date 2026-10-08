@@ -52,7 +52,7 @@ class LabeledValue:
     below: tuple[re.Pattern[str], PiiLabel] | None = None
 
 
-LABELED_VALUES: tuple[LabeledValue, ...] = (
+LABELED_VALUES: list[LabeledValue] = [
     # "Geburtsdatum:" | "01.02.1980"
     LabeledValue(PiiLabel.DATE_OF_BIRTH, label=BIRTH_LABEL, value=DATE_RE, header=BIRTH_LABEL_CELL),
     # "Versicherten-Nr.:" | "A123456789"
@@ -75,31 +75,31 @@ LABELED_VALUES: tuple[LabeledValue, ...] = (
         header=PERSON_LABEL_CELL,
         below=(DATE_VALUE, PiiLabel.DATE_OF_BIRTH),
     ),
-)
+]
 
 
-def labeled_value_indices(
+def labeled_values(
     lines: list[Line],
-    table: set[int] | None = None,
-    rules: tuple[LabeledValue, ...] = LABELED_VALUES,
-) -> dict[int, PiiLabel | KeepReason]:
+    table: set[Line] | None = None,
+    rules: list[LabeledValue] = LABELED_VALUES,
+) -> dict[Line, PiiLabel | KeepReason]:
     """Lines holding a labeled value, mapped to the ``kind`` of the first rule
     that claimed them. Nothing beneath a label reaches into ``table``."""
     table = table or set()
     gap = column_gap(lines)
-    found: dict[int, PiiLabel | KeepReason] = {}
+    found: dict[Line, PiiLabel | KeepReason] = {}
     for rule in rules:
         values = _paired_values(lines, rule, table, gap)
         for i in sorted(values):
-            found.setdefault(i, rule.kind)
+            found.setdefault(lines[i], rule.kind)
         if rule.below is not None:
             pattern, kind = rule.below
             for i in sorted(_lines_below(lines, values, pattern, table, gap)):
-                found.setdefault(i, kind)
+                found.setdefault(lines[i], kind)
     return found
 
 
-def _paired_values(lines: list[Line], rule: LabeledValue, table: set[int], gap: float) -> set[int]:
+def _paired_values(lines: list[Line], rule: LabeledValue, table: set[Line], gap: float) -> set[int]:
     """Pass one: the one value each label line of ``rule`` claims."""
     found: set[int] = set()
     for i, ln in enumerate(lines):
@@ -130,13 +130,13 @@ def _row_value(lines: list[Line], label: Line, rule: LabeledValue) -> int | None
 
 
 def _column_value(
-    lines: list[Line], label: Line, rule: LabeledValue, table: set[int], gap: float
+    lines: list[Line], label: Line, rule: LabeledValue, table: set[Line], gap: float
 ) -> int | None:
     """The value nearest beneath ``label`` — centred under it, or for a ``cell``
     rule sharing its left edge — within ``gap`` and outside ``table``."""
     column: list[tuple[float, int]] = []
     for i, ln in enumerate(lines):
-        if ln is label or i in table or not _is_value(ln, rule):
+        if ln is label or ln in table or not _is_value(ln, rule):
             continue
         if ln.mid_y < label.bottom or ln.top - label.bottom > gap:
             continue
@@ -148,7 +148,7 @@ def _column_value(
 
 
 def _lines_below(
-    lines: list[Line], values: set[int], pattern: re.Pattern[str], table: set[int], gap: float
+    lines: list[Line], values: set[int], pattern: re.Pattern[str], table: set[Line], gap: float
 ) -> set[int]:
     """Pass two: the line directly under each value, where it matches ``pattern``."""
     found: set[int] = set()
@@ -162,7 +162,7 @@ def _lines_below(
         if not below:
             continue
         j = min(below)[1]
-        if j not in table and pattern.search(lines[j].text):
+        if lines[j] not in table and pattern.search(lines[j].text):
             found.add(j)
     return found
 

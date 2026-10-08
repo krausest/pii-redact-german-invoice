@@ -12,7 +12,7 @@ from enum import StrEnum
 from backend.models import Line
 from backend.pii import Span
 from backend.rules.geometry import column_gap, left_neighbour
-from backend.rules.labeled import LabeledValue, labeled_value_indices
+from backend.rules.labeled import LabeledValue, labeled_values
 from backend.rules.patterns import (
     DATE_KEEP_CELL,
     DATE_KEEP_LABEL,
@@ -36,28 +36,28 @@ class KeepReason(StrEnum):
 
 
 # "Rechnungsdatum:" | "12.03.2026"
-KEEP_VALUES: tuple[LabeledValue, ...] = (
+KEEP_VALUES: list[LabeledValue] = [
     LabeledValue(KeepReason.DATE, label=DATE_KEEP_LABEL, value=DATE_KEEP_VALUE, header=DATE_KEEP_CELL),
-)
+]
 
 _MEMORY_SOURCES = ("name-memory", "birthdate-memory")
 
 
-def keep_indices(lines: list[Line], table: set[int] | None = None) -> dict[int, KeepReason]:
+def kept_lines(lines: list[Line], table: set[Line] | None = None) -> dict[Line, KeepReason]:
     """Lines that must stay readable, mapped to why. The first reason wins."""
     table = table or set()
-    keep: dict[int, KeepReason] = {i: KeepReason.ITEM_TABLE for i in sorted(table)}
-    for i, reason in labeled_value_indices(lines, table, KEEP_VALUES).items():
-        keep.setdefault(i, reason)
+    keep: dict[Line, KeepReason] = {ln: KeepReason.ITEM_TABLE for ln in lines if ln in table}
+    for ln, reason in labeled_values(lines, table, KEEP_VALUES).items():
+        keep.setdefault(ln, reason)
     gap = column_gap(lines)
-    for i, ln in enumerate(lines):
+    for ln in lines:
         reason = _line_keep_reason(ln.text)
         if reason is None:
             continue
-        keep.setdefault(i, reason)
+        keep.setdefault(ln, reason)
         if reason is KeepReason.DIAG:
             for j in _diagnosis_block(lines, ln, table, gap):
-                keep.setdefault(j, KeepReason.DIAG)
+                keep.setdefault(lines[j], KeepReason.DIAG)
     return keep
 
 
@@ -95,19 +95,19 @@ def _line_keep_reason(text: str) -> KeepReason | None:
     return None
 
 
-def _diagnosis_block(lines: list[Line], label: Line, table: set[int], gap: float) -> set[int]:
+def _diagnosis_block(lines: list[Line], label: Line, table: set[Line], gap: float) -> set[int]:
     """The diagnoses of ``label``: for a label alone in its cell, the cell beside
     it and that cell's wrapped lines; otherwise the block under the label."""
     block: set[int] = set()
     if DIAG_LABEL_CELL.search(label.text):
         for j, value in enumerate(lines):
-            if j not in table and left_neighbour(lines, value) is label:
+            if value not in table and left_neighbour(lines, value) is label:
                 block |= {j} | _block_below(lines, value, table, gap, wrapped=True)
     return block or _block_below(lines, label, table, gap)
 
 
 def _block_below(
-    lines: list[Line], start: Line, table: set[int], gap: float, wrapped: bool = False
+    lines: list[Line], start: Line, table: set[Line], gap: float, wrapped: bool = False
 ) -> set[int]:
     """The lines running on below ``start`` with its left edge, each within
     ``gap`` of the one above. ``wrapped`` stops at a line with a cell left of it."""
@@ -116,7 +116,7 @@ def _block_below(
     for i, ln in sorted(enumerate(lines), key=lambda pair: pair[1].top):
         if ln.top < bottom or abs(ln.left - start.left) > start.height or not ln.text.strip():
             continue
-        if i in table or ln.top - bottom > gap or wrapped and left_neighbour(lines, ln):
+        if ln in table or ln.top - bottom > gap or wrapped and left_neighbour(lines, ln):
             break
         found.add(i)
         bottom = ln.bottom

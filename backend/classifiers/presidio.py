@@ -18,6 +18,7 @@ import re
 from collections.abc import Sequence
 from typing import Protocol
 
+from backend.document import TextRange
 from backend.rules.patterns import DE_PLZ_CITY
 from backend.pii import PRESIDIO_LABELS, PiiLabel, Span
 from backend.trace import Trace
@@ -213,7 +214,7 @@ def build_analyzer():
 
 def _name_fragments(
     text: str, tokens: Sequence[_Token], start: int, end: int
-) -> list[tuple[int, int]]:
+) -> list[TextRange]:
     """A wrapped PERSON span, cut back to the parts that are actually a name.
 
     The model extends an entity across a line break in two very different
@@ -230,7 +231,7 @@ def _name_fragments(
 
     An unwrapped span comes back unchanged, as its single fragment.
     """
-    fragments: list[tuple[int, int]] = []
+    fragments: list[TextRange] = []
     pos = start
     for piece in text[start:end].split("\n"):
         lo, hi = pos, pos + len(piece)
@@ -238,7 +239,7 @@ def _name_fragments(
             tok.pos_ == "PROPN" and tok.idx < hi and tok.idx + len(tok.text) > lo
             for tok in tokens
         ):
-            fragments.append((lo, hi))
+            fragments.append(TextRange(lo, hi))
         pos = hi + 1  # + the "\n"
     return fragments
 
@@ -376,15 +377,15 @@ class PresidioClassifier:
             pieces = (
                 _name_fragments(text, artifacts.tokens, r.start, r.end)
                 if label is PiiLabel.PERSON and "\n" in text[r.start : r.end]
-                else [(r.start, r.end)]
+                else [TextRange(r.start, r.end)]
             )
-            for lo, hi in pieces:
+            for piece in pieces:
                 spans.append(
                     Span(
                         label=label,
-                        start=lo,
-                        end=hi,
-                        text=text[lo:hi],
+                        start=piece.start,
+                        end=piece.end,
+                        text=text[piece.start : piece.end],
                         source="presidio",
                         score=r.score,
                     )

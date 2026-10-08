@@ -10,7 +10,7 @@ from backend.rules.labeled import (
     LabeledValue,
     _column_value,
     _row_value,
-    labeled_value_indices,
+    labeled_values,
 )
 from backend.rules.patterns import ID_LABEL, ID_VALUE, REF_VALUE
 from tests.conftest import cell
@@ -25,7 +25,7 @@ def test_an_invoice_number_pairs_with_its_own_row_only():
         cell("Abschlagsnummer:", 10, 118),
         cell("11", 130, 121, width=22, height=18),
     ]
-    assert set(labeled_value_indices(lines)) == {1}
+    assert set(labeled_values(lines)) == {lines[1]}
 
 
 @pytest.mark.parametrize(
@@ -44,12 +44,12 @@ def test_an_invoice_number_pairs_with_its_own_row_only():
 )
 def test_a_sender_identifier_in_the_cell_beside_its_label(label, value):
     lines = [cell(label, 10, 100), cell(value, 130, 100), cell("12.03.2026", 300, 100)]
-    assert labeled_value_indices(lines) == {1: PiiLabel.ID}
+    assert labeled_values(lines) == {lines[1]: PiiLabel.ID}
 
 
 def test_a_sender_label_does_not_take_the_date_beside_it():
     lines = [cell("Steuernummer:", 10, 100), cell("12.03.2026", 130, 100)]
-    assert labeled_value_indices(lines) == {}
+    assert labeled_values(lines) == {}
 
 
 def test_an_invoice_number_under_a_narrower_labelcell():
@@ -57,7 +57,7 @@ def test_an_invoice_number_under_a_narrower_labelcell():
         cell("Rg.-Nr.:", 462, 487, width=41, height=15),
         cell("000123/045678", 462, 502, width=85, height=14),
     ]
-    assert labeled_value_indices(lines) == {1: PiiLabel.ID}
+    assert labeled_values(lines) == {lines[1]: PiiLabel.ID}
 
 # -- a date belongs to its nearest date label --------------------------------- #
 def _grid():
@@ -77,7 +77,7 @@ def _grid():
 
 def _birthdates(lines):
     return {
-        lines[i].text for i, k in labeled_value_indices(lines).items() if k is PiiLabel.DATE_OF_BIRTH
+        ln.text for ln, k in labeled_values(lines).items() if k is PiiLabel.DATE_OF_BIRTH
     }
 
 
@@ -121,7 +121,7 @@ def test_a_birthdate_alone_under_the_labeled_name():
         cell("01.02.1980", 289, 128, width=102),
         cell("Behandlungszeitraum vom 15.04.2026 bis 28.04.2026", 289, 156, width=300),
     ]
-    assert labeled_value_indices(lines) == {1: PiiLabel.PERSON, 2: PiiLabel.DATE_OF_BIRTH}
+    assert labeled_values(lines) == {lines[1]: PiiLabel.PERSON, lines[2]: PiiLabel.DATE_OF_BIRTH}
 
 
 def test_a_sender_identifier_under_a_label_closing_a_holder_line():
@@ -129,7 +129,7 @@ def test_a_sender_identifier_under_a_label_closing_a_holder_line():
         cell("Dr. Andrea Muster, Vertragsarztnr.:", 400, 100, width=500),
         cell("2106315267", 402, 130, width=120),
     ]
-    assert labeled_value_indices(lines) == {1: PiiLabel.ID}
+    assert labeled_values(lines) == {lines[1]: PiiLabel.ID}
 
 
 # -- every labeled row, every layout ------------------------------------------ #
@@ -155,34 +155,37 @@ def _under(label, value):
 @pytest.mark.parametrize("row", _LABELED)
 def test_a_labeled_value_beside_its_label(row):
     label, value, kind, _ = _LABELED[row]
-    assert labeled_value_indices(_beside(label, value)) == {1: kind}
+    lines = _beside(label, value)
+    assert labeled_values(lines) == {lines[1]: kind}
 
 
 @pytest.mark.parametrize("row", _LABELED)
 def test_a_labeled_value_under_its_label_only_where_it_heads_a_column(row):
     label, value, kind, header = _LABELED[row]
-    assert labeled_value_indices(_under(label, value)) == ({1: kind} if header else {})
+    lines = _under(label, value)
+    assert labeled_values(lines) == ({lines[1]: kind} if header else {})
 
 
 @pytest.mark.parametrize("row", _LABELED)
 def test_a_column_under_a_label_stops_at_the_item_table(row):
     label, value, _, _ = _LABELED[row]
-    assert labeled_value_indices(_under(label, value), table={1}) == {}
+    lines = _under(label, value)
+    assert labeled_values(lines, table={lines[1]}) == {}
 
 
 @pytest.mark.parametrize("row", _LABELED)
 def test_a_bare_label_is_no_value(row):
     label, _, _, _ = _LABELED[row]
-    assert labeled_value_indices([cell(label, 10, 100, width=150)]) == {}
+    assert labeled_values([cell(label, 10, 100, width=150)]) == {}
 
 
 def test_the_first_rule_claiming_a_value_wins():
-    rules = (
+    rules = [
         LabeledValue(PiiLabel.ID, label=ID_LABEL, value=ID_VALUE),
         LabeledValue(PiiLabel.CONTACT, label=ID_LABEL, value=ID_VALUE),
-    )
+    ]
     lines = _beside("Versicherten-Nr.:", "A123456789")
-    assert labeled_value_indices(lines, rules=rules) == {1: PiiLabel.ID}
+    assert labeled_values(lines, rules=rules) == {lines[1]: PiiLabel.ID}
 
 
 def _ref_rule():
@@ -212,14 +215,15 @@ def test_the_column_value_is_the_nearest_beneath():
 
 
 @pytest.mark.parametrize(
-    "value,table,gap",
+    "value,in_table,gap",
     [
-        (cell("AB-1", 10, 124), {1}, 60),  # inside the item table
-        (cell("AB-1", 10, 200), set(), 60),  # too far down
-        (cell("AB-1", 300, 124), set(), 60),  # another column
+        (cell("AB-1", 10, 124), True, 60),
+        (cell("AB-1", 10, 200), False, 60),  # too far down
+        (cell("AB-1", 300, 124), False, 60),  # another column
     ],
     ids=["table", "gap", "column"],
 )
-def test_no_column_value(value, table, gap):
+def test_no_column_value(value, in_table, gap):
     label = cell("Rg.-Nr.:", 10, 100)
+    table = {value} if in_table else set()
     assert _column_value([label, value], label, _ref_rule(), table, gap) is None

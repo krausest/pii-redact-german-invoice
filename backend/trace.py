@@ -102,14 +102,13 @@ def trace_page(
     trace: Trace,
     lines: list["Line"],
     regions: list["LayoutRegion"],
-    order: list[int],
-    spoken: list[int],
-    found: dict[int, list["Span"]],
-    keep: dict[int, str],
+    order: list["Line"],
+    found: dict["Line", list["Span"]],
+    keep: dict["Line", str],
     region_hits: list[tuple[int, "Box", str]],
-    signatures: list[tuple[int, "Box"]],
-    notes: dict[int, "Box"],
-    dropped: dict[int, list["Span"]] | None = None,
+    signatures: list[tuple["Line", "Box"]],
+    notes: dict["Line", "Box"],
+    dropped: dict["Line", list["Span"]] | None = None,
 ) -> None:
     """Narrate one page: every detected region, the text it contributed, the
     lines inside it with their spans and verdict, then the region's own verdict.
@@ -130,40 +129,41 @@ def trace_page(
     from backend.layout import lines_by_region
 
     per_region = lines_by_region(lines, regions)
-    rank = {i: pos for pos, i in enumerate(order)}
-    claimed = {i for group in per_region for i in group}
+    rank = {ln: pos for pos, ln in enumerate(order)}
+    claimed = {ln for group in per_region for ln in group}
     why_by_region = {r: why for r, _, why in region_hits}
-    signed = {i: box for i, box in signatures}
+    signed = dict(signatures)
+    dropped = dropped or {}
 
-    def narrate(idx: list[int], header: str) -> None:
+    def narrate(group: list["Line"], header: str) -> None:
         trace.add("%s", header)
-        shown = sorted(idx, key=lambda i: rank.get(i, len(order)))
-        joined = " | ".join(lines[i].text for i in shown if lines[i].text.strip())
+        shown = sorted(group, key=lambda ln: rank.get(ln, len(order)))
+        joined = " | ".join(ln.text for ln in shown if ln.text.strip())
         if joined:
             trace.add("  wholetext: %r", joined)
-        for i in shown:
-            if not lines[i].text.strip():
+        for ln in shown:
+            if not ln.text.strip():
                 continue
-            trace.add("  %s", format_line(lines[i]))
-            for span in found.get(i, []):
+            trace.add("  %s", format_line(ln))
+            for span in found.get(ln, []):
                 trace.add(
                     "      %s %r [%s %.2f]", span.label, span.text, span.source, span.score
                 )
-            for span in (dropped or {}).get(i, []):
+            for span in dropped.get(ln, []):
                 trace.add(
                     "      rejected %s %r [%s %.2f]", span.label, span.text, span.source, span.score
                 )
-            if i in found:
+            if ln in found:
                 trace.add("      -> REDACT")
-                if i in notes:
-                    trace.add("      note %r", notes[i].text)
-            elif i in keep:
+                if ln in notes:
+                    trace.add("      note %r", notes[ln].text)
+            elif ln in keep:
                 # Why no classifier verdict was reported for this line.
-                trace.add("      -> keep (%s)", keep[i])
+                trace.add("      -> keep (%s)", keep[ln])
             else:
                 trace.add("      -> keep")
-            if i in signed:
-                trace.add("      signature %s", signed[i].as_list())
+            if ln in signed:
+                trace.add("      signature %s", signed[ln].as_list())
 
     for r, region in enumerate(regions):
         why = why_by_region.get(r)
@@ -173,6 +173,6 @@ def trace_page(
         )
         trace.add("  -> region %s", f"REDACT ({why})" if why else "keep")
 
-    unclaimed = [i for i in spoken if i not in claimed]
+    unclaimed = [ln for ln in lines if ln.text.strip() and ln not in claimed]
     if unclaimed:
         narrate(unclaimed, "--- unclaimed lines ---")

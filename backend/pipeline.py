@@ -19,7 +19,7 @@ from collections.abc import Callable
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.classifiers.base import Classifier
-from backend.document import build_document, spans_to_lines
+from backend.document import Document
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
 from backend.layout import (
@@ -34,7 +34,7 @@ from backend.layout import (
 )
 from backend.harvest import Memory, birthdate_spans, harvest, harvest_birthdates, name_spans
 from backend.pii import Span
-from backend.rules import birth_year_note, item_table_indices, keep_indices, rejected, rule_spans
+from backend.rules import birth_year_note, item_table_lines, kept_lines, rejected, rule_spans
 from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
 
@@ -48,20 +48,19 @@ def _inside(inner: Box, outer: Box) -> bool:
 
 
 def _sift(
-    candidates: list[list[Span]],
-    order: list[int],
-    keep: dict[int, str],
-    dropped: dict[int, list[Span]],
-) -> list[list[Span]]:
-    """The candidate spans per reading position that survive their line's keep
-    reason (:func:`~backend.rules.rejected`); the rest go to ``dropped``, by line."""
-    survivors: list[list[Span]] = []
-    for pos, i in enumerate(order):
-        why = keep.get(i)
-        survivors.append([s for s in candidates[pos] if not rejected(s, why)])
-        lost = [s for s in candidates[pos] if rejected(s, why)]
+    candidates: dict[Line, list[Span]],
+    keep: dict[Line, str],
+    dropped: dict[Line, list[Span]],
+) -> dict[Line, list[Span]]:
+    """The candidate spans per line that survive the line's keep reason
+    (:func:`~backend.rules.rejected`); the rest go to ``dropped``."""
+    survivors: dict[Line, list[Span]] = {}
+    for line, spans in candidates.items():
+        why = keep.get(line)
+        survivors[line] = [s for s in spans if not rejected(s, why)]
+        lost = [s for s in spans if rejected(s, why)]
         if lost:
-            dropped.setdefault(i, []).extend(lost)
+            dropped.setdefault(line, []).extend(lost)
     return survivors
 
 
@@ -221,35 +220,31 @@ class RedactionPipeline:
         # Reading order first: everything below reads the page as one text, and
         # that text is only worth classifying if the layout put each block's
         # lines next to their own neighbours rather than the next column's.
-        spoken = [i for i, ln in enumerate(lines) if ln.text.strip()]
-        order = [i for i in document_order(lines, regions) if lines[i].text.strip()]
-        ordered = [lines[i] for i in order]
-        text, bounds = build_document(ordered)
-
-        # The item table: the deterministic rules and the name memory run there
-        # as everywhere else, the classifier does not (see item_table_indices).
-        # Computed on the *unordered* lines because it is a purely geometric
+        # The item table travels with it: the deterministic rules and the name
+        # memory run there as everywhere else, the classifier does not (see
+        # item_table_lines). It is found on *all* OCR lines, a purely geometric
         # pass over pixel boxes — reading order neither helps nor hinders it.
+        doc = Document(
+            [ln for ln in document_order(lines, regions) if ln.text.strip()],
+            item_table=item_table_lines(lines),
+        )
+
         # The kept lines (dates, diagnoses, specialty, clearing house) extend
-        # the same exemption and are cut out of the region boxes. The name
+        # the table's exemption and are cut out of the region boxes. The name
         # memory still reaches a diagnosis; a line made only of specialty or
         # clearing-house words holds no name for it to find.
-        table_idx = item_table_indices(lines)
-        keep = keep_indices(lines, table_idx)
+        keep = kept_lines(lines, doc.item_table)
 
         # --- candidates, then what a kept line rejects ----------------------- #
         # Every source proposes spans; `rejected` is the one place a kept line
         # drops them. A fee table is a grid of two-word service texts, which in
         # German look exactly like a forename/surname pair to a model — while a
         # rule that fires there (a labeled patient line) is still evidence.
-        dropped: dict[int, list[Span]] = {}
-        rules_by_line = spans_to_lines(
-            rule_spans(ordered, bounds, self._table_in_order(order, table_idx)), bounds
-        )
-        model = self.classifier(classifier)
-        model_by_line = spans_to_lines(model.spans(text, trace), bounds)
+        dropped: dict[Line, list[Span]] = {}
+        rules_by_line = doc.per_line(rule_spans(doc))
+        model_by_line = doc.per_line(self.classifier(classifier).spans(doc.text, trace))
         hits = _sift(
-            [r + m for r, m in zip(rules_by_line, model_by_line)], order, keep, dropped
+            {ln: rules_by_line[ln] + model_by_line[ln] for ln in rules_by_line}, keep, dropped
         )
 
         # --- the names the survivors named, everywhere else ---------------- #
@@ -259,35 +254,29 @@ class RedactionPipeline:
         # when there is one, mutated in place: a name labeled on page 1 is caught
         # bare on page 2.
         memory = memory if memory is not None else Memory()
-        for name, source in harvest(ordered, hits).items():
+        for name, source in harvest(doc, hits).items():
             if name not in memory.names:
                 trace.add("    name memory %r <- %r", name, source)
                 memory.names.add(name)
         # A birth line teaches its date as well, never its label.
-        for key, (printed, source) in harvest_birthdates(ordered, hits).items():
+        for key, (printed, source) in harvest_birthdates(doc, hits).items():
             if key not in memory.birthdates:
                 trace.add("    birthdate memory %r <- %r", printed, source)
                 memory.birthdates.add(key)
-        memory_by_line = spans_to_lines(
-            name_spans(ordered, bounds, memory.names)
-            + birthdate_spans(ordered, bounds, memory.birthdates),
-            bounds,
+        memory_by_line = doc.per_line(
+            name_spans(doc, memory.names) + birthdate_spans(doc, memory.birthdates)
         )
-        recalled = _sift(memory_by_line, order, keep, dropped)
-        hits = [h + m for h, m in zip(hits, recalled)]
+        recalled = _sift(memory_by_line, keep, dropped)
+        hits = {ln: hits[ln] + recalled[ln] for ln in hits}
 
         pad = self._padding
         boxes: list[Box] = []
-        notes: dict[int, Box] = {}
-        found = {i: hits[pos] for pos, i in enumerate(order) if hits[pos]}
-        redacted = set(found)
+        notes: dict[Line, Box] = {}
+        found = {ln: spans for ln, spans in hits.items() if spans}
         # A kept line clips its neighbours' padding, never their own box: the
         # padding only guards against a tight OCR box, the kept line is content.
-        holes = [_rect(lines[i]) for i in keep if i not in redacted]
-        for i in order:
-            if i not in found:
-                continue
-            line = lines[i]
+        holes = [_rect(ln) for ln in keep if ln not in found]
+        for line, spans in found.items():
             padded = Box(
                 line.left - pad,
                 line.top - pad,
@@ -299,30 +288,22 @@ class RedactionPipeline:
                 own = _rect(line)
                 parts = [p for p in parts if not _inside(p, own)] + [own]
             boxes.extend(parts)
-            note = birth_year_note(line, found[i])
+            note = birth_year_note(line, spans)
             if note is not None:
-                notes[i] = note
+                notes[line] = note
 
         # No gate on the detector: without one there are no regions, and
         # `region_boxes` over none is empty.
-        region_hits = region_boxes(lines, regions, redacted, pad, set(keep))
+        region_hits = region_boxes(lines, regions, set(found), pad, set(keep))
         signatures = signature_boxes(lines, image.width, pad)
         trace_page(
-            trace, lines, regions, order, spoken, found, keep, region_hits, signatures, notes,
-            dropped,
+            trace, lines, regions, doc.lines, found, keep, region_hits, signatures, notes, dropped
         )
         boxes.extend(box for _, box, _ in region_hits)
         boxes.extend(box for _, box in signatures)
         # Last, so no box drawn after a note covers its text.
         boxes.extend(notes.values())
         return boxes
-
-    @staticmethod
-    def _table_in_order(order: list[int], table_idx: set[int]) -> set[int]:
-        """``table_idx`` re-expressed as positions in ``order``, which is what
-        the rules see: they are handed the reordered lines, so an index into the
-        original list would point at the wrong row."""
-        return {pos for pos, i in enumerate(order) if i in table_idx}
 
     def apply_boxes(
         self,
@@ -366,4 +347,4 @@ class RedactionPipeline:
         if regions is None:
             regions = self.regions(image)
         text_lines = [ln for ln in lines if ln.text.strip()]
-        return draw_layout_debug(image, text_lines, assign_lines(text_lines, regions), regions)
+        return draw_layout_debug(image, assign_lines(text_lines, regions), regions)

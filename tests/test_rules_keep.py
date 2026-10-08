@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.pii import PiiLabel, Span
-from backend.rules.keep import is_specialty_line, keep_indices, rejected
+from backend.rules.keep import is_specialty_line, kept_lines, rejected
 from tests.conftest import cell
 
 
@@ -35,7 +35,8 @@ def test_keep_names_dates_diagnoses_and_the_clearing_house():
         cell("1. Akute Bronchitis", 10, 142, width=250),
         cell("2. Lumbago", 12, 164, width=120),
     ]
-    assert keep_indices(lines) == {0: "PVS", 1: "DATE", 2: "DATE", 3: "DIAG", 4: "DIAG", 5: "DIAG"}
+    reasons = ["PVS", "DATE", "DATE", "DIAG", "DIAG", "DIAG"]
+    assert kept_lines(lines) == dict(zip(lines, reasons))
 
 
 def test_a_diagnosis_beside_its_label_cell_is_kept():
@@ -46,7 +47,7 @@ def test_a_diagnosis_beside_its_label_cell_is_kept():
         cell("Andrea Muster", 10, 164, width=150),
         cell("Musterstraße 1", 103, 250, width=150),
     ]
-    assert keep_indices(lines) == {0: "DIAG", 1: "DIAG", 2: "DIAG"}
+    assert kept_lines(lines) == dict.fromkeys(lines[:3], "DIAG")
 
 
 def test_a_diagnosis_beside_its_label_ends_at_the_next_row_of_cells():
@@ -56,7 +57,7 @@ def test_a_diagnosis_beside_its_label_ends_at_the_next_row_of_cells():
         cell("Nr.", 10, 142, width=40),
         cell("Muster", 102, 142, width=100),
     ]
-    assert keep_indices(lines) == {0: "DIAG", 1: "DIAG"}
+    assert kept_lines(lines) == dict.fromkeys(lines[:2], "DIAG")
 
 
 def test_a_merged_diagnosis_label_keeps_nothing_beside_it():
@@ -64,12 +65,12 @@ def test_a_merged_diagnosis_label_keeps_nothing_beside_it():
         cell("Diagnose: Lumbago", 10, 120, width=150),
         cell("Andrea Muster", 300, 120, width=150),
     ]
-    assert keep_indices(lines) == {0: "DIAG"}
+    assert kept_lines(lines) == {lines[0]: "DIAG"}
 
 
 def test_a_date_beside_a_name_is_not_kept_for_its_label():
     lines = [cell("Datum:", 10, 10), cell("Muster, Andrea 12.03.2026", 130, 10, width=200)]
-    assert 1 not in keep_indices(lines)
+    assert lines[1] not in kept_lines(lines)
 
 
 # -- what a kept line rejects -------------------------------------------------- #

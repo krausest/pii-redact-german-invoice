@@ -61,18 +61,19 @@ The heart of the pipeline, per page:
 
 1. **Reading order.** `layout.document_order` groups lines by region (nested regions
    stay together) and orders them in bands, so the two columns of a letter do not
-   interleave. `document.build_document` joins the lines into **one text** with a
+   interleave. A `document.Document` joins the lines into **one text** with a
    newline per line and remembers each line's character range.
-2. **Item table and kept lines.** `rules.item_table_indices` finds the fee table
+2. **Item table and kept lines.** `rules.item_table_lines` finds the fee table
    geometrically: lines with German amounts form rows, rows cluster by vertical
    gap, and a cluster of ≥ 2 rows spans the table. Inside it the classifier's
    findings are ignored — a two-word service text looks exactly like a name to a
-   model — while the rules still apply. `rules.keep_indices` extends that to every
+   model — while the rules still apply. The `Document` carries the table as
+   `item_table`, so the rules read it from there. `rules.kept_lines` extends that to every
    line that must stay readable ([below](#what-stays-readable)).
 3. **Candidates, then rejection.**
    - `rules.rule_spans` runs the deterministic rules per line (see below).
    - The classifier analyses the whole page text once and returns `Span`s;
-     `document.spans_to_lines` maps them back to lines.
+     `Document.per_line` maps them back to lines.
    - `rules.rejected` drops the candidates a kept line does not allow
      ([below](#what-stays-readable)); the trace lists them as `rejected …`.
 4. **Name memory.** `harvest.harvest` collects surnames named by the surviving spans
@@ -154,7 +155,7 @@ inside the item table.
 
 ## What stays readable
 
-`rules.keep_indices` names the lines that must survive. On a kept line
+`rules.kept_lines` names the lines that must survive. On a kept line
 `rules.rejected` drops every classifier span, and the whole-region boxes leave it
 alone; a deterministic rule still wins (a kept line carrying a street or a labelled
 birthdate is redacted all the same):
@@ -232,7 +233,7 @@ backend/
   factory.py      builds the pipeline from the config
   config.py       config.toml schema and env overrides
   options.py      query and body validation
-  document.py     page text <-> lines (build_document, spans_to_lines)
+  document.py     page text <-> lines (Document)
   rules/          deterministic German rules: patterns, one-line rules, labelled
                   values, postal block, item table, kept lines, birth year
   harvest.py      name memory

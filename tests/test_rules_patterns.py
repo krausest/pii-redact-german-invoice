@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.document import build_document
+from backend.document import Document
 from backend.models import Line
 from backend.pii import PiiLabel
 from backend.rules import patterns, rule_spans
@@ -144,8 +144,7 @@ def _labels(text: str) -> set[PiiLabel]:
     """The labels the rules put on one line, through the same call the pipeline
     makes — no private helper, so the table cannot drift from production."""
     line = Line(text=text, left=0, top=0, width=100, height=10)
-    _, bounds = build_document([line])
-    return {s.label for s in rule_spans([line], bounds)}
+    return {s.label for s in rule_spans(Document([line]))}
 
 
 @pytest.mark.parametrize("text,expected", CASES, ids=[c[0][:40] for c in CASES])
@@ -156,8 +155,7 @@ def test_the_rules_judgement(text: str, expected: set[PiiLabel]) -> None:
 def test_a_span_quotes_what_it_matched_and_names_the_rule() -> None:
     """The trace's whole diagnostic value: which pattern fired, and on what."""
     line = Line(text="Internet: praxis-muster.de", left=0, top=0, width=100, height=10)
-    _, bounds = build_document([line])
-    (span,) = rule_spans([line], bounds)
+    (span,) = rule_spans(Document([line]))
     assert (span.label, span.text, span.source) == (C, "praxis-muster.de", "rule CONTACT")
 
 

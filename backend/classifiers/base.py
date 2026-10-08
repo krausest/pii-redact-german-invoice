@@ -13,7 +13,7 @@ class Classifier(Protocol):
     """Finds model-detected PII in one page's text, as labeled spans.
 
     ``text`` is the whole page joined in reading order (see
-    :func:`backend.document.build_document`), not a single OCR line. That is the
+    :class:`backend.document.Document`), not a single OCR line. That is the
     point: an entity is read in the context it actually stands in, and a name
     broken across a line wrap is one span rather than two invisible halves. The
     layout hierarchy is what makes that context coherent — without it the

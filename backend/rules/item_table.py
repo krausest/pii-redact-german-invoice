@@ -21,14 +21,14 @@ _TABLE_GAP_FACTOR = 3.0
 _MIN_TABLE_ROWS = 2
 
 
-def item_table_indices(lines: list[Line]) -> set[int]:
+def item_table_lines(lines: list[Line]) -> set[Line]:
     """Lines whose middle falls in a band spanned by two or more money rows —
     so a wrapped service text between amounts is covered too."""
     rows = _money_rows(lines)
     if not rows:
         return set()
     bands = _table_bands(rows, _TABLE_GAP_FACTOR * median(ln.height for ln in lines))
-    return {i for i, ln in enumerate(lines) if any(top <= ln.mid_y <= bottom for top, bottom in bands)}
+    return {ln for ln in lines if any(top <= ln.mid_y <= bottom for top, bottom in bands)}
 
 
 def _money_rows(lines: list[Line]) -> list[list[int]]:

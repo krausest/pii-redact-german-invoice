@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from backend.models import Line
+from backend.document import Document
 from backend.pii import PiiLabel, Span
 from backend.rules.patterns import (
     BIRTH_MARK,
@@ -40,13 +40,16 @@ STATIC_RULES: list[tuple[PiiLabel, str, re.Pattern[str]]] = [
 ]
 
 
-def line_spans(lines: list[Line], bounds: list[tuple[int, int]]) -> list[Span]:
+def line_spans(doc: Document) -> list[Span]:
     """Every match of every static rule, as spans in document coordinates."""
     spans: list[Span] = []
-    for line, (lo, _) in zip(lines, bounds):
+    for line in doc.lines:
         if not line.text.strip():
             continue
+        offset = doc.range_of(line).start
         for label, name, pattern in STATIC_RULES:
             for m in pattern.finditer(line.text):
-                spans.append(Span(label, lo + m.start(), lo + m.end(), m.group(), f"rule {name}"))
+                spans.append(
+                    Span(label, offset + m.start(), offset + m.end(), m.group(), f"rule {name}")
+                )
     return spans

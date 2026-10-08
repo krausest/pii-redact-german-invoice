@@ -11,7 +11,7 @@ import re
 import pytest
 
 from backend.classifiers.presidio import PII_ENTITIES, PresidioClassifier
-from backend.document import build_document
+from backend.document import Document
 from backend.models import Line
 from backend.pii import PiiLabel
 from backend.rules import rule_spans
@@ -48,16 +48,17 @@ LINE = "Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen"
 def test_01_rules_and_presidio_on_one_line(presidio):
     lines = [Line(LINE, 0, 0, 700, 27)]
     # line:   'Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen'
-    text, bounds = build_document(lines)    
-    # text: 'Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen', bounds: [(0, 53)]
-    print(f"\nline:   {LINE!r}\nbounds: {bounds}")
+    doc = Document(lines)
+    text = doc.text
+    # text: 'Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen', range: (0, 53)
+    print(f"\nline:   {LINE!r}\nrange:  {doc.range_of(lines[0])}")
 
     _header("A  backend.rules: every STATIC_RULES regex on its own")
     for _, name, pattern in STATIC_RULES:
         print(f"  {name:13} {[m.group() for m in pattern.finditer(LINE)]}")
 
     _header("B  rule_spans -> Span (per line, score 1.0)")
-    rules = rule_spans(lines, bounds)
+    rules = rule_spans(doc)
     for s in rules:
         print(f"  [{s.start:2}:{s.end:2}] {s.label:8} {s.text!r:22} {s.source}")
 

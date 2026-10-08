@@ -146,8 +146,8 @@ def _area(box: Box) -> int:
     return max(box.x1 - box.x0, 0) * max(box.y1 - box.y0, 0)
 
 
-def lines_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list[int]]:
-    """Line indices per region, positionally aligned with ``regions`` (a region
+def lines_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list[Line]]:
+    """The lines per region, positionally aligned with ``regions`` (a region
     that claimed nothing keeps an empty list).
 
     A line joins the region containing its center point; when several contain
@@ -155,6 +155,10 @@ def lines_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list
     inside a page-wide text region), and the tighter box is the more specific
     claim.
     """
+    return [[lines[i] for i in group] for group in _indices_by_region(lines, regions)]
+
+
+def _indices_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list[int]]:
     per_region: list[list[int]] = [[] for _ in regions]
     for i, line in enumerate(lines):
         best: int | None = None
@@ -168,13 +172,13 @@ def lines_by_region(lines: list[Line], regions: list[LayoutRegion]) -> list[list
     return per_region
 
 
-def assign_lines(lines: list[Line], regions: list[LayoutRegion]) -> list[list[int]]:
-    """Full partition of line indices into groups: one group per region that
+def assign_lines(lines: list[Line], regions: list[LayoutRegion]) -> list[list[Line]]:
+    """Full partition of the lines into groups: one group per region that
     claimed at least one line (in ``regions`` order), then one singleton per
     line no region contains. Only the debug view needs the partition."""
     per_region = lines_by_region(lines, regions)
-    claimed = {i for group in per_region for i in group}
-    return [g for g in per_region if g] + [[i] for i in range(len(lines)) if i not in claimed]
+    claimed = {ln for group in per_region for ln in group}
+    return [g for g in per_region if g] + [[ln] for ln in lines if ln not in claimed]
 
 
 # -- reading order --------------------------------------------------------- #
@@ -244,8 +248,8 @@ def _bands(items: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int, 
     return bands
 
 
-def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[int]:
-    """Line indices in reading order, derived from the region hierarchy.
+def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[Line]:
+    """The lines in reading order, derived from the region hierarchy.
 
     Within a region its own lines and its child regions are laid out together in
     bands (see :func:`_bands`) — a child enters as a *whole* at the position of
@@ -254,10 +258,9 @@ def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[int]:
     top-level regions, which is what makes the order recursive.
 
     Lines no region claimed are ordered among the top-level items by their own
-    box, so nothing is dropped: the result is a permutation of
-    ``range(len(lines))``.
+    box, so nothing is dropped: the result is a permutation of ``lines``.
     """
-    per_region = lines_by_region(lines, regions)
+    per_region = _indices_by_region(lines, regions)
     parents = region_parents(regions)
     children: list[list[int]] = [[] for _ in regions]
     roots: list[int] = []
@@ -294,7 +297,7 @@ def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[int]:
     for band in _bands(top):
         for _, _, _, payload in sorted(band, key=lambda it: it[2]):
             order.extend(walk(~payload) if payload < 0 else [payload])
-    return order
+    return [lines[i] for i in order]
 
 
 def _padded(box: Box, padding: int) -> Box:
@@ -325,9 +328,9 @@ def subtract(box: Box, holes: list[Box]) -> list[Box]:
 def region_boxes(
     lines: list[Line],
     regions: list[LayoutRegion],
-    redacted: set[int],
+    redacted: set[Line],
     padding: int,
-    keep: set[int] | None = None,
+    keep: set[Line] | None = None,
 ) -> list[tuple[int, Box, str]]:
     """Whole-region boxes as ``(region index, box, why)``, one region of
     :data:`_ALWAYS_BLACKEN` type at a time.
@@ -338,13 +341,13 @@ def region_boxes(
     The index is what lets the trace say which *region* a box came from: the box
     itself is padded outwards and so no longer equals the region's own box.
 
-    ``redacted`` holds the indices into ``lines`` that the per-line pass
-    flagged: a kept line that was redacted all the same is not cut out.
+    ``redacted`` holds the lines the per-line pass flagged: a kept line that
+    was redacted all the same is not cut out.
     """
     holes = [
         Box(ln.left, ln.top, ln.right, ln.bottom)
-        for i, ln in enumerate(lines)
-        if i in (keep or set()) and i not in redacted
+        for ln in lines
+        if ln in (keep or set()) and ln not in redacted
     ]
     out: list[tuple[int, Box, str]] = []
 
@@ -367,14 +370,14 @@ SIGN_OFF = re.compile(
 _SIGNATURE_HEIGHTS = 6
 
 
-def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tuple[int, Box]]:
-    """``(closing line index, box)`` over the handwritten signature under each
+def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tuple[Line, Box]]:
+    """``(closing line, box)`` over the handwritten signature under each
     closing formula: the band down to the next line in its column, as wide as
     the wider of the two and at least half again the formula's width. OCR has
     no line for a signature and the layout model no class, so the gap the
     letter leaves for it is the only evidence."""
-    out: list[tuple[int, Box]] = []
-    for i, ln in enumerate(lines):
+    out: list[tuple[Line, Box]] = []
+    for ln in lines:
         if not SIGN_OFF.search(ln.text):
             continue
         bottom = ln.bottom
@@ -395,16 +398,17 @@ def signature_boxes(lines: list[Line], page_width: int, padding: int) -> list[tu
         if y1 - bottom < ln.height / 2:  # no room was left for a signature
             continue
         x1 = min(max(x1, ln.left + int(1.5 * ln.width)), page_width)
-        out.append((i, Box(x0 - padding, bottom, x1 + padding, y1)))
+        out.append((ln, Box(x0 - padding, bottom, x1 + padding, y1)))
     return out
 
 
-def _tight_bbox(lines: list[Line], idx: list[int]) -> Box:
-    left = min(lines[i].left for i in idx)
-    top = min(lines[i].top for i in idx)
-    right = max(lines[i].right for i in idx)
-    bottom = max(lines[i].bottom for i in idx)
-    return Box(left, top, right, bottom)
+def _tight_bbox(group: list[Line]) -> Box:
+    return Box(
+        min(ln.left for ln in group),
+        min(ln.top for ln in group),
+        max(ln.right for ln in group),
+        max(ln.bottom for ln in group),
+    )
 
 
 def _label_font(image_height: int) -> ImageFont.FreeTypeFont:
@@ -454,8 +458,7 @@ def _draw_label(
 
 def draw_layout_debug(
     image: Image.Image,
-    lines: list[Line],
-    groups: list[list[int]],
+    groups: list[list[Line]],
     regions: list[LayoutRegion],
 ) -> Image.Image:
     """A copy of ``image`` with the detected regions outlined in a cyclically
@@ -482,9 +485,9 @@ def draw_layout_debug(
         color = _DEBUG_PALETTE[n % len(_DEBUG_PALETTE)]
         draw.rectangle(region.box.as_list(), outline=color, width=_DEBUG_LINE_WIDTH)
         _draw_label(draw, region.box, region.label, color, font)
-    for n, idx in enumerate(groups):
+    for n, group in enumerate(groups):
         draw.rectangle(
-            _tight_bbox(lines, idx).as_list(),
+            _tight_bbox(group).as_list(),
             outline=_DEBUG_PALETTE[n % len(_DEBUG_PALETTE)],
             width=1,
         )
