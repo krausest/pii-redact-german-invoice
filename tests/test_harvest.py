@@ -56,3 +56,9 @@ def test_a_name_is_found_in_any_casing_that_starts_with_a_capital():
 
 def test_a_name_is_found_only_as_a_whole_word():
     assert mentions_name("Allgemeine Beratung", {"Allgemein"}) is None
+
+
+def test_each_half_of_a_double_name_is_learned():
+    """Either half recurs alone ("Frau Beispiel" after "Muster-Beispiel")."""
+    lines = [cell("Patientin: Andrea Muster-Beispiel", 10, 10, width=300)]
+    assert {"Muster", "Beispiel"} <= _learn(Document(lines)).names

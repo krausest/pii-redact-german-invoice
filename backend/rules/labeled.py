@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from backend.models import Line
 from backend.pii import PiiLabel
-from backend.rules.geometry import box_is_above, column_gap, in_row
+from backend.rules.geometry import below, column_gap, left_aligned, same_row
 from backend.rules.patterns import (
     BIRTH_LABEL,
     BIRTH_LABEL_CELL,
@@ -124,7 +124,7 @@ def _row_value(lines: list[Line], label: Line, rule: LabeledValue) -> int | None
         for i, ln in enumerate(lines)
         if ln is not label
         and _is_value(ln, rule)
-        and in_row(label, ln)
+        and same_row(label, ln)
         and not (rule.cell and ln.left < label.right - label.height)
     ]
 
@@ -146,11 +146,10 @@ def _column_value(
         if ln is not label
         and ln not in table
         and _is_value(ln, rule)
-        and label.bottom <= ln.mid_y
-        and ln.top - label.bottom <= gap
+        and below(label, ln, gap)
         and (
             label.left <= ln.mid_x <= label.right
-            or rule.cell and abs(ln.left - label.left) <= label.height
+            or rule.cell and left_aligned(label, ln, label.height)
         )
     ]
     return min(column, key=lambda i: lines[i].top) if column else None
@@ -163,10 +162,14 @@ def _lines_below(
     found: set[int] = set()
     for i in values:
         above = lines[i]
-        below = [j for j, ln in enumerate(lines) if box_is_above(above, ln, gap, above.height)]
-        if not below:
+        under = [
+            j
+            for j, ln in enumerate(lines)
+            if below(above, ln, gap) and left_aligned(above, ln, above.height)
+        ]
+        if not under:
             continue
-        j = min(below, key=lambda j: lines[j].top)
+        j = min(under, key=lambda j: lines[j].top)
         if lines[j] not in table and pattern.search(lines[j].text):
             found.add(j)
     return found

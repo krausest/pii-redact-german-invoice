@@ -5,14 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Line:
     """One OCR text line with its axis-aligned pixel box.
 
     One shape for every OCR backend and classifier, rather than each speaking the
     dict-of-parallel-lists or list-of-dicts its own library returns. ``conf`` is
     the recognition confidence on a 0-100 scale (``None`` when a backend does not
-    expose it)."""
+    expose it). A line is itself: two OCR lines with the same text and box are
+    still two lines, so it is hashed and compared by identity."""
 
     text: str
     left: int

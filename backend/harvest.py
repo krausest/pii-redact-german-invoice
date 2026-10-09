@@ -28,6 +28,7 @@ from backend.rules.patterns import (
     DATE_KEEP_LABEL,
     DATE_RE,
     NAME_DATE,
+    NAME_TOKEN,
     PATIENT_NAME,
     PERSON_LABEL_CELL,
     SALUT,
@@ -35,9 +36,8 @@ from backend.rules.patterns import (
 )
 from backend.trace import Trace
 
-# A name-shaped token: a capital, four letters at least, maybe all caps. Shorter
-# forenames ("Max") are not worth the false hits; the surname is what recurs.
-_NAME_TOKEN = re.compile(r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß]{3,}\b")
+# Shorter forenames ("Max") are not worth the false hits; the surname is what recurs.
+_MIN_NAME_LENGTH = 4
 
 # Words on evidence lines that are never names: labels, salutations, months,
 # professions.
@@ -70,11 +70,15 @@ def _is_label(token: str) -> bool:
 
 
 def _tokens(text: str) -> set[str]:
-    """The name-shaped tokens in ``text``, without labels and stopwords."""
+    """The name tokens in ``text`` (:data:`~backend.rules.patterns.NAME_TOKEN`),
+    long enough to learn, without labels and stopwords."""
     return {
-        tok
-        for tok in _NAME_TOKEN.findall(text)
-        if tok.casefold() not in _NAME_STOPWORDS_CF and not _is_label(tok)
+        part
+        for token in NAME_TOKEN.findall(text)
+        for part in token.split("-")  # each half of a double name recurs alone
+        if len(part) >= _MIN_NAME_LENGTH
+        and part.casefold() not in _NAME_STOPWORDS_CF
+        and not _is_label(part)
     }
 
 

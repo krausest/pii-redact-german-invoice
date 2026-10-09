@@ -1,7 +1,7 @@
 """The fee table: rows of service texts and amounts that hold no PII.
 
 Its two-word service texts look like names to a model, so the classifier's
-findings are rejected there (see :func:`backend.rules.keep.rejected`); the
+findings are rejected there (see :mod:`backend.detectors`); the
 deterministic rules still apply.
 """
 

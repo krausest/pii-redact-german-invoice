@@ -26,8 +26,7 @@ class Document:
 
     The lines are joined with ``"\n"``, never a space: a phone number ending one
     line and a house number starting the next must not fuse into one number.
-    A line is addressed by itself; two identical lines (same text, same box) are
-    one line. ``item_table`` holds the lines of the fee table, where the
+    A line is addressed by itself. ``item_table`` holds the lines of the fee table, where the
     classifier's findings do not count (empty: no table).
     """
 

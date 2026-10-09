@@ -63,7 +63,9 @@ def test_a_whole_line_span_covers_the_line_and_quotes_its_text():
     assert (span.start, span.end, span.text) == (6, 19, "Muster")
 
 
-def test_identical_lines_are_one_line():
-    """Same text, same box: the same pixels, so one key for every per-line result."""
-    doc = Document([_line("Muster"), _line("Muster")])
-    assert list(doc.per_line([])) == [_line("Muster")]
+def test_identical_lines_stay_two_lines():
+    """A line is itself: OCR reading the same text in the same box twice gives
+    two lines, each with its own range."""
+    lines = [_line("Muster"), _line("Muster")]
+    doc = Document(lines)
+    assert [doc.range_of(ln) for ln in lines] == [(0, 6), (7, 13)]

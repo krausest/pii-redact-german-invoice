@@ -17,12 +17,12 @@ from backend.document import Document
 from backend.pii import LABELED_VALUE, PiiLabel, Span, rule_source
 from backend.rules.birth_year import birth_year_note
 from backend.rules.item_table import item_table_lines
-from backend.rules.keep import kept_lines, rejected
+from backend.rules.keep import kept_lines
 from backend.rules.labeled import labeled_values
 from backend.rules.line_rules import line_spans
 from backend.rules.postal import streets_above_city
 
-__all__ = ["birth_year_note", "item_table_lines", "kept_lines", "rejected", "rule_spans"]
+__all__ = ["birth_year_note", "item_table_lines", "kept_lines", "rule_spans"]
 
 
 def rule_spans(doc: Document) -> list[Span]:

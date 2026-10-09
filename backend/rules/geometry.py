@@ -15,33 +15,31 @@ def column_gap(lines: list[Line]) -> float:
     return _COLUMN_GAP_FACTOR * median([ln.height for ln in lines] or [0])
 
 
-def in_row(anchor: Line, ln: Line) -> bool:
-    """Whether ``ln``'s middle lies within ``anchor``'s height, give or take
-    half of ``ln``'s own. Looser than :func:`left_neighbour`'s row test, which
-    compares the two middles."""
-    return anchor.top - ln.height / 2 <= ln.mid_y <= anchor.bottom + ln.height / 2
+def same_row(a: Line, b: Line) -> bool:
+    """Whether two lines sit in one row: their middles closer than half their
+    heights together. A photographed row is a few pixels off level."""
+    return abs(a.mid_y - b.mid_y) <= (a.height + b.height) / 2
 
 
-def box_is_above(upper: Line, lower: Line, gap: float, tol: float) -> bool:
-    """Whether ``lower`` sits directly beneath ``upper``: it starts below
-    ``upper``'s middle (OCR boxes of adjacent rows overlap by a pixel), no more
-    than ``gap`` under its bottom, and shares its left edge within ``tol``."""
-    return (
-        upper.mid_y <= lower.top
-        and lower.top - upper.bottom <= gap
-        and abs(upper.left - lower.left) <= tol
-    )
+def left_aligned(a: Line, b: Line, tol: float) -> bool:
+    """Whether two lines share their left edge within ``tol``."""
+    return abs(a.left - b.left) <= tol
+
+
+def below(upper: Line, lower: Line, gap: float) -> bool:
+    """Whether ``lower`` sits under ``upper``: its middle below ``upper``'s
+    bottom (adjacent OCR boxes overlap by a pixel), at most ``gap`` further down."""
+    return upper.bottom <= lower.mid_y and lower.top - upper.bottom <= gap
 
 
 def left_neighbour(lines: list[Line], cell: Line) -> Line | None:
-    """The nearest cell left of ``cell`` whose middle is level with its own
-    within half a line height."""
+    """The nearest cell left of ``cell`` in its row."""
     row = [
         ln
         for ln in lines
         if ln is not cell and ln.text.strip()
         and ln.right <= cell.left + cell.height
-        and abs(ln.mid_y - cell.mid_y) <= max(ln.height, cell.height) / 2
+        and same_row(ln, cell)
     ]
     return min(
         row,

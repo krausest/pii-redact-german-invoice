@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from backend.document import TextRange
-from backend.rules.patterns import DE_PLZ_CITY
+from backend.rules.patterns import DE_PLZ_CITY, DE_STREET
 from backend.pii import PRESIDIO_LABELS, PiiLabel, Span
 from backend.trace import Trace
 
@@ -122,7 +122,7 @@ def build_analyzer():
         )
     )
 
-    # Street and ZIP+city; the latter is the rules' own pattern, so they agree.
+    # Street and ZIP+city: the rules' own patterns, so the two cannot disagree.
     analyzer.registry.add_recognizer(
         PatternRecognizer(
             supported_entity="DE_ADDRESS",
@@ -130,8 +130,7 @@ def build_analyzer():
             patterns=[
                 Pattern(
                     "de_street",
-                    # Like rules.patterns.DE_STREET: "Musterstrasse 23", "MUSTERSTR.23".
-                    r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß.\-]+(?:(?i:stra(?:ße|sse)|str|weg|platz|gasse|allee|ring|damm)|\s+(?i:stra(?:ße|sse)|str|weg|platz|gasse|allee|ring|damm))\.?\s*\d+[a-zA-Z]?\b",
+                    DE_STREET.pattern,
                     0.7,
                 ),
                 Pattern(

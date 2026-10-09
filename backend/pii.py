@@ -67,16 +67,6 @@ class Span:
     source: str
     score: float = 1.0
 
-    @property
-    def is_rule(self) -> bool:
-        """Drawn by a deterministic rule, on its line or across cells."""
-        return self.source.startswith(_RULE_PREFIX) or self.source == LABELED_VALUE
-
-    @property
-    def is_memory(self) -> bool:
-        """Drawn by the name or birthdate memory."""
-        return self.source in (NAME_MEMORY, BIRTHDATE_MEMORY)
-
 
 # -- what the detectors call things ---------------------------------------- #
 

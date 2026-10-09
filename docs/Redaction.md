@@ -24,7 +24,7 @@ flowchart TD
 |---|---|---|
 | Entry points | [`api.py`](../backend/api.py), [`cli.py`](../backend/cli.py) | read input, apply EXIF orientation, validate options ([`options.py`](../backend/options.py)) |
 | Service | [`service.py`](../backend/service.py) | framework-free core: `run_redaction` → `Redaction` (pages + `is_pdf`) → `produce_output` |
-| Pipeline | [`pipeline.py`](../backend/pipeline.py) | `RedactionPipeline`: `unwarp`, `read_lines`, `regions`, `compute_boxes`, `apply_boxes` |
+| Pipeline | [`pipeline.py`](../backend/pipeline.py), [`redactor.py`](../backend/redactor.py), [`detectors.py`](../backend/detectors.py), [`registry.py`](../backend/registry.py) | `RedactionPipeline`: `unwarp`, `read_lines`, `regions`, `compute_boxes`, `apply_boxes`; `PageRedactor` decides a page; each `Detector` proposes spans; `ModelRegistry` builds the models |
 | Construction | [`factory.py`](../backend/factory.py) | `build_pipeline(config)`: OCR backend, layout detector, lazy classifier and unwarper factories |
 | Detectors | [`rules/`](../backend/rules/), [`classifiers/`](../backend/classifiers/), [`harvest.py`](../backend/harvest.py), [`layout.py`](../backend/layout.py) | rules, model, name memory, layout regions |
 | Shared types | [`models.py`](../backend/models.py), [`pii.py`](../backend/pii.py) | `Line`, `Box`; `Span` and `PiiLabel` — the one format every detector returns |
@@ -74,12 +74,12 @@ The heart of the pipeline, per page:
    - `rules.rule_spans` runs the deterministic rules per line (see below).
    - The classifier analyses the whole page text once and returns `Span`s;
      `Document.per_line` maps them back to lines.
-   - `rules.rejected` drops the candidates a kept line does not allow
+   - Each detector's `admits` drops the candidates a kept line does not allow
      ([below](#what-stays-readable)); the trace lists them as `rejected …`.
 4. **Name memory.** `Memory.learn` collects surnames named by the surviving spans
    (patient label, title, salutation, birth-date line, or a classifier `PERSON`
    outside the item table). `Memory.recall` then marks every other line on the
-   page that mentions one of them; these candidates pass `rules.rejected` too. Label
+   page that mentions one of them; these candidates pass the memory detector's `admits`. Label
    words on an evidence line (`Datum`, `Geburtsdatum`, `Patient`, …) are never taken
    for a name. A birth-date line (birth label, `geb.`/`*` mark, `Surname,Forename
    date` row) also teaches its *date*, and `Memory.recall` marks every other
@@ -156,7 +156,7 @@ inside the item table.
 ## What stays readable
 
 `rules.kept_lines` names the lines that must survive. On a kept line
-`rules.rejected` drops every classifier span, and the whole-region boxes leave it
+the classifier's spans are dropped (`ModelDetector.admits`), and the whole-region boxes leave it
 alone; a deterministic rule still wins (a kept line carrying a street or a labelled
 birthdate is redacted all the same):
 
@@ -203,7 +203,7 @@ window.
 
 Both implement `Classifier.spans(text, trace) -> list[Span]`
 ([`classifiers/base.py`](../backend/classifiers/base.py)). The pipeline builds each
-one on first use and keeps it (`RedactionPipeline.classifier`).
+one on first use and keeps it (`ModelRegistry.classifier`).
 
 ## Layout regions
 
@@ -250,6 +250,9 @@ backend/
   cli.py          batch CLI (flags = /api/redact query parameters)
   service.py      framework-free core shared by API and CLI
   pipeline.py     RedactionPipeline: unwarp / read_lines / regions / compute_boxes / apply_boxes
+  redactor.py     PageRedactor: one page from lines to PageVerdict
+  detectors.py    rules, classifier, memory as span sources, and what each may redact on a kept line
+  registry.py     ModelRegistry: classifiers and unwarper, built on first use
   verdict.py      PageVerdict: what one page decided, and its boxes
   factory.py      builds the pipeline from the config
   config.py       config.toml schema and env overrides

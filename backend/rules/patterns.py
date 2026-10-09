@@ -30,6 +30,8 @@ _NAME_PART = r"[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß]+(?:-[A-ZÄÖÜ][A-ZÄÖÜa-zä�
 _NAME_PART_OCR = r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß]{2,}(?:-[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß]+)?"
 # "Andrea Muster" or "Muster, Andrea".
 _NAME_SEP = r"(?:\s*,\s*|\s+)"
+# One name token on its own, as the name memory learns it.
+NAME_TOKEN = re.compile(rf"\b{_NAME_PART}\b")
 
 _PERSON_LABEL = (
     r"(?:Pat(?:ient(?:in|en)?)?"

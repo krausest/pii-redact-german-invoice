@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from backend.models import Line
-from backend.rules.geometry import box_is_above
+from backend.rules.geometry import below, left_aligned
 from backend.rules.patterns import CITY_CELL, STREET_CELL
 
 
@@ -16,7 +16,9 @@ def streets_above_city(lines: list[Line], table: set[Line] | None = None) -> set
         if city in table or not CITY_CELL.search(city.text):
             continue
         above = [
-            ln for ln in lines if ln.text.strip() and box_is_above(ln, city, city.height, city.height)
+            ln
+            for ln in lines
+            if ln.text.strip() and below(ln, city, city.height) and left_aligned(ln, city, city.height)
         ]
         if not above:
             continue

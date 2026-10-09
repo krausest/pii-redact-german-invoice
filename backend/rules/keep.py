@@ -1,17 +1,18 @@
-"""Lines that must stay readable for the reimbursement, and what they reject.
+"""Lines that must stay readable for the reimbursement.
 
 A reviewer has to see when, by what kind of doctor, through which clearing
-house and for what. Such a line is *kept*: the classifier's findings on it are
-rejected, while a deterministic rule still redacts it.
+house and for what. Such a line is *kept*; which findings may still redact it
+is up to each detector (:mod:`backend.detectors`).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 
 from backend.models import Line
-from backend.pii import Span, rule_source
-from backend.rules.geometry import column_gap, left_neighbour
+from backend.rules.geometry import below, column_gap, left_aligned, left_neighbour
 from backend.rules.labeled import LabeledValue, labeled_values
 from backend.rules.patterns import (
     DATE_KEEP_CELL,
@@ -41,36 +42,23 @@ KEEP_VALUES: list[LabeledValue] = [
 ]
 
 def kept_lines(lines: list[Line], table: set[Line] | None = None) -> dict[Line, KeepReason]:
-    """Lines that must stay readable, mapped to why. The first reason wins."""
+    """Lines that must stay readable, mapped to why. The first reason wins: the
+    item table, then a labeled date, then :data:`KEEP_RULES` in order."""
     table = table or set()
     keep: dict[Line, KeepReason] = {ln: KeepReason.ITEM_TABLE for ln in lines if ln in table}
     for ln, reason in labeled_values(lines, table, KEEP_VALUES).items():
         keep.setdefault(ln, reason)
+    own = {ln: rule for ln in lines if (rule := _first_rule(ln.text)) is not None}
     gap = column_gap(lines)
-    for ln in lines:
-        reason = _line_keep_reason(ln.text)
-        if reason is None:
-            continue
-        keep.setdefault(ln, reason)
-        if reason is KeepReason.DIAG:
-            for j in _diagnosis_block(lines, ln, table, gap):
-                keep.setdefault(lines[j], KeepReason.DIAG)
+    for rule in KEEP_RULES:
+        for ln in lines:
+            if own.get(ln) is not rule:
+                continue
+            keep.setdefault(ln, rule.reason)
+            if rule.block is not None:
+                for j in rule.block(lines, ln, table, gap):
+                    keep.setdefault(lines[j], rule.reason)
     return keep
-
-
-def rejected(span: Span, keep: str | None) -> bool:
-    """Whether ``span`` is dropped on a line kept for ``keep`` (``None``: not kept).
-
-    A rule wins over every reason, except a legal form on the clearing house's
-    name. The name memory yields only on specialty and clearing-house lines,
-    which hold no name. The classifier yields on every kept line."""
-    if keep is None:
-        return False
-    if span.is_rule:
-        return keep == KeepReason.PVS and span.source == rule_source("ORG_LEGAL")
-    if span.is_memory:
-        return keep in (KeepReason.FACH, KeepReason.PVS)
-    return True
 
 
 def is_specialty_line(text: str) -> bool:
@@ -78,18 +66,6 @@ def is_specialty_line(text: str) -> bool:
     if not SPECIALTY.search(text):
         return False
     return not SPECIALTY_GLUE.sub("", SPECIALTY.sub("", text))
-
-
-def _line_keep_reason(text: str) -> KeepReason | None:
-    if DATE_KEEP_CELL.search(text):
-        return KeepReason.DATE
-    if DIAG_LABEL.search(text):
-        return KeepReason.DIAG
-    if PVS_NAME.search(text):
-        return KeepReason.PVS
-    if is_specialty_line(text):
-        return KeepReason.FACH
-    return None
 
 
 def _diagnosis_block(lines: list[Line], label: Line, table: set[Line], gap: float) -> set[int]:
@@ -107,14 +83,39 @@ def _block_below(
     lines: list[Line], start: Line, table: set[Line], gap: float, wrapped: bool = False
 ) -> set[int]:
     """The lines running on below ``start`` with its left edge, each within
-    ``gap`` of the one above. ``wrapped`` stops at a line with a cell left of it."""
+    ``gap`` of the one above. ``wrapped`` stops at a line with a cell left of it.
+    Stricter than :func:`~backend.rules.geometry.below`: a line overlapping the
+    one above is skipped, or the block swallows the line under a diagnosis."""
     found: set[int] = set()
-    bottom = start.bottom
+    prev = start
     for i, ln in sorted(enumerate(lines), key=lambda pair: pair[1].top):
-        if ln.top < bottom or abs(ln.left - start.left) > start.height or not ln.text.strip():
+        if ln.top < prev.bottom or not left_aligned(start, ln, start.height) or not ln.text.strip():
             continue
-        if ln in table or ln.top - bottom > gap or wrapped and left_neighbour(lines, ln):
+        if ln in table or not below(prev, ln, gap) or wrapped and left_neighbour(lines, ln):
             break
         found.add(i)
-        bottom = ln.bottom
+        prev = ln
     return found
+
+
+@dataclass(frozen=True)
+class KeepRule:
+    """A line ``matches`` and is kept for ``reason``; ``block`` adds the lines
+    that belong to it (the diagnoses under their label)."""
+
+    reason: KeepReason
+    matches: Callable[[str], bool]
+    block: Callable[[list[Line], Line, set[Line], float], set[int]] | None = None
+
+
+# In order of priority; a line is judged by the first rule it matches.
+KEEP_RULES: list[KeepRule] = [
+    KeepRule(KeepReason.DATE, lambda text: bool(DATE_KEEP_CELL.search(text))),
+    KeepRule(KeepReason.DIAG, lambda text: bool(DIAG_LABEL.search(text)), block=_diagnosis_block),
+    KeepRule(KeepReason.PVS, lambda text: bool(PVS_NAME.search(text))),
+    KeepRule(KeepReason.FACH, is_specialty_line),
+]
+
+
+def _first_rule(text: str) -> KeepRule | None:
+    return next((rule for rule in KEEP_RULES if rule.matches(text)), None)

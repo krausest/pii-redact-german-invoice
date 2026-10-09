@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.pii import PiiLabel, Span
-from backend.rules.keep import is_specialty_line, kept_lines, rejected
+from backend.rules.keep import is_specialty_line, kept_lines
 from tests.conftest import cell
 
 
@@ -73,28 +72,26 @@ def test_a_date_beside_a_name_is_not_kept_for_its_label():
     assert lines[1] not in kept_lines(lines)
 
 
-# -- what a kept line rejects -------------------------------------------------- #
-@pytest.mark.parametrize(
-    "source,keep,dropped",
-    [
-        ("rule DE_STREET", None, False),
-        ("presidio", None, False),
-        # a deterministic rule wins over every keep reason ...
-        ("rule DE_STREET", "item table", False),
-        ("labeled-value", "DATE", False),
-        ("rule ORG_LEGAL", "DIAG", False),
-        # ... except a legal form on the clearing house's name
-        ("rule ORG_LEGAL", "PVS", True),
-        # the model survives no kept line
-        ("presidio", "item table", True),
-        ("guard-omni", "DIAG", True),
-        # the memory reaches the table, a date or a diagnosis, not FACH or PVS
-        ("name-memory", "item table", False),
-        ("birthdate-memory", "DIAG", False),
-        ("name-memory", "FACH", True),
-        ("birthdate-memory", "PVS", True),
-    ],
-)
-def test_what_a_kept_line_rejects(source, keep, dropped):
-    span = Span(PiiLabel.PERSON, 0, 13, "Andrea Muster", source)
-    assert rejected(span, keep) is dropped
+# -- which reason wins --------------------------------------------------------- #
+def _diagnoses_over(line_text):
+    """A diagnosis label with a block under it whose second line is ``line_text``."""
+    return [
+        cell("Diagnosen:", 10, 120),
+        cell("1. Akute Bronchitis", 10, 142, width=250),
+        cell(line_text, 10, 164, width=250),
+    ]
+
+
+def test_a_line_keeps_its_own_reason_before_a_block_claims_it():
+    lines = _diagnoses_over("Datum")
+    assert kept_lines(lines)[lines[2]] == "DATE"
+
+
+def test_a_diagnosis_block_outranks_a_later_rule():
+    lines = _diagnoses_over("Muster Verrechnungsstelle")
+    assert kept_lines(lines)[lines[2]] == "DIAG"
+
+
+def test_the_item_table_outranks_every_rule():
+    lines = _diagnoses_over("2. Lumbago")
+    assert kept_lines(lines, table={lines[0]})[lines[0]] == "item table"

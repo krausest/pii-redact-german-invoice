@@ -40,6 +40,7 @@ below. It is a flag, not a marker, so it combines with either `-m` selection.
 | `test_rules_keep.py` | lines kept readable, and the candidates they reject |
 | `test_rules_birth_year.py` | which date is the birthdate, and the year printed over it |
 | `test_document.py` | joining a page into one text and mapping spans back to lines |
+| `test_detectors.py` | what each detector may still redact on a kept line |
 | `test_harvest.py` | the name and birthdate memory: what it learns, what it recalls |
 | `test_verdict.py` | the boxes of one page, in drawing order |
 | `test_windows.py` | classifying a long page in line-aligned windows |
@@ -62,8 +63,10 @@ per OCR line**:
 - `keep` — ≤ 10 %
 - `PARTIAL` — anything in between; matches neither expectation and needs a look
 
-Each verdict names its reason (`static-rule`, `labeled-value`, `name-memory`, `birthdate-memory`,
-`classifier`, or `overlap` for a neighbour's padding), so a diff shows what changed. Asserting `keep`
+Each verdict names its reason — the sources of the spans that redact the line (`rule SALUT`,
+`labeled-value`, `name-memory`, `birthdate-memory`, `presidio`, …), `overlap` for a neighbour's
+padding, or on a `keep` the keep reason — so a diff shows what changed. The reasons come from the
+page's `PageVerdict`, not from the trace text, so rewording the trace cannot break a snapshot. Asserting `keep`
 matters as much as `REDACT`: it catches over-redaction.
 
 ```bash
