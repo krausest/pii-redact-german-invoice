@@ -75,4 +75,4 @@ torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.uv]
 default-groups = ["dev", "guard-omni"]
-exclude-newer = "0 days"
+exclude-newer = "2 days"

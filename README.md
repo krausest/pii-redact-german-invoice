@@ -101,5 +101,5 @@ curl -X POST --data-binary @invoice.pdf -H "Content-Type: application/pdf" \
 ## License
 
 The source code is **MIT** ([`LICENSE`](LICENSE)). Third-party packages and models
-are listed in [`LICENSE.md`](LICENSE.md) — note that the **Docker image is
+are listed in [`docs/LICENSE.md`](docs/LICENSE.md) — note that the **Docker image is
 AGPL-3.0** because it bundles PyMuPDF.

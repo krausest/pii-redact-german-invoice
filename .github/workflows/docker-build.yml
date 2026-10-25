@@ -43,8 +43,9 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No explicit `latest`: flavor latest=auto adds it to non-prerelease
+          # semver tags, so a release's version tags and `latest` share one digest.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             # the branch name as a moving tag, i.e. `docker pull …:main`
             type=ref,event=branch
             type=sha,prefix=,format=short
