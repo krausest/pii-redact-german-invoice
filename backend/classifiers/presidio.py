@@ -212,7 +212,7 @@ def _keep(results, line: str, tokens: Sequence[_Token], trace: Trace) -> list:
         if r.entity_type == "PERSON":
             names = _name_token_count(line, tokens, r.start, r.end)
             if names < 2:
-                trace.add("      Ignoring PERSON with only %d name token(s)", names)
+                trace.add("      Ignoring PERSON %r: only %d name token(s)", line[r.start : r.end], names)
                 continue
         kept.append(r)
     return kept

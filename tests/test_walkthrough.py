@@ -1,4 +1,6 @@
-"""A guided tour of the detection code, from one regex up to a whole page.
+"""A guided tour of the detection code on one line: each rule regex, presidio
+raw and filtered, and the two side by side. What the page then decides (keep
+reasons, memory, boxes) lives in ``PageRedactor.decide`` and is not walked here.
 
 Each test is one step and prints what it sees — run with
 ``uv run pytest tests/test_walkthrough.py -s``. Loads spaCy, hence ``slow``.
@@ -14,6 +16,7 @@ from backend.classifiers.presidio import PII_ENTITIES, PresidioClassifier
 from backend.document import Document
 from backend.models import Line
 from backend.pii import PiiLabel
+from backend.redactor import _read
 from backend.rules import rule_spans
 from backend.rules.line_rules import STATIC_RULES
 from backend.rules.patterns import DE_PLZ_CITY, DE_STREET
@@ -47,17 +50,16 @@ LINE = "Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen"
 
 def test_01_rules_and_presidio_on_one_line(presidio):
     lines = [Line(LINE, 0, 0, 700, 27)]
-    # line:   'Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen'
-    doc = Document(lines)
+    # As the pipeline builds it: reading order, blank lines dropped, item table.
+    doc: Document = _read(lines, regions=[])
     text = doc.text
-    # text: 'Dr. Andrea Muster, Musterstraße 7, 12345 Musterhausen', range: (0, 53)
     print(f"\nline:   {LINE!r}\nrange:  {doc.range_of(lines[0])}")
 
     _header("A  backend.rules: every STATIC_RULES regex on its own")
     for rule in STATIC_RULES:
         print(f"  {rule.name:13} {[m.group() for m in rule.pattern.finditer(LINE)]}")
 
-    _header("B  rule_spans -> Span (per line, score 1.0)")
+    _header("B  rule_spans -> Span (A + labeled values + street above city, score 1.0)")
     rules = rule_spans(doc)
     for s in rules:
         print(f"  [{s.start:2}:{s.end:2}] {s.label:8} {s.text!r:22} {s.source}")
@@ -101,7 +103,9 @@ def test_01_rules_and_presidio_on_one_line(presidio):
     for s in model:
         print(f"  [{s.start:2}:{s.end:2}] {s.label:8} {s.text!r:22} {s.source} {s.score:.2f}")
 
-    _header("F  side by side (what the pipeline merges for this line)")
+    # The pipeline does not pair spans up: it sifts each detector's by keep
+    # reason, concatenates them per line, and any survivor blacks the line.
+    _header("F  side by side: rules vs presidio, grouped by range")
     for start, end in sorted({(s.start, s.end) for s in rules + model}):
         by = lambda spans: ", ".join(  # noqa: E731
             f"{s.label}/{s.source}" for s in spans if (s.start, s.end) == (start, end)

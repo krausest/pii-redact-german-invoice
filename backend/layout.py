@@ -273,10 +273,15 @@ def document_order(lines: list[Line], regions: list[LayoutRegion]) -> list[Line]
     """
     per_region = lines_by_region(lines, regions)
     parents = region_parents(regions)
+    # Invert the parent pointers: children[p] lists the regions nested directly
+    # in regions[p]; roots are the top-level regions. All entries index regions.
     children: list[list[int]] = [[] for _ in regions]
     roots: list[int] = []
-    for r, parent in enumerate(parents):
-        (children[parent] if parent is not None else roots).append(r)
+    for child, parent in enumerate(parents):
+        if parent is None:
+            roots.append(child)
+        else:
+            children[parent].append(child)
 
     def read(items: list[_BandItem]) -> list[Line]:
         out: list[Line] = []

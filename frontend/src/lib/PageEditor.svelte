@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from './i18n.svelte'
-  import type { Box, Page, Tool } from './types'
+  import type { Box, Page, Selection, Tool } from './types'
 
   let {
     page,
@@ -10,7 +10,7 @@
   }: {
     page: Page
     tool: Tool
-    selected: number | null
+    selected: Selection | null
     onadd: (box: Box) => void
   } = $props()
 
@@ -65,10 +65,10 @@
     }
   }
 
-  function onRectClick(i: number, e: MouseEvent) {
+  function onRectClick(kind: Selection['kind'], index: number, e: MouseEvent) {
     if (tool === 'select') {
       e.stopPropagation()
-      selected = i
+      selected = { kind, index }
     }
   }
 </script>
@@ -95,17 +95,20 @@
         width={box[2] - box[0]}
         height={box[3] - box[1]}
         class="box"
-        class:selected={selected === i}
-        onclick={(e) => onRectClick(i, e)}
+        class:selected={selected?.kind === 'box' && selected.index === i}
+        onclick={(e) => onRectClick('box', i, e)}
       />
     {/each}
     {#each page.notes as note, i (i)}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <rect
         x={note.box[0]}
         y={note.box[1]}
         width={note.box[2] - note.box[0]}
         height={note.box[3] - note.box[1]}
         class="note"
+        class:selected={selected?.kind === 'note' && selected.index === i}
+        onclick={(e) => onRectClick('note', i, e)}
       />
       <text
         x={note.box[0]}
@@ -165,10 +168,16 @@
     stroke-dasharray: 5 3;
     vector-effect: non-scaling-stroke;
   }
-  /* A note is printed by the server as it stands; it is shown, not edited. */
+  /* A note's text is printed by the server as it stands: it can be deleted, not edited. */
   .note {
     fill: #000;
-    pointer-events: none;
+    cursor: pointer;
+  }
+  .note.selected {
+    stroke: #ef4444;
+    stroke-width: 2.5;
+    stroke-dasharray: 5 3;
+    vector-effect: non-scaling-stroke;
   }
   .note-text {
     fill: #fff;
