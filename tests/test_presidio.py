@@ -10,8 +10,28 @@ Only pure functions are exercised; no model loads.
 
 from __future__ import annotations
 
-from backend.classifiers.presidio import _drop_wrapped
+from types import SimpleNamespace
+from typing import NamedTuple
+
+from backend.classifiers.presidio import _drop_wrapped, _keep, _name_fragments, _name_token_count
 from backend.pii import PiiLabel, Span
+from backend.trace import Trace
+
+
+class _Tok(NamedTuple):
+    idx: int
+    text: str
+    pos_: str
+
+
+def _tokens(text: str, tags: dict[str, str]) -> list[_Tok]:
+    """Whitespace/comma tokens of ``text``, each tagged from ``tags`` (default NOUN)."""
+    out, pos = [], 0
+    for word in text.replace(",", " , ").split():
+        idx = text.index(word, pos)
+        out.append(_Tok(idx, word, tags.get(word, "PUNCT" if word == "," else "NOUN")))
+        pos = idx + len(word)
+    return out
 
 
 def _span(label, text):
@@ -57,3 +77,62 @@ def test_importing_a_classifier_module_does_not_load_its_runtime():
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert out.stdout.strip() == "[]", out.stdout
+
+
+# -- how many name tokens a PERSON span is worth ------------------------------ #
+def _count(text: str, name: str, tags: dict[str, str]) -> int:
+    start = text.index(name)
+    return _name_token_count(text, _tokens(text, tags), start, start + len(name))
+
+
+def test_two_proper_nouns_are_a_name_whatever_ocr_did_to_a_capital():
+    assert _count("loanna Muster", "loanna Muster", {"loanna": "PROPN", "Muster": "PROPN"}) == 2
+
+
+def test_a_capitalized_noun_across_a_comma_counts_as_the_other_half():
+    """NER returns one half of "Muster,Andrea"; the tagger calls the surname a noun."""
+    assert _count("Muster,Andrea", "Andrea", {"Andrea": "PROPN"}) == 2
+
+
+def test_a_comma_ending_the_line_above_lends_nothing():
+    assert _count("Summe,\nAndrea", "Andrea", {"Andrea": "PROPN"}) == 1
+
+
+def test_known_noise_tokens_are_no_name():
+    assert _count("Faktor Muster", "Faktor Muster", {"Faktor": "PROPN", "Muster": "PROPN"}) == 1
+
+
+# -- a PERSON span across a line break ---------------------------------------- #
+def test_a_name_split_by_a_wrap_keeps_both_halves():
+    text = "Andrea\nMuster"
+    tokens = _tokens(text, {"Andrea": "PROPN", "Muster": "PROPN"})
+    assert _name_fragments(text, tokens, 0, len(text)) == [(0, 6), (7, 13)]
+
+
+def test_a_name_running_on_into_the_next_row_is_cut_back():
+    text = "Andrea Muster\nLeistungsdatum"
+    tokens = _tokens(text, {"Andrea": "PROPN", "Muster": "PROPN"})
+    assert _name_fragments(text, tokens, 0, len(text)) == [(0, 13)]
+
+
+# -- results dropped before they become spans --------------------------------- #
+def _result(entity_type: str, text: str, part: str) -> SimpleNamespace:
+    start = text.index(part)
+    return SimpleNamespace(entity_type=entity_type, start=start, end=start + len(part))
+
+
+def test_a_date_or_a_bare_digit_run_is_no_phone_number():
+    text = "09.07.2026 4711 0911 123456"
+    results = [
+        _result("PHONE_NUMBER", text, "09.07.2026"),
+        _result("PHONE_NUMBER", text, "4711"),
+        _result("PHONE_NUMBER", text, "0911 123456"),
+    ]
+    kept = _keep(results, text, _tokens(text, {}), Trace())
+    assert [text[r.start : r.end] for r in kept] == ["0911 123456"]
+
+
+def test_a_person_needs_two_name_tokens():
+    text = "Orientierende Testuntersuchung"
+    kept = _keep([_result("PERSON", text, text)], text, _tokens(text, {}), Trace())
+    assert kept == []

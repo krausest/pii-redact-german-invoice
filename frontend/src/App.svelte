@@ -14,7 +14,7 @@
   import { Documents, isUnsaved, type Doc } from './lib/documents.svelte'
   import { zipFiles } from './lib/zip'
   import { DEFAULT_DPI, DEFAULT_UNWARP } from './lib/types'
-  import type { Box, OutputFormat, Tool } from './lib/types'
+  import type { Box, OutputFormat, Selection, Tool } from './lib/types'
   import { version as appVersion } from '../package.json'
 
   /** Everything uploaded lives here, in this tab only — the server keeps nothing. */
@@ -25,8 +25,8 @@
   let zipping = $state(false)
   let errorMsg = $state<string | null>(null)
   let tool = $state<Tool>('select')
-  /** The selected *box* on the current page. */
-  let selected = $state<number | null>(null)
+  /** The selected box or note on the current page. */
+  let selected = $state<Selection | null>(null)
 
   /** What a new upload starts with: the settings last chosen, on any document. */
   let defaults = $state<AnalyzeOptions>({
@@ -213,7 +213,7 @@
   function addBox(box: Box) {
     if (!doc || !page) return
     page.boxes.push(box)
-    selected = page.boxes.length - 1
+    selected = { kind: 'box', index: page.boxes.length - 1 }
     tool = 'select'
     doc.boxesEdited = true
     doc.downloaded = false
@@ -221,7 +221,8 @@
 
   function deleteSelected() {
     if (!doc || !page || selected == null) return
-    page.boxes.splice(selected, 1)
+    const list = selected.kind === 'box' ? page.boxes : page.notes
+    list.splice(selected.index, 1)
     selected = null
     doc.boxesEdited = true
     doc.downloaded = false

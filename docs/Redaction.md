@@ -24,9 +24,9 @@ flowchart TD
 |---|---|---|
 | Entry points | [`api.py`](../backend/api.py), [`cli.py`](../backend/cli.py) | read input, apply EXIF orientation, validate options ([`options.py`](../backend/options.py)) |
 | Service | [`service.py`](../backend/service.py) | framework-free core: `run_redaction` → `Redaction` (pages + `is_pdf`) → `produce_output` |
-| Pipeline | [`pipeline.py`](../backend/pipeline.py) | `RedactionPipeline`: `unwarp`, `read_lines`, `regions`, `compute_boxes`, `apply_boxes` |
+| Pipeline | [`pipeline.py`](../backend/pipeline.py), [`redactor.py`](../backend/redactor.py), [`detectors.py`](../backend/detectors.py), [`registry.py`](../backend/registry.py) | `RedactionPipeline`: `unwarp`, `read_lines`, `regions`, `compute_boxes`, `apply_boxes`; `PageRedactor` decides a page; each `Detector` proposes spans; `ModelRegistry` builds the models |
 | Construction | [`factory.py`](../backend/factory.py) | `build_pipeline(config)`: OCR backend, layout detector, lazy classifier and unwarper factories |
-| Detectors | [`rules.py`](../backend/rules.py), [`classifiers/`](../backend/classifiers/), [`harvest.py`](../backend/harvest.py), [`layout.py`](../backend/layout.py) | rules, model, name memory, layout regions |
+| Detectors | [`rules/`](../backend/rules/), [`classifiers/`](../backend/classifiers/), [`harvest.py`](../backend/harvest.py), [`layout.py`](../backend/layout.py) | rules, model, name memory, layout regions |
 | Shared types | [`models.py`](../backend/models.py), [`pii.py`](../backend/pii.py) | `Line`, `Box`; `Span` and `PiiLabel` — the one format every detector returns |
 | Diagnostics | [`trace.py`](../backend/trace.py) | the debug trace (`?debug=true`, `PII_LOG_LEVEL=DEBUG`) |
 
@@ -61,25 +61,28 @@ The heart of the pipeline, per page:
 
 1. **Reading order.** `layout.document_order` groups lines by region (nested regions
    stay together) and orders them in bands, so the two columns of a letter do not
-   interleave. `document.build_document` joins the lines into **one text** with a
+   interleave. A `document.Document` joins the lines into **one text** with a
    newline per line and remembers each line's character range.
-2. **Item table and kept lines.** `rules.item_table_indices` finds the fee table
+2. **Item table and kept lines.** `rules.item_table_lines` finds the fee table
    geometrically: lines with German amounts form rows, rows cluster by vertical
    gap, and a cluster of ≥ 2 rows spans the table. Inside it the classifier's
    findings are ignored — a two-word service text looks exactly like a name to a
-   model — while the rules still apply. `rules.keep_indices` extends that to every
+   model — while the rules still apply. The `Document` carries the table as
+   `item_table`, so the rules read it from there. `rules.kept_lines` extends that to every
    line that must stay readable ([below](#what-stays-readable)).
-3. **Pass one — what each line says.**
+3. **Candidates, then rejection.**
    - `rules.rule_spans` runs the deterministic rules per line (see below).
    - The classifier analyses the whole page text once and returns `Span`s;
-     `document.spans_to_lines` maps them back to lines.
-4. **Pass two — name memory.** `harvest.harvest` collects surnames named by pass one
+     `Document.per_line` maps them back to lines.
+   - Each detector's `admits` drops the candidates a kept line does not allow
+     ([below](#what-stays-readable)); the trace lists them as `rejected …`.
+4. **Name memory.** `Memory.learn` collects surnames named by the surviving spans
    (patient label, title, salutation, birth-date line, or a classifier `PERSON`
-   outside the item table). `harvest.name_spans` then marks every other line on the
-   page that mentions one of them (except specialty and clearing-house lines). Label
+   outside the item table). `Memory.recall` then marks every other line on the
+   page that mentions one of them; these candidates pass the memory detector's `admits`. Label
    words on an evidence line (`Datum`, `Geburtsdatum`, `Patient`, …) are never taken
    for a name. A birth-date line (birth label, `geb.`/`*` mark, `Surname,Forename
-   date` row) also teaches its *date*: `harvest.birthdate_spans` marks every other
+   date` row) also teaches its *date*, and `Memory.recall` marks every other
    line holding that date in any spelling (`01.02.1980`, `1.2.1980`, `01.02.80`).
    A line with several dates teaches none, and a classifier's birthdate never
    feeds it. The memory (`harvest.Memory`) is shared across the pages of a
@@ -93,8 +96,8 @@ The heart of the pipeline, per page:
 6. **Region and signature boxes.** `layout.region_boxes` and
    `layout.signature_boxes` add the only boxes not tied to an OCR line
    ([details](#layout-regions)).
-7. **Trace.** `trace.trace_page` writes the commentary: region, its text, each line
-   with its spans and verdict.
+7. **Trace.** Steps 2–6 produce one `verdict.PageVerdict`; `trace.trace_page` narrates it:
+   region, its text, each line with its spans and verdict.
 
 ### 5. Output
 
@@ -105,7 +108,9 @@ report (`build_report`). `POST /api/assemble` reuses only the last part —
 
 ## Deterministic rules
 
-All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pattern.
+All in [`rules/`](../backend/rules/): the regexes in `patterns.py`, the one-line rules in
+`line_rules.py`; a trace line `rule NAME` names the pattern. Why a pattern has its
+shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
 
 | Rule | Catches |
 |---|---|
@@ -113,6 +118,8 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 | `PATIENT_NAME` | a person label with the name on the same line (`Patient: Muster, Andrea`) |
 | `TITLE_NAME` | a title and name (`Dr. med. Max Mustermann`) |
 | `NAME_DATE` | `Surname,Forename DD.MM.YY` — an unlabelled patient table row |
+| `BIRTH_MARK` | a birthdate with its mark on the line (`geb. 13.08.1954`, `*13.08.1954`) |
+| `REF_MERGED` | an invoice number with its label on the line (`Rg.-Nr. 4711`, `Rechnung 2026-0815`) |
 | `DE_STREET`, `DE_PLZ_CITY` | German street + number (suffix glued or as its own word: `Musterstr. 1`, `Musterer Straße 12`), postcode + city |
 | `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
 | `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
@@ -120,15 +127,13 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
 | `TAX_NUMBER` | a tax number in slash groups (`123/456/78901`, `123/4567/8901`), whatever its label |
 | labelled values | spatial label ↔ value pairs (below) |
 
-**Labelled values** (`labeled_value_indices`) pair a label with a value in a
+**Labelled values** (`rules/labeled.py`) pair a label with a value in a
 *different* OCR line by geometry:
 
-- **Birth date** — the date beside a `Geburtsdatum`/`geboren`/`Geb.Dat.` label, the
-  dates in a column under a `Geburtsdatum` header, or one line with label and date
-  (`geb. 01.02.1980`, `*01.02.1980`). A bare `geb.` is not a label (it also means
-  *Gebühren*), and treatment dates stay visible. A date in the birth label's row
-  that an invoice or treatment date label owns more closely (left of it in the row,
-  or as the header above it) is not a birthdate.
+- **Birth date** — the date nearest beside a `Geburtsdatum`/`geboren`/`Geb.Dat.`
+  label, or nearest under a `Geburtsdatum` header (the one-line form `geb. 01.02.1980`,
+  `*01.02.1980` is the static rule `BIRTH_MARK`). A bare `geb.` is not a label (it
+  also means *Gebühren*), and treatment dates stay visible.
 - **Identifiers** — insurance, patient, case, admission, member and contract numbers
   next to their label.
 - **References** — invoice, receipt and customer number (`Rechnungsnummer`,
@@ -142,14 +147,18 @@ All in [`rules.py`](../backend/rules.py); a trace line `rule NAME` names the pat
   label may name its holder (`IK Musterstelle`).
 - **Phone in its own cell** — the number beside or under a `Telefon:`/`Fax:` cell.
 - **Names** — `Patient:` alone in its cell makes the name in the next cell (or the
-  column below) a value, plus the person's details under it (e.g. the birth date
-  under the name).
+  cell below) a value, and a date alone directly under that name a birth date.
+
+Each label claims one value: itself when the line holds one too, else the nearest
+in its row, else — for a label alone in its cell — the nearest beneath it, never
+inside the item table.
 
 ## What stays readable
 
-`rules.keep_indices` names the lines that must survive — the classifier and the
-whole-region boxes leave them alone, and a deterministic rule still wins (a kept
-line carrying a street or a labelled birthdate is redacted all the same):
+`rules.kept_lines` names the lines that must survive. On a kept line
+the classifier's spans are dropped (`ModelDetector.admits`), and the whole-region boxes leave it
+alone; a deterministic rule still wins (a kept line carrying a street or a labelled
+birthdate is redacted all the same):
 
 | Reason | Lines |
 |---|---|
@@ -159,8 +168,9 @@ line carrying a street or a labelled birthdate is redacted all the same):
 | `PVS` | the clearing house's name (`…verrechnung…`, `Abrechnungsstelle`, `PVS`, `Rechenzentrum`); `ORG_LEGAL` yields there, its address and bank data do not |
 | `FACH` | a line made only of specialty words (`Facharzt für Orthopädie`); any other word — a practice name — and it is not kept |
 
-The name memory skips `PVS` and `FACH` lines too. The trace and the replay
-snapshots show the reason as `-> keep (DIAG)`.
+The name memory is rejected on `PVS` and `FACH` lines too, and `ORG_LEGAL` on
+`PVS` lines. The trace and the replay snapshots show the reason as
+`-> keep (DIAG)`.
 
 ## Classifiers
 
@@ -171,9 +181,29 @@ Selectable per request (`?classifier=`); the rules above run with either.
 | `presidio` *(default)* | spaCy `de_core_news_lg` NER + regex recognizers | entities `PERSON`, `DE_ADDRESS`, `EMAIL_ADDRESS`, `PHONE_NUMBER` (DE only), `IBAN_CODE`, `BIC_CODE`, `KONTO`, `CREDIT_CARD`. `LOCATION` is excluded. A `PERSON` needs ≥ 2 proper-noun tokens; pattern matches that only exist because two lines were joined are dropped |
 | `guard-omni` *(opt-in: `[engine].guard_omni`, not in the Docker image)* | `hivetrace/gliner-guard-omni` (GLiNER2, zero-shot) | curated label set ([`pii.py`](../backend/pii.py)); long pages are analysed in windows; no source for identifiers or salutations — the rules cover those |
 
+**guard-omni's label set** was cut by measuring each of GLiNER2's labels over the
+48-document corpus — spans produced, lines it alone redacts:
+
+- `title` and `alias` are out: they feed the name memory, where a wrong entry
+  blackens every recurrence. 9 of 12 `title` tokens were no names ("Prof",
+  "Kollegen", "Geschäftsführer"); `alias` harvested a BIC.
+- `passport`/`national_id`/`document_id` are out, so `ID` has no model source:
+  they drew 11 boxes alone, one an invoice number. Only the label beside a value
+  tells an insurance number from an invoice number — the rules' job.
+- `media` and `region` never were the only reason for a box.
+- `product` stays: the lines only it redacted were specialty lines and
+  clearing-house names, which are now kept.
+- There is no label for a salutation; `SALUT` covers it with either classifier.
+
+**Windows** (`classifiers/windows.py`) are about cost, not truncation: the
+encoder has no 512-token cap (an entity at 99 % of a 1600-word page is found),
+but attention cost is quadratic — 204 words 0.2 s, 804 words 0.9 s, 1604 words
+3.4 s, 3200 words over ten minutes. The longest corpus page has 345 words, one
+window.
+
 Both implement `Classifier.spans(text, trace) -> list[Span]`
 ([`classifiers/base.py`](../backend/classifiers/base.py)). The pipeline builds each
-one on first use and keeps it (`RedactionPipeline.classifier`).
+one on first use and keeps it (`ModelRegistry.classifier`).
 
 ## Layout regions
 
@@ -220,11 +250,16 @@ backend/
   cli.py          batch CLI (flags = /api/redact query parameters)
   service.py      framework-free core shared by API and CLI
   pipeline.py     RedactionPipeline: unwarp / read_lines / regions / compute_boxes / apply_boxes
+  redactor.py     PageRedactor: one page from lines to PageVerdict
+  detectors.py    rules, classifier, memory as span sources, and what each may redact on a kept line
+  registry.py     ModelRegistry: classifiers and unwarper, built on first use
+  verdict.py      PageVerdict: what one page decided, and its boxes
   factory.py      builds the pipeline from the config
   config.py       config.toml schema and env overrides
   options.py      query and body validation
-  document.py     page text <-> lines (build_document, spans_to_lines)
-  rules.py        deterministic German rules, labelled values, item table
+  document.py     page text <-> lines (Document)
+  rules/          deterministic German rules: patterns, one-line rules, labelled
+                  values, postal block, item table, kept lines, birth year
   harvest.py      name memory
   layout.py       layout regions: reading order, region boxes, debug image
   pii.py          Span, PiiLabel and the label maps of both classifiers
@@ -233,7 +268,7 @@ backend/
   pdf.py          rasterize / assemble PDFs
   unwarp.py       UVDoc dewarping
   ocr/            PaddleOCR backend
-  classifiers/    presidio, guard-omni
+  classifiers/    presidio, guard-omni, windows (long pages in parts)
 frontend/         web UI (see Frontend)
 docker/warmup.py  bakes the models into the Docker image
 tests/            see Testing

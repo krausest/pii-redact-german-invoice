@@ -26,7 +26,10 @@ and the fast test suite never loads torch.
 
 from __future__ import annotations
 
-from backend.document import windowed
+from collections.abc import Iterator
+from typing import NamedTuple
+
+from backend.classifiers.windows import windowed
 from backend.pii import GUARD_OMNI_LABELS, Span
 from backend.trace import Trace
 
@@ -66,7 +69,7 @@ class GuardOmniClassifier:
         self._threshold = threshold
 
     def spans(self, text: str, trace: Trace) -> list[Span]:
-        # Windowed for cost, not for truncation — see `document.windowed`. Every
+        # Windowed for cost, not for truncation — see `classifiers.windows`. Every
         # page in this corpus is a single window, so this is the same one call
         # it looks like; a dense page nobody has sent yet becomes several short
         # ones instead of one quadratically expensive one.
@@ -84,31 +87,42 @@ class GuardOmniClassifier:
             include_spans=True,
         )
         spans: list[Span] = []
-        for label, raw, start, end, score in _entities(result):
-            mapped = GUARD_OMNI_LABELS.get(label)
+        for entity in _entities(result):
+            mapped = GUARD_OMNI_LABELS.get(entity.label)
             if mapped is None:
                 # Not an error: the vocabulary above is what we asked for, and
                 # this is where a label we decided not to act on is dropped.
-                trace.add("      Ignoring %s %r: label not mapped", label, raw)
+                trace.add("      Ignoring %s %r: label not mapped", entity.label, entity.text)
                 continue
             spans.append(
                 Span(
                     label=mapped,
-                    start=start,
-                    end=end,
-                    text=text[start:end],
+                    start=entity.start,
+                    end=entity.end,
+                    text=text[entity.start : entity.end],
                     source="guard-omni",
-                    score=score,
+                    score=entity.score,
                 )
             )
             if trace.wanted:
-                trace.add("      match %s %.2f %r [guard-omni]", label, score, raw)
+                trace.add(
+                    "      match %s %.2f %r [guard-omni]", entity.label, entity.score, entity.text
+                )
         return spans
 
 
-def _entities(result: object):
-    """Flatten one ``extract_entities`` response into
-    ``(label, text, start, end, score)`` tuples.
+class _Entity(NamedTuple):
+    """One entity of an ``extract_entities`` response."""
+
+    label: str
+    text: str
+    start: int
+    end: int
+    score: float
+
+
+def _entities(result: object) -> Iterator[_Entity]:
+    """Flatten one ``extract_entities`` response into entities.
 
     Defensive because the shape genuinely varies: ``entities`` comes back as a
     dict *or* as a one-element list holding one, and each label's value is a
@@ -129,7 +143,7 @@ def _entities(result: object):
             start, end = item.get("start"), item.get("end")
             if start is None or end is None:
                 continue
-            yield (
+            yield _Entity(
                 label,
                 item.get("text", ""),
                 int(start),

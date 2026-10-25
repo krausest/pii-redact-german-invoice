@@ -28,11 +28,9 @@ stopped firing or a neighbouring box moved off the line it used to cover.
 Asserting ``keep`` is the point of the exercise: without it the suite could not
 tell a working pipeline from one that blackens the page.
 
-**The reasons are read back out of the trace**, not returned from
-``compute_boxes``. :mod:`backend.trace` already narrates every decision, so
-parsing it here makes that narration the contract — if its format drifts, the
-replay notices immediately (:func:`_outcome` compares each header against
-:func:`format_line`) instead of silently reporting different reasons.
+**The reasons come from the page's** :class:`~backend.verdict.PageVerdict`,
+the same object the trace narrates: the trace is presentation only, and changing
+its wording cannot break a snapshot.
 
 **No OCR, no unwarp, no layout pass.** The pipeline is built with an OCR backend
 that raises if called and with ``layout=None``: the whole-region pass reads its
@@ -70,6 +68,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image
@@ -80,6 +79,7 @@ from backend.harvest import Memory
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace, format_line
+from backend.verdict import PageVerdict
 
 # A line counts as redacted at 90% covered and as kept at 10%. The gap is
 # deliberate: a line nothing meant to touch, but which a neighbour's padding
@@ -137,18 +137,6 @@ _PAGE_RE = re.compile(r"^=== page (\d+)(?: \((\d+)x(\d+)\))? ===$")
 _LINE_RE = re.compile(r"^line @\((-?\d+),(-?\d+) (\d+)x(\d+) conf=(\S+)\): (.+)$")
 _VERDICT_RE = re.compile(r"^\s+-> (REDACT|keep|PARTIAL)\b(.*)$")
 _REASON_RE = re.compile(r"\(([^)]*)\)\s*$")
-# A span line in the trace: `PERSON 'Max Mustermann' [presidio 0.85]`. Only the
-# source is read back — the label and the score are for a human, the source is
-# what a snapshot diff needs to say *which* detector went quiet.
-_SPAN_RE = re.compile(r"^[A-Z_]+ .* \[(.+?) \d+\.\d+\]$")
-# Why a line was spared: `-> keep (item table)`, `-> keep (DIAG)`, ...
-_KEEP_RE = re.compile(r"^-> keep \((.+)\)$")
-
-
-# `format_line` lives in backend.trace, next to the code that emits it — the
-# format string used to be written out twice, here and in the pipeline, with a
-# runtime check in `_outcome` guarding against the two drifting apart. One
-# producer removes the whole class of problem.
 
 
 def _parse_line(text: str) -> Line | None:
@@ -254,8 +242,8 @@ def coverage(line: Line, boxes: Sequence[Box]) -> float:
     mask = np.zeros((line.height, line.width), dtype=bool)
     for box in boxes:
         x0, y0 = max(line.left, box.x0), max(line.top, box.y0)
-        x1 = min(line.left + line.width, box.x1)
-        y1 = min(line.top + line.height, box.y1)
+        x1 = min(line.right, box.x1)
+        y1 = min(line.bottom, box.y1)
         if x0 >= x1 or y0 >= y1:
             continue
         mask[y0 - line.top : y1 - line.top, x0 - line.left : x1 - line.left] = True
@@ -292,52 +280,26 @@ def build_replay_pipeline(config: Config, classifier: Classifier) -> RedactionPi
     )
 
 
-def _outcome(page: Page, boxes: list[Box], trace_text: str) -> Outcome:
-    """Pair the trace's per-line span sources with the effective coverage.
+def _outcome(page: Page, verdict: PageVerdict) -> Outcome:
+    """Each line's effective verdict: how much ink its pixels got, and from whom.
 
-    The trace is region-first, so the lines arrive in *reading* order while the
-    page's lines are in OCR order. They are paired by their header text rather
-    than by position — the header carries the pixel box, so it identifies the
-    line unambiguously and the ordering difference stays an implementation
-    detail of the trace."""
-    sources: dict[str, list[str]] = {}
-    kept_why: dict[str, str] = {}
-    header: str | None = None
-    for raw in trace_text.splitlines():
-        stripped = raw.strip()
-        if stripped.startswith("line @"):
-            header = stripped
-            sources.setdefault(header, [])
-        elif header is None:
-            continue
-        elif (k := _KEEP_RE.match(stripped)) is not None:
-            kept_why[header] = k.group(1)
-        elif (m := _SPAN_RE.match(stripped)) is not None:
-            if m.group(1) not in sources[header]:
-                sources[header].append(m.group(1))
-
-    # compute_boxes skips blank lines silently, so pair against the same subset.
-    spoken = [ln for ln in page.lines if ln.text.strip()]
-    if len(spoken) != len(sources):
-        raise RuntimeError(f"page {page.index}: {len(spoken)} lines but {len(sources)} traced")
-
-    all_boxes = tuple(boxes)
+    The reason is the source of every span that redacts the line, joined with
+    "+", or ``overlap`` when only a neighbour's padded box reached it; on a kept
+    line, why it was spared."""
+    boxes = verdict.boxes
     verdicts: list[Verdict] = []
-    for line in spoken:
+    for line in page.lines:
+        if not line.text.strip():
+            continue  # compute_boxes skips blank lines
         header = format_line(line)
-        if header not in sources:
-            raise RuntimeError(f"line missing from the trace:\n  {header}")
-        reason = "+".join(sources[header]) or None
-        cov = coverage(line, all_boxes)
+        sources = list(dict.fromkeys(s.source for s in verdict.found.get(line, [])))
+        cov = coverage(line, boxes)
         if cov <= UNTOUCHED:
-            verdicts.append(
-                Verdict(header, "keep", kept_why.get(header), cov)
-            )
+            why = None if line in verdict.found else verdict.keep.get(line)
+            verdicts.append(Verdict(header, "keep", why, cov))
             continue
-        # Ink on a line nothing flagged can only be a neighbour's padded box
-        # spilling over — the whole-region pass does not run here.
-        source = reason or "overlap"
-        verdicts.append(Verdict(header, "REDACT" if cov >= COVERED else "PARTIAL", source, cov))
+        reason = "+".join(sources) or "overlap"
+        verdicts.append(Verdict(header, "REDACT" if cov >= COVERED else "PARTIAL", reason, cov))
     return Outcome(index=page.index, verdicts=tuple(verdicts))
 
 
@@ -350,17 +312,17 @@ def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
     memory = Memory()
     outcomes: list[Outcome] = []
     for page in pages:
-        trace = Trace(collect=True)
+        trace = Trace()
         # Blank, but the recorded size: compute_boxes reads only width/height off
         # it here, since `lines` is supplied and the code pass is off.
         canvas = Image.new("RGB", (page.width, page.height))
-        boxes = pipeline.compute_boxes(
+        verdict = pipeline.compute_verdict(
             canvas,
             lines=list(page.lines),
             memory=memory,
             trace=trace,
         )
-        outcomes.append(_outcome(page, boxes, trace.collected or ""))
+        outcomes.append(_outcome(page, verdict))
     return outcomes
 
 
@@ -451,7 +413,20 @@ def _ocr_files(targets: list[str]) -> list[Path]:
     return files
 
 
-def _plan_dumps(targets: list[str], out_dir: str | None) -> tuple[list[tuple[Path, Path]], int]:
+class _Dump(NamedTuple):
+    sample: Path
+    out: Path
+
+
+@dataclass
+class _DumpPlan:
+    """The samples to dump, and whether planning already had to skip one."""
+
+    dumps: list[_Dump]
+    status: int
+
+
+def _plan_dumps(targets: list[str], out_dir: str | None) -> _DumpPlan:
     """Pair each sample with the dump it will be written to.
 
     Worked out *before* the models load, because a whole corpus is the normal
@@ -462,7 +437,7 @@ def _plan_dumps(targets: list[str], out_dir: str | None) -> tuple[list[tuple[Pat
     paying for its OCR."""
     from backend.cli import collect_input_files
 
-    plan: list[tuple[Path, Path]] = []
+    dumps: list[_Dump] = []
     claimed: dict[Path, Path] = {}
     status = 0
     for sample in collect_input_files(targets):
@@ -472,10 +447,10 @@ def _plan_dumps(targets: list[str], out_dir: str | None) -> tuple[list[tuple[Pat
             status = 1
             continue
         claimed[out] = sample
-        plan.append((sample, out))
-    for directory in {out.parent for _, out in plan}:
+        dumps.append(_Dump(sample, out))
+    for directory in {dump.out.parent for dump in dumps}:
         directory.mkdir(parents=True, exist_ok=True)
-    return plan, status
+    return _DumpPlan(dumps, status)
 
 
 def _read_pages(sample: Path, config: Config) -> list[Image.Image]:
@@ -505,15 +480,16 @@ def _dump(targets: list[str], out_dir: str | None) -> int:
     from backend.config import load_config
     from backend.factory import build_pipeline
 
-    plan, status = _plan_dumps(targets, out_dir)
-    if not plan:
+    plan = _plan_dumps(targets, out_dir)
+    status = plan.status
+    if not plan.dumps:
         print("no samples found")
         return 1
 
     config = load_config()
     pipeline = build_pipeline(config)
     ocr_backend = config.engine.ocr_backend
-    for sample, out in plan:
+    for sample, out in plan.dumps:
         try:
             pages = _read_pages(sample, config)
             text = [

@@ -13,38 +13,20 @@ them to run.
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.classifiers.base import Classifier
-from backend.document import build_document, spans_to_lines
+from backend.harvest import Memory
+from backend.layout import LayoutRegion, PaddleLayoutDetector, assign_lines, draw_layout_debug
 from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
-from backend.layout import (
-    LayoutRegion,
-    PaddleLayoutDetector,
-    assign_lines,
-    document_order,
-    draw_layout_debug,
-    region_boxes,
-    signature_boxes,
-    subtract,
-)
-from backend.harvest import Memory, birthdate_spans, harvest, harvest_birthdates, name_spans
-from backend.pii import Span
-from backend.rules import birth_year_note, item_table_indices, keep_indices, rule_spans
+from backend.redactor import PageRedactor
+from backend.registry import ModelRegistry
 from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
-
-
-def _rect(line: Line) -> Box:
-    return Box(line.left, line.top, line.left + line.width, line.top + line.height)
-
-
-def _inside(inner: Box, outer: Box) -> bool:
-    return outer.x0 <= inner.x0 and outer.y0 <= inner.y0 and inner.x1 <= outer.x1 and inner.y1 <= outer.y1
+from backend.verdict import PageVerdict
 
 
 def _print_note(draw: ImageDraw.ImageDraw, box: Box) -> None:
@@ -74,87 +56,32 @@ class RedactionPipeline:
         default_classifier: str | None = None,
     ) -> None:
         self._ocr = ocr
-        # Two ways in, one store. `classifier=` is the direct one — a test hands
-        # a stub, `backend.replay` hands the one classifier it wants — and it
-        # registers under the name a request would ask for, or under "" when
-        # nobody named it. `classifier_factories=` is what `build_pipeline`
-        # passes: a classifier per selectable name, none of them built yet,
-        # because a worker that is never asked for guard-omni must not pay a
-        # gigabyte of weights for the option.
-        self._factories = dict(classifier_factories or {})
-        self._classifiers: dict[str, Classifier] = {}
-        self._default = default_classifier or ""
-        if classifier is not None:
-            self._classifiers[self._default] = classifier
-        self._unwarper = unwarper
-        self._unwarper_factory = unwarper_factory
+        self._models = ModelRegistry(
+            classifier, classifier_factories, default_classifier, unwarper, unwarper_factory
+        )
+        self._redactor = PageRedactor(padding)
         self._fill = fill
-        self._padding = padding
         self._unwarp_enabled = unwarp_enabled
-        # Whole-region redaction is off unless a detector is supplied — `None` is
-        # both "no model" and "don't run it", so there is no second flag to
-        # keep in sync. `build_pipeline` decides from `redaction.redact_regions`.
+        # No detector: no layout regions, and no whole-region redaction.
         self._layout = layout
-        # Guards both lazy model builds below. The unwarper's was an unguarded
-        # race, safe only because `api.max_concurrent_per_worker` defaults to 1;
-        # a second one of the same kind would be repeating a known bug rather
-        # than deciding anything, and building a model twice wastes a gigabyte.
-        self._build_lock = threading.Lock()
 
     # -- primitives -------------------------------------------------------- #
     def unwarp(self, image: Image.Image) -> Image.Image:
-        """Flatten a photographed page. The unwarper is built on first use (it
-        loads a model), so a process that is only ever asked for ``unwarp=false``
-        never pays for it."""
-        if self._unwarper is None:
-            with self._build_lock:
-                if self._unwarper is None:
-                    if self._unwarper_factory is None:
-                        raise RuntimeError("unwarp requested but no DocUnwarper is configured")
-                    self._unwarper = self._unwarper_factory()
-        return self._unwarper.unwarp(image.convert("RGB"))
+        """Flatten a photographed page. The unwarper is built on first use."""
+        return self._models.unwarper().unwarp(image.convert("RGB"))
 
     def classifier(self, name: str | None = None) -> Classifier:
-        """The classifier called ``name`` (``None`` = this process's default),
-        built on first use like the unwarper and kept for the process.
-
-        The cost of the lazy build is a cold start on the first request that
-        names a model nobody has asked for yet; what it buys is that selecting a
-        classifier per request does not mean every worker holding every model.
-
-        A pipeline built with a single ``classifier=`` and no factories ignores
-        the name: there is nothing to choose between, so the name is not a
-        choice. That is what `backend.replay` and every test double are — they
-        hand over one classifier on purpose, and refusing the request's default
-        name would only mean repeating it at each of those call sites.
-        """
-        if not self._factories and len(self._classifiers) == 1:
-            return next(iter(self._classifiers.values()))
-        key = self._default if name is None else name
-        found = self._classifiers.get(key)
-        if found is not None:
-            return found
-        with self._build_lock:
-            if key not in self._classifiers:
-                factory = self._factories.get(key)
-                if factory is None:
-                    raise RuntimeError(f"no classifier configured under {key!r}")
-                self._classifiers[key] = factory()
-        return self._classifiers[key]
+        """The classifier called ``name`` (``None``: the default), built on first use."""
+        return self._models.classifier(name)
 
     def read_lines(self, image: Image.Image) -> list[Line]:
-        """The OCR lines of ``image`` — the text ``compute_boxes`` classifies.
-        Exposed for :mod:`backend.replay`, which freezes that text to a file and
-        replays every later stage against it; pass lines back via ``lines=`` to
-        skip a second OCR pass."""
+        """The OCR lines of ``image``; pass them back via ``lines=`` to skip a
+        second OCR pass."""
         return self._ocr.lines(image)
 
     def regions(self, image: Image.Image) -> list[LayoutRegion]:
-        """The layout regions of ``image`` — empty when no detector is
-        configured. The sibling of :meth:`read_lines`, and there for the same
-        reason: it is the other model pass over a page, and a caller that needs
-        the regions for itself (``--debug-layout``) should not make the detector
-        run twice. Pass them back via ``regions=``."""
+        """The layout regions of ``image`` (none without a detector); pass them
+        back via ``regions=`` to skip a second detection."""
         return self._layout.regions(image) if self._layout is not None else []
 
     def compute_boxes(
@@ -166,147 +93,35 @@ class RedactionPipeline:
         regions: list[LayoutRegion] | None = None,
         classifier: str | None = None,
     ) -> list[Box]:
-        """Boxes to redact, in the pixel space of ``image`` (no unwarp): one per
-        flagged OCR line, plus — when configured — the whole-region boxes the
-        layout detector earns (see :mod:`backend.layout`), which are the only
-        ones not tied to a line.
+        """Boxes to redact, in the pixel space of ``image``; see :meth:`compute_verdict`."""
+        return self.compute_verdict(image, lines, memory, trace, regions, classifier).boxes
 
-        ``lines`` skips the OCR call when the caller already holds
-        :meth:`read_lines` output for this exact ``image``, and ``regions`` does
-        the same for :meth:`regions`. Both are the *same* image's — a page read
-        at one size and boxed at another is the one way to get a silently
-        misplaced rectangle.
+    def compute_verdict(
+        self,
+        image: Image.Image,
+        lines: list[Line] | None = None,
+        memory: Memory | None = None,
+        trace: Trace | None = None,
+        regions: list[LayoutRegion] | None = None,
+        classifier: str | None = None,
+    ) -> PageVerdict:
+        """What the page decides: which lines go black and why, and the boxes.
 
-        ``memory`` is the accumulator of names and birthdates: what this page
-        names is added *to the passed* :class:`~backend.harvest.Memory`, so a
-        caller looping over a document's pages shares one and a surname labeled
-        on page 1 is redacted bare on page 2. The carry is forward-only — a name first seen on page 2 does not
-        re-redact page 1 — which suffices because the labeled occurrence leads.
-        ``None`` keeps the memory page-local.
-
-        ``classifier`` names which model half to run (``None`` = the process
-        default). It is the one option here that selects a *model*, which is why
-        it arrives as a name rather than an object: the pipeline owns the
-        registry and builds on first use, so a caller can offer the choice
-        without every worker holding every model.
-
-        ``trace`` collects the per-line commentary — why each box exists — for a
-        caller that was asked for it (``?debug=true``). Omitting it still logs
-        everything at DEBUG; a :class:`Trace` that collects nothing is the same
-        code path, not a second one."""
+        ``lines`` and ``regions`` must be this very image's, if given. ``memory``
+        carries names and birthdates from page to page (forward only); ``None``
+        keeps it page-local. ``classifier`` names the model to run. ``trace``
+        collects why each box exists."""
         if lines is None:
             lines = self._ocr.lines(image)
         trace = trace or Trace()
         if regions is None:
             regions = self.regions(image)
-
-        # Reading order first: everything below reads the page as one text, and
-        # that text is only worth classifying if the layout put each block's
-        # lines next to their own neighbours rather than the next column's.
-        spoken = [i for i, ln in enumerate(lines) if ln.text.strip()]
-        order = [i for i in document_order(lines, regions) if lines[i].text.strip()]
-        ordered = [lines[i] for i in order]
-        text, bounds = build_document(ordered)
-
-        # The item table: the deterministic rules and the name memory run there
-        # as everywhere else, the classifier does not (see item_table_indices).
-        # Computed on the *unordered* lines because it is a purely geometric
-        # pass over pixel boxes — reading order neither helps nor hinders it.
-        # The kept lines (dates, diagnoses, specialty, clearing house) extend
-        # the same exemption and are cut out of the region boxes. The name
-        # memory still reaches a diagnosis; a line made only of specialty or
-        # clearing-house words holds no name for it to find.
-        table_idx = item_table_indices(lines)
-        keep = keep_indices(lines, table_idx)
-
-        # --- pass one: what each line carries on its own ------------------- #
-        # Two span sources, kept apart on purpose: inside the item table the
-        # classifier's findings are dropped and the rules' are not. A fee table
-        # is a grid of two-word service texts, which in German look exactly like
-        # a forename/surname pair to a model — while a rule that fires there
-        # (a labeled patient line) is still evidence.
-        rules_by_line = spans_to_lines(
-            rule_spans(ordered, bounds, self._table_in_order(order, table_idx)), bounds
-        )
-        model = self.classifier(classifier)
-        model_by_line = spans_to_lines(model.spans(text, trace), bounds)
-        hits: list[list[Span]] = [
-            [s for s in rules_by_line[pos] if keep.get(i) != "PVS" or s.source != "rule ORG_LEGAL"]
-            + ([] if i in keep else model_by_line[pos])
-            for pos, i in enumerate(order)
-        ]
-
-        # --- pass two: the names pass one named, everywhere else ----------- #
-        # Harvested from the *surviving* hits, so a model's find inside the item
-        # table cannot spread across the document the way it was just stopped
-        # from spreading down its own line. `names` is the caller's accumulator
-        # when there is one, mutated in place: a name labeled on page 1 is caught
-        # bare on page 2.
         memory = memory if memory is not None else Memory()
-        for name, source in harvest(ordered, hits).items():
-            if name not in memory.names:
-                trace.add("    name memory %r <- %r", name, source)
-                memory.names.add(name)
-        # A birth line teaches its date as well, never its label.
-        for key, (printed, source) in harvest_birthdates(ordered, hits).items():
-            if key not in memory.birthdates:
-                trace.add("    birthdate memory %r <- %r", printed, source)
-                memory.birthdates.add(key)
-        memory_by_line = spans_to_lines(
-            name_spans(ordered, bounds, memory.names)
-            + birthdate_spans(ordered, bounds, memory.birthdates),
-            bounds,
+        verdict = self._redactor.decide(
+            image.width, lines, regions, self.classifier(classifier), memory, trace
         )
-        for pos, i in enumerate(order):
-            if keep.get(i) not in ("FACH", "PVS"):
-                hits[pos] += memory_by_line[pos]
-
-        pad = self._padding
-        boxes: list[Box] = []
-        notes: dict[int, Box] = {}
-        found = {i: hits[pos] for pos, i in enumerate(order) if hits[pos]}
-        redacted = set(found)
-        # A kept line clips its neighbours' padding, never their own box: the
-        # padding only guards against a tight OCR box, the kept line is content.
-        holes = [_rect(lines[i]) for i in keep if i not in redacted]
-        for i in order:
-            if i not in found:
-                continue
-            line = lines[i]
-            padded = Box(
-                line.left - pad,
-                line.top - pad,
-                line.left + line.width + pad,
-                line.top + line.height + pad,
-            )
-            parts = subtract(padded, holes)
-            if parts != [padded]:
-                own = _rect(line)
-                parts = [p for p in parts if not _inside(p, own)] + [own]
-            boxes.extend(parts)
-            note = birth_year_note(line, found[i])
-            if note is not None:
-                notes[i] = note
-
-        # No gate on the detector: without one there are no regions, and
-        # `region_boxes` over none is empty.
-        region_hits = region_boxes(lines, regions, redacted, pad, set(keep))
-        signatures = signature_boxes(lines, image.width, pad)
-        trace_page(
-            trace, lines, regions, order, spoken, found, keep, region_hits, signatures, notes
-        )
-        boxes.extend(box for _, box, _ in region_hits)
-        boxes.extend(box for _, box in signatures)
-        # Last, so no box drawn after a note covers its text.
-        boxes.extend(notes.values())
-        return boxes
-
-    @staticmethod
-    def _table_in_order(order: list[int], table_idx: set[int]) -> set[int]:
-        """``table_idx`` re-expressed as positions in ``order``, which is what
-        the rules see: they are handed the reordered lines, so an index into the
-        original list would point at the wrong row."""
-        return {pos for pos, i in enumerate(order) if i in table_idx}
+        trace_page(trace, verdict)
+        return verdict
 
     def apply_boxes(
         self,
@@ -337,12 +152,8 @@ class RedactionPipeline:
         lines: list[Line] | None = None,
         regions: list[LayoutRegion] | None = None,
     ) -> Image.Image | None:
-        """``None`` when no layout detector is configured; otherwise ``image``
-        copied with the detected regions outlined and labeled and each line
-        group's bounding box drawn — what ``--debug-layout`` writes to
-        ``<stem>_layout.jpg``. It shows what the detector *saw*, not which
-        regions then got blackened; only ``backend/cli.py``
-        calls it."""
+        """``image`` with the detected regions and line groups outlined, for
+        ``--debug-layout``; ``None`` without a layout detector."""
         if self._layout is None:
             return None
         if lines is None:
@@ -350,4 +161,4 @@ class RedactionPipeline:
         if regions is None:
             regions = self.regions(image)
         text_lines = [ln for ln in lines if ln.text.strip()]
-        return draw_layout_debug(image, text_lines, assign_lines(text_lines, regions), regions)
+        return draw_layout_debug(image, assign_lines(text_lines, regions), regions)

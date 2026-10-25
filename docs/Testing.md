@@ -6,7 +6,7 @@ uv sync --group dev                 # pytest + httpx
 uv run pytest -m 'not slow'         # fast suite: no model loads, ~2 s
 uv run pytest -m slow               # end-to-end with the real models (minutes)
 uv run pytest --regression          # + OCR-replay snapshots (loads the classifier only)
-uv run pytest tests/test_rules.py   # one file
+uv run pytest tests/test_rules_patterns.py   # one file
 ```
 
 Frontend: `cd frontend && npm run check` (type check; also fails on a missing
@@ -34,10 +34,18 @@ below. It is a flag, not a marker, so it combines with either `-m` selection.
 | `test_concurrency.py` | the per-worker concurrency limit |
 | `test_factory.py` | engine construction, lazy classifier build |
 | `test_pipeline.py` | `compute_boxes`: rules, item table, name memory, regions together |
-| `test_rules.py` | the deterministic German patterns, as one table of cases |
+| `test_rules_patterns.py` | the deterministic German patterns: line cases and why each pattern has its shape |
+| `test_rules_labeled.py` | a label in one cell, its value in another |
+| `test_rules_postal.py` | a street without suffix above its ZIP+city line |
+| `test_rules_keep.py` | lines kept readable, and the candidates they reject |
+| `test_rules_birth_year.py` | which date is the birthdate, and the year printed over it |
 | `test_document.py` | joining a page into one text and mapping spans back to lines |
+| `test_detectors.py` | what each detector may still redact on a kept line |
+| `test_harvest.py` | the name and birthdate memory: what it learns, what it recalls |
+| `test_verdict.py` | the boxes of one page, in drawing order |
+| `test_windows.py` | classifying a long page in line-aligned windows |
 | `test_layout.py` | line-to-region assignment, reading order, region boxes |
-| `test_presidio.py` | presidio-specific guards (wrapped spans, PERSON token count) |
+| `test_presidio.py` | presidio-specific guards (wrapped spans, PERSON token count, name fragments, phone false hits) |
 | `test_trace.py` | the debug trace collector |
 | `test_pdf.py` | PDF rasterization and assembly (PyMuPDF only) |
 | `test_integration.py`, `test_redact_integration.py` | *slow* — end-to-end with real models |
@@ -55,8 +63,10 @@ per OCR line**:
 - `keep` — ≤ 10 %
 - `PARTIAL` — anything in between; matches neither expectation and needs a look
 
-Each verdict names its reason (`static-rule`, `labeled-value`, `name-memory`, `birthdate-memory`,
-`classifier`, or `overlap` for a neighbour's padding), so a diff shows what changed. Asserting `keep`
+Each verdict names its reason — the sources of the spans that redact the line (`rule SALUT`,
+`labeled-value`, `name-memory`, `birthdate-memory`, `presidio`, …), `overlap` for a neighbour's
+padding, or on a `keep` the keep reason — so a diff shows what changed. The reasons come from the
+page's `PageVerdict`, not from the trace text, so rewording the trace cannot break a snapshot. Asserting `keep`
 matters as much as `REDACT`: it catches over-redaction.
 
 ```bash

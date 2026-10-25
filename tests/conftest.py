@@ -12,6 +12,11 @@ from backend.models import Box, Line
 from backend.pdf import assemble_pdf
 
 
+def cell(text: str, left: int, top: int, width: int = 100, height: int = 20) -> Line:
+    """An OCR line at a position, for the geometric rules."""
+    return Line(text=text, left=left, top=top, width=width, height=height)
+
+
 def make_image_bytes(fmt: str = "PNG", size=(64, 48), color=(200, 200, 200)) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", size, color).save(buf, format=fmt)

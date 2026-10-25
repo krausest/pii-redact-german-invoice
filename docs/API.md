@@ -117,7 +117,8 @@ A region of a blackened-whole type (`footer`, `image`, …) ends with
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,
-`birthdate-memory`, or the classifier (`presidio`, `guard-omni`). A `name-memory`
+`birthdate-memory`, or the classifier (`presidio`, `guard-omni`). A span a kept
+line rejected prints the same way after `rejected `. A `name-memory`
 or `birthdate-memory` span quotes the remembered name or date it matched; each
 enters the memory with a page-level line `name memory 'Muster' <- '<line>'` or
 `birthdate memory '01.02.1980' <- '<line>'` before the regions. Lines in no region follow under

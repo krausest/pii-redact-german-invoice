@@ -37,7 +37,7 @@ from PIL import Image, ImageOps
 from backend.config import load_config
 from backend.factory import build_pipeline
 from backend.options import RedactOptions
-from backend.service import EXTENSION_BY_MEDIA_TYPE, Redaction, produce_output, run_redaction
+from backend.service import Redaction, produce_output, run_redaction
 
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf"}
 _REDACTED = re.compile(r".*_(redacted|layout).*")
@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
             # The same bytes POST /api/redact would return, so the extension is the
             # one that belongs to the media type service chose — never re-derived.
-            media_type, body = produce_output(redaction, opts)
+            output = produce_output(redaction, opts)
         except (OSError, ValueError) as e:
             # Unreadable file, or a rasterization guard (too many pages, oversized
             # page). One bad file must not abort the rest of the batch.
@@ -221,8 +221,8 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if args.debug_layout:
             write_layout_debug_images(redaction, f, opts)
-        out_path = f.with_name(f.stem + "_redacted" + EXTENSION_BY_MEDIA_TYPE[media_type])
-        out_path.write_bytes(body)
+        out_path = f.with_name(f.stem + "_redacted" + output.kind.extension)
+        out_path.write_bytes(output.data)
         print(f"Redacted {f.name} -> {out_path.name}")
     return 1 if failed else 0
 

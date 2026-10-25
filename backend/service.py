@@ -6,7 +6,7 @@
 * :func:`assemble` — page images plus boxes in, one file out. No models: it fills
   rectangles and packages the result, which is why a client can safely send back
   pages a human has reviewed.
-* :func:`produce_output` — a :class:`Redaction` in, ``(media_type, bytes)`` out:
+* :func:`produce_output` — a :class:`Redaction` in, an :class:`Output` out:
   the redacted file, or (``json_output``) the serialized report describing it.
   Both callers hand the result straight to their transport, so the CLI writes
   exactly the bytes the API returns.
@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from PIL import Image
@@ -36,20 +37,29 @@ from backend.pdf import assemble_pdf, encode_jpeg, rasterize_pdf
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace
 
-# The image media types we accept on input. Output images are always JPEG.
-FORMAT_BY_MEDIA_TYPE = {"image/png": "PNG", "image/jpeg": "JPEG"}
-MEDIA_TYPE_BY_FORMAT = {v: k for k, v in FORMAT_BY_MEDIA_TYPE.items()}
-PDF_MEDIA_TYPE = "application/pdf"
-JPEG_MEDIA_TYPE = MEDIA_TYPE_BY_FORMAT["JPEG"]
-JSON_MEDIA_TYPE = "application/json"
+# The PIL formats of the images we accept on input. Output images are always JPEG.
+IMAGE_FORMATS = frozenset({"PNG", "JPEG"})
 
-# What to call a file holding each of the three things we can produce. The CLI
-# names its outputs from this, so it never re-derives "PDF in → PDF out".
-EXTENSION_BY_MEDIA_TYPE = {
-    PDF_MEDIA_TYPE: ".pdf",
-    JPEG_MEDIA_TYPE: ".jpg",
-    JSON_MEDIA_TYPE: ".json",
-}
+
+class FileKind(Enum):
+    """A kind of file we read or produce: its media type and its extension. The
+    CLI names its outputs from this, so it never re-derives "PDF in → PDF out"."""
+
+    PDF = ("application/pdf", ".pdf")
+    JPEG = ("image/jpeg", ".jpg")
+    JSON = ("application/json", ".json")
+
+    def __init__(self, media_type: str, extension: str) -> None:
+        self.media_type = media_type
+        self.extension = extension
+
+
+@dataclass(frozen=True)
+class Output:
+    """A produced file: what it is, and its bytes."""
+
+    kind: FileKind
+    data: bytes
 
 
 @dataclass
@@ -179,8 +189,8 @@ def assemble(
     pages: list[Image.Image],
     boxes: list[list[Box]],
     opts: AssembleOptions,
-) -> tuple[str, bytes]:
-    """Fill ``boxes`` on ``pages`` and package them. Returns ``(media_type, bytes)``.
+) -> Output:
+    """Fill ``boxes`` on ``pages`` and package them.
 
     The boxes for a page are in that page image's own pixel space — this never
     dewarps or re-detects, so the pixels filled are exactly the pixels the caller
@@ -191,22 +201,24 @@ def assemble(
 
     filled = [pipeline.apply_boxes(image, page_boxes) for image, page_boxes in zip(pages, boxes)]
     if opts.format == "pdf":
-        return PDF_MEDIA_TYPE, assemble_pdf(filled, opts.jpeg_quality, opts.dpi)
-    return JPEG_MEDIA_TYPE, encode_jpeg(filled[0], opts.jpeg_quality)
+        return Output(FileKind.PDF, assemble_pdf(filled, opts.jpeg_quality, opts.dpi))
+    return Output(FileKind.JPEG, encode_jpeg(filled[0], opts.jpeg_quality))
 
 
-def render_document(redaction: Redaction, opts: RedactOptions) -> tuple[str, bytes]:
+def render_document(redaction: Redaction, opts: RedactOptions) -> Output:
     """The redacted pages as one file, of the same kind that came in: a PDF for a
     PDF (even a one-page one), else a JPEG. Images always come back as JPEG."""
     if redaction.is_pdf:
-        return PDF_MEDIA_TYPE, assemble_pdf(
-            [r.redacted for r in redaction.pages], opts.jpeg_quality, opts.pdf_dpi
-        )
-    return JPEG_MEDIA_TYPE, encode_jpeg(redaction.pages[0].redacted, opts.jpeg_quality)
+        pages = [r.redacted for r in redaction.pages]
+        return Output(FileKind.PDF, assemble_pdf(pages, opts.jpeg_quality, opts.pdf_dpi))
+    return Output(FileKind.JPEG, encode_jpeg(redaction.pages[0].redacted, opts.jpeg_quality))
 
 
-def _artifact(media_type: str, data: bytes) -> dict[str, str]:
-    return {"content_type": media_type, "data": base64.b64encode(data).decode("ascii")}
+def _artifact(output: Output) -> dict[str, str]:
+    return {
+        "content_type": output.kind.media_type,
+        "data": base64.b64encode(output.data).decode("ascii"),
+    }
 
 
 def build_report(redaction: Redaction, opts: RedactOptions) -> dict[str, Any]:
@@ -236,19 +248,19 @@ def build_report(redaction: Redaction, opts: RedactOptions) -> dict[str, Any]:
                 "height": r.height,
                 "boxes": [box.as_list() for box in r.boxes if box.text is None],
                 "notes": [{"box": box.as_list(), "text": box.text} for box in r.boxes if box.text],
-                "image": _artifact(JPEG_MEDIA_TYPE, encode_jpeg(r.image, opts.jpeg_quality)),
+                "image": _artifact(Output(FileKind.JPEG, encode_jpeg(r.image, opts.jpeg_quality))),
             }
             for r in redaction.pages
         ],
-        "redacted": _artifact(*render_document(redaction, opts)),
+        "redacted": _artifact(render_document(redaction, opts)),
     }
     if redaction.debug is not None:
         report["debug"] = redaction.debug
     return report
 
 
-def produce_output(redaction: Redaction, opts: RedactOptions) -> tuple[str, bytes]:
-    """What the caller hands to its transport: ``(media_type, bytes)``.
+def produce_output(redaction: Redaction, opts: RedactOptions) -> Output:
+    """What the caller hands to its transport.
 
     The ``json_output`` fork lives here rather than in each caller, so the CLI
     writes exactly the bytes the endpoint returns — and so the report, which
@@ -256,5 +268,5 @@ def produce_output(redaction: Redaction, opts: RedactOptions) -> tuple[str, byte
     of the CPU-bound work rather than on the event loop.
     """
     if opts.json_output:
-        return JSON_MEDIA_TYPE, json.dumps(build_report(redaction, opts)).encode()
+        return Output(FileKind.JSON, json.dumps(build_report(redaction, opts)).encode())
     return render_document(redaction, opts)

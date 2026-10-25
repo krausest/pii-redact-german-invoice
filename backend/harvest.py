@@ -1,71 +1,46 @@
-"""The name memory: what one page said about a person, applied to the rest of it.
+"""The name and birthdate memory: what one page said about a person, applied
+everywhere else.
 
-A surname recurs on lines nothing else catches — a subject line, a greeting
-split across OCR lines, a footer signature. No detector reaches those on their
-own: a lone capitalized token is not a name to a model, and no pattern describes
-it either. So the page is read **twice**. Pass one lets every detector say what
-it found; pass two blackens every bare recurrence of the names those findings
-name.
+A surname recurs on lines no detector reaches on its own (a subject line, a
+greeting, a footer). So a page is read twice: the detectors find what they find,
+then every bare recurrence of a name or birthdate they witnessed is redacted too.
 
-What changed with the whole-document switch is *who may be the witness*. The
-memory used to be fed by five regexes, because a rule was the only detector
-whose word could be trusted without a feedback loop. Now every detector speaks
-the same :class:`~backend.pii.Span`, so the evidence is a **label**, not a
-pattern — which is what lets the classifier's find on the first occurrence of a
-name redact the third one, in a footer, that it did not tag itself.
-
-Only ``PERSON`` counts. ``ADDRESS``, ``ORG``, ``CONTACT``, ``BANK`` and ``ID``
-name a place, a company or a number: a page's own street recurring in its
-letterhead is not a person to look for, and a bare number matching an amount
-elsewhere would blacken an unrelated figure.
-
-**Evidence comes in two kinds, and they harvest differently** — measured, not
-assumed:
-
-* A *pattern* names a person on this line, so the whole line is harvested. The
-  label rules stop after a single name part by construction ("Patient
-  Mustermann" never reaches the "Max" behind it), and OCR glues the pair around
-  its label in either order, so the surname alone would be half a memory.
-* A *span* says where the person is, so only the span is harvested. Reading the
-  whole line around a model's find is what a letterhead punishes: one line
-  carries a managing director's name **and** the company's, and taking the line
-  whole made the company a remembered "name" that then blackened body text,
-  a legal footnote and a reference number elsewhere on the page (measured on the
-  corpus: 12 new boxes, 9 of them wrong). The span carries the name and stops.
+A *pattern* (patient label, title, salutation, birth line) names a person on its
+line, so the whole line is harvested. A classifier *span* says where the person
+is, so only the span is harvested: a letterhead line holds a person and a company.
+Only ``PERSON`` spans count.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
+from backend.document import Document
 from backend.models import Line
-from backend.pii import PiiLabel, Span
-from backend.rules import (
+from backend.pii import BIRTHDATE_MEMORY, LABELED_VALUE, NAME_MEMORY, PiiLabel, Span
+from backend.rules.birth_year import DateKey, birth_date_in, date_key
+from backend.rules.patterns import (
     BIRTH_LABEL,
     BIRTH_MARK,
     DATE_KEEP_LABEL,
     DATE_RE,
     NAME_DATE,
+    NAME_TOKEN,
     PATIENT_NAME,
     PERSON_LABEL_CELL,
     SALUT,
     TITLE_NAME,
-    birth_date_in,
-    date_key,
 )
+from backend.trace import Trace
 
-# A name-shaped token: starts with a capital, at least four letters, and may be
-# all caps — a lab prints its patient row "MUSTER, MAX", and a name only
-# harvestable in one of its two casings is half a memory. The length floor drops
-# both OCR shrapnel and most non-name capitalized words; a three-letter forename
-# ("Max") is not worth the false-positive surface, the surname is what recurs.
-_NAME_TOKEN = re.compile(r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß]{3,}\b")
+# Shorter forenames ("Max") are not worth the false hits; the surname is what recurs.
+_MIN_NAME_LENGTH = 4
 
-# Words that pass the shape test on evidence lines but are never names: the
-# labels and salutations themselves, their sentence dressing, months, and the
-# profession vocabulary that shares a letterhead line with a titled name.
+# Words on evidence lines that are never names: labels, salutations, months,
+# professions.
 _NAME_STOPWORDS = frozenset({
     "Sehr", "Geehrte", "Geehrter", "Geehrtes", "Herr", "Herrn", "Frau",
     "Fräulein", "Familie", "Eheleute", "Patient", "Patientin", "Patienten",
@@ -78,23 +53,15 @@ _NAME_STOPWORDS = frozenset({
     "Praxis", "Medizin", "Innere", "Allgemeinmedizin",
 })
 
-# Compared case-folded, because the tokens are not: an all-caps evidence line
-# ("PATIENT MUSTER, MAX") would otherwise harvest "PATIENT" as a name and go on
-# to redact every line mentioning a patient.
+# Compared case-folded: an all-caps letterhead must not teach "FACHARZT".
 _NAME_STOPWORDS_CF = frozenset(w.casefold() for w in _NAME_STOPWORDS)
 
-# The deterministic witness: a line matching one of these names a person outright,
-# whatever any span says. Every pattern but the last two also becomes a ``PERSON``
-# span; ``BIRTH_MARK`` and the spelled-out birth line ("Max Mustermann, geboren
-# am ...") only do so when the spatial label/value pass happens to pair them, and
-# a name is no less named when it does not.
+# A line matching one of these names a person outright, whatever any span says.
 _NAME_EVIDENCE = (PATIENT_NAME, TITLE_NAME, SALUT, BIRTH_MARK, NAME_DATE)
 
 
 def _is_label(token: str) -> bool:
-    """Whether ``token`` is itself a label the rules know ("Datum",
-    "Geburtsdatum", "Patientin") — an evidence line carries its label, and the
-    label is never the name."""
+    """Whether ``token`` is a label the rules know ("Datum", "Patientin")."""
     return bool(
         DATE_KEEP_LABEL.search(token)
         or BIRTH_LABEL.search(token)
@@ -103,38 +70,28 @@ def _is_label(token: str) -> bool:
 
 
 def _tokens(text: str) -> set[str]:
-    """The name-shaped tokens in ``text``, without the label vocabulary and the
-    stopwords (salutations, months, professions) — either would otherwise
-    redact every line that mentions one."""
+    """The name tokens in ``text`` (:data:`~backend.rules.patterns.NAME_TOKEN`),
+    long enough to learn, without labels and stopwords."""
     return {
-        tok
-        for tok in _NAME_TOKEN.findall(text)
-        if tok.casefold() not in _NAME_STOPWORDS_CF and not _is_label(tok)
+        part
+        for token in NAME_TOKEN.findall(text)
+        for part in token.split("-")  # each half of a double name recurs alone
+        if len(part) >= _MIN_NAME_LENGTH
+        and part.casefold() not in _NAME_STOPWORDS_CF
+        and not _is_label(part)
     }
 
 
-def harvest(lines: Sequence[Line], hits: Sequence[Sequence[Span]]) -> dict[str, str]:
-    """The names this page has named, from pass one's findings, each mapped to
-    the first line that named it — what the trace quotes as its source.
-
-    ``hits`` is index-aligned with ``lines``: the spans each line was found to
-    carry. See the module docstring for why a pattern harvests its whole line
-    and a span only itself.
-
-    Only spans that were allowed to *redact their own line* should be passed in.
-    A model hit inside the item table is dropped there because a German two-word
-    service text reads exactly like a forename/surname pair; letting it feed the
-    memory would spread that mistake across the whole document instead of
-    confining it to the one line it was already stopped on.
-    """
+def _harvest_names(doc: Document, hits: Mapping[Line, Sequence[Span]]) -> dict[str, str]:
+    """The names this page witnesses, each mapped to the first line naming it."""
     names: dict[str, str] = {}
-    for line, spans in zip(lines, hits):
+    for line in doc.lines:
         found: set[str] = set()
         if any(p.search(line.text) for p in _NAME_EVIDENCE) or (
             BIRTH_LABEL.search(line.text) and DATE_RE.search(line.text)
         ):
             found |= _tokens(line.text)
-        for span in spans:
+        for span in hits.get(line, []):
             if span.label is PiiLabel.PERSON:
                 found |= _tokens(span.text)
         for name in sorted(found):
@@ -143,18 +100,8 @@ def harvest(lines: Sequence[Line], hits: Sequence[Sequence[Span]]) -> dict[str, 
 
 
 def mentions_name(text: str, names: set[str]) -> str | None:
-    """The first harvested name the line contains as a whole word, in any
-    casing that still *looks* like a name — or ``None``.
-
-    Whole-word is what keeps "Allgemeine" from matching a Dr. Allgemein — the
-    word boundary does that work, not the letter case. Case is compared loosely
-    because one document prints the same person both ways ("Andrea Muster" in the
-    address block, "MUSTER, ANDREA" in the patient row), and a memory that holds
-    only the casing it first met is half a memory. What is still required is that
-    the occurrence *starts with a capital*: that is the line between a surname and
-    the ordinary German word it may collide with ("Klein" the person vs "klein
-    gedruckt"), and it is the reason this is not simply IGNORECASE.
-    """
+    """The first remembered name in ``text`` as a whole word, in any casing that
+    starts with a capital ("MUSTER" for "Muster", never "klein" for "Klein")."""
     for name in names:
         for m in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
             if m.group()[:1].isupper():
@@ -162,22 +109,13 @@ def mentions_name(text: str, names: set[str]) -> str | None:
     return None
 
 
-def name_spans(
-    lines: Sequence[Line], bounds: Sequence[tuple[int, int]], names: set[str]
-) -> list[Span]:
-    """Pass two: a whole-line span for every bare recurrence of a known name.
-
-    The line is taken whole rather than just the matched token because that is
-    what the box has always been — the recurrence is evidence about the line, and
-    a name printed on it is rarely the only thing worth losing. The span's text
-    is the name that matched, so the trace says which one.
-    """
+def _name_spans(doc: Document, names: set[str]) -> list[Span]:
+    """A whole-line span for every line mentioning a remembered name, quoting it."""
     spans: list[Span] = []
-    for i, line in enumerate(lines):
+    for line in doc.lines:
         name = mentions_name(line.text, names) if line.text.strip() else None
         if name is not None:
-            lo, hi = bounds[i]
-            spans.append(Span(PiiLabel.PERSON, lo, hi, name, "name-memory"))
+            spans.append(doc.whole_line(line, PiiLabel.PERSON, name, NAME_MEMORY))
     return spans
 
 
@@ -185,52 +123,68 @@ def name_spans(
 @dataclass
 class Memory:
     """What a document has said so far, carried from page to page: the names
-    and the birthdates (as :func:`~backend.rules.date_key`)."""
+    and the birthdates."""
 
     names: set[str] = field(default_factory=set)
-    birthdates: set[tuple[int, int, int]] = field(default_factory=set)
+    birthdates: set[DateKey] = field(default_factory=set)
+
+    def learn(self, doc: Document, hits: Mapping[Line, Sequence[Span]], trace: Trace) -> None:
+        """Remember the names and birthdates ``hits`` witness on this page.
+
+        Only spans that survived their line's keep reason may be passed: a model's
+        find in the item table would otherwise spread across the document."""
+        for name, source in _harvest_names(doc, hits).items():
+            if name not in self.names:
+                trace.add("    name memory %r <- %r", name, source)
+                self.names.add(name)
+        for key, witness in _harvest_birthdates(doc, hits).items():
+            if key not in self.birthdates:
+                trace.add("    birthdate memory %r <- %r", witness.printed, witness.line_text)
+                self.birthdates.add(key)
+
+    def recall(self, doc: Document) -> list[Span]:
+        """Whole-line spans for every line of ``doc`` mentioning a remembered name
+        or birthdate."""
+        return _name_spans(doc, self.names) + _birthdate_spans(doc, self.birthdates)
 
 
 def _is_birth_evidence(line: Line, spans: Sequence[Span]) -> bool:
-    """A deterministic witness that ``line`` holds a birthdate. A model's
-    DATE_OF_BIRTH does not count: taking a treatment date for one would black out
-    every repetition of it in the item table."""
+    """A deterministic witness that ``line`` holds a birthdate; a model's
+    DATE_OF_BIRTH is no witness (a treatment date would recur in the table)."""
     text = line.text
     return (
-        any(s.label is PiiLabel.DATE_OF_BIRTH and s.source == "labeled-value" for s in spans)
+        any(s.label is PiiLabel.DATE_OF_BIRTH and s.source == LABELED_VALUE for s in spans)
         or bool(BIRTH_MARK.search(text) or NAME_DATE.search(text))
         or bool(BIRTH_LABEL.search(text) and DATE_RE.search(text))
     )
 
 
-def harvest_birthdates(
-    lines: Sequence[Line], hits: Sequence[Sequence[Span]]
-) -> dict[tuple[int, int, int], tuple[str, str]]:
-    """The birthdates this page has named, each mapped to ``(date as printed,
-    the line that named it)``. Only the date is taken, never the label beside
-    it, and a line whose dates leave the birthdate open teaches none."""
-    found: dict[tuple[int, int, int], tuple[str, str]] = {}
-    for line, spans in zip(lines, hits):
-        if not _is_birth_evidence(line, spans):
+class Witness(NamedTuple):
+    """Where a remembered birthdate was learned: the date as printed, and its line."""
+
+    printed: str
+    line_text: str
+
+
+def _harvest_birthdates(doc: Document, hits: Mapping[Line, Sequence[Span]]) -> dict[DateKey, Witness]:
+    """The birthdates this page witnesses; a line whose dates leave the birthdate
+    open teaches none."""
+    found: dict[DateKey, Witness] = {}
+    for line in doc.lines:
+        if not _is_birth_evidence(line, hits.get(line, [])):
             continue
         match = birth_date_in(line.text)
         if match is not None:
-            found.setdefault(date_key(match.group()), (match.group(), line.text))
+            found.setdefault(date_key(match.group()), Witness(match.group(), line.text))
     return found
 
 
-def birthdate_spans(
-    lines: Sequence[Line],
-    bounds: Sequence[tuple[int, int]],
-    birthdates: set[tuple[int, int, int]],
-) -> list[Span]:
-    """A whole-line span for every line holding a remembered birthdate, in any
-    spelling of it; the span's text is the date as printed there."""
+def _birthdate_spans(doc: Document, birthdates: set[DateKey]) -> list[Span]:
+    """A whole-line span for every line holding a remembered birthdate."""
     spans: list[Span] = []
-    for i, line in enumerate(lines):
+    for line in doc.lines:
         for m in DATE_RE.finditer(line.text):
             if date_key(m.group()) in birthdates:
-                lo, hi = bounds[i]
-                spans.append(Span(PiiLabel.DATE_OF_BIRTH, lo, hi, m.group(), "birthdate-memory"))
+                spans.append(doc.whole_line(line, PiiLabel.DATE_OF_BIRTH, m.group(), BIRTHDATE_MEMORY))
                 break
     return spans

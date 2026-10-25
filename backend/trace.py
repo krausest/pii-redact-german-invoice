@@ -37,9 +37,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # only for the annotations below — no import cost at runtime
-    from backend.layout import LayoutRegion
-    from backend.models import Box, Line
-    from backend.pii import Span
+    from backend.models import Line
+    from backend.verdict import PageVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -98,18 +97,7 @@ def format_line(line: "Line") -> str:
     )
 
 
-def trace_page(
-    trace: Trace,
-    lines: list["Line"],
-    regions: list["LayoutRegion"],
-    order: list[int],
-    spoken: list[int],
-    found: dict[int, list["Span"]],
-    keep: dict[int, str],
-    region_hits: list[tuple[int, "Box", str]],
-    signatures: list[tuple[int, "Box"]],
-    notes: dict[int, "Box"],
-) -> None:
+def trace_page(trace: Trace, verdict: PageVerdict) -> None:
     """Narrate one page: every detected region, the text it contributed, the
     lines inside it with their spans and verdict, then the region's own verdict.
 
@@ -118,48 +106,48 @@ def trace_page(
     trace could never explain, and they are blackened on type alone, so leaving
     them out would hide the reason for a black rectangle nobody can account for.
 
-    ``order`` is the reading order the text was built in; the regions are
-    narrated in that same order, so the trace reads the way the classifier read
-    the page rather than the way the detector happened to emit its boxes.
-
-    ``keep`` names why a line was spared (``item table``, ``DATE``, ...), which
-    is what a ``-> keep (...)`` verdict quotes.
+    Lines are narrated in reading order, the way the classifier read the page
+    rather than the way the detector emitted its boxes.
     """
     from backend.layout import lines_by_region
 
-    per_region = lines_by_region(lines, regions)
-    rank = {i: pos for pos, i in enumerate(order)}
-    claimed = {i for group in per_region for i in group}
-    why_by_region = {r: why for r, _, why in region_hits}
-    signed = {i: box for i, box in signatures}
+    per_region = lines_by_region(verdict.lines, verdict.regions)
+    rank = {ln: pos for pos, ln in enumerate(verdict.reading)}
+    claimed = {ln for group in per_region for ln in group}
+    why_by_region = {hit.region: hit.label for hit in verdict.region_boxes}
+    signed = {sig.closing: sig.box for sig in verdict.signatures}
 
-    def narrate(idx: list[int], header: str) -> None:
+    def narrate(group: list[Line], header: str) -> None:
         trace.add("%s", header)
-        shown = sorted(idx, key=lambda i: rank.get(i, len(order)))
-        joined = " | ".join(lines[i].text for i in shown if lines[i].text.strip())
+        shown = sorted(group, key=lambda ln: rank.get(ln, len(verdict.reading)))
+        joined = " | ".join(ln.text for ln in shown if ln.text.strip())
         if joined:
             trace.add("  wholetext: %r", joined)
-        for i in shown:
-            if not lines[i].text.strip():
+        for ln in shown:
+            if not ln.text.strip():
                 continue
-            trace.add("  %s", format_line(lines[i]))
-            for span in found.get(i, []):
+            trace.add("  %s", format_line(ln))
+            for span in verdict.found.get(ln, []):
                 trace.add(
                     "      %s %r [%s %.2f]", span.label, span.text, span.source, span.score
                 )
-            if i in found:
+            for span in verdict.dropped.get(ln, []):
+                trace.add(
+                    "      rejected %s %r [%s %.2f]", span.label, span.text, span.source, span.score
+                )
+            if ln in verdict.found:
                 trace.add("      -> REDACT")
-                if i in notes:
-                    trace.add("      note %r", notes[i].text)
-            elif i in keep:
+                if ln in verdict.notes:
+                    trace.add("      note %r", verdict.notes[ln].text)
+            elif ln in verdict.keep:
                 # Why no classifier verdict was reported for this line.
-                trace.add("      -> keep (%s)", keep[i])
+                trace.add("      -> keep (%s)", verdict.keep[ln])
             else:
                 trace.add("      -> keep")
-            if i in signed:
-                trace.add("      signature %s", signed[i].as_list())
+            if ln in signed:
+                trace.add("      signature %s", signed[ln].as_list())
 
-    for r, region in enumerate(regions):
+    for r, region in enumerate(verdict.regions):
         why = why_by_region.get(r)
         narrate(
             per_region[r],
@@ -167,6 +155,6 @@ def trace_page(
         )
         trace.add("  -> region %s", f"REDACT ({why})" if why else "keep")
 
-    unclaimed = [i for i in spoken if i not in claimed]
+    unclaimed = [ln for ln in verdict.lines if ln.text.strip() and ln not in claimed]
     if unclaimed:
         narrate(unclaimed, "--- unclaimed lines ---")

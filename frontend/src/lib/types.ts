@@ -5,6 +5,12 @@ export type OutputFormat = 'pdf' | 'jpeg'
 /** [x0, y0, x1, y1] in the page image's own pixel space (matches the API). */
 export type Box = [number, number, number, number]
 
+/** What the editor has selected: an index into `Page.boxes` or `Page.notes`. */
+export interface Selection {
+  kind: 'box' | 'note'
+  index: number
+}
+
 /** Text the server prints white on its own black box — the birth year over a redacted birthdate. */
 export interface Note {
   box: Box

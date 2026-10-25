@@ -1,15 +1,9 @@
-"""Presidio classifier: spaCy German NER + custom regex recognizers.
+"""Presidio classifier: spaCy German NER plus custom regex recognizers, run over
+the whole page in reading order, so a name across a line wrap is one entity.
 
-Analyzes the **whole page at once**, in the reading order the layout hierarchy
-established (:func:`backend.layout.document_order`). It used to run per OCR line,
-for a reason that no longer holds: raw PaddleOCR order interleaves the page's
-columns, so a page-wide blob put unrelated blocks next to each other and the NER
-model missed names it recognized fine in isolation. Grouping the lines by region
-first removes that pollution — and buys back what per-line analysis could never
-do, which is to see an entity that spans a line wrap.
-
-Returns :class:`backend.pii.Span` objects rather than a per-line verdict, so the
-pipeline treats this and the deterministic rules alike.
+The guards here (``_drop_wrapped``, ``_keep``, ``_name_token_count``,
+``_name_fragments``) fix this classifier's own false hits; ``tests/test_presidio.py``
+pins each one.
 """
 
 from __future__ import annotations
@@ -18,13 +12,12 @@ import re
 from collections.abc import Sequence
 from typing import Protocol
 
-from backend.rules import DE_PLZ_CITY
+from backend.document import TextRange
+from backend.rules.patterns import DE_PLZ_CITY, DE_STREET
 from backend.pii import PRESIDIO_LABELS, PiiLabel, Span
 from backend.trace import Trace
 
-# Entities we treat as PII to redact. LOCATION is intentionally excluded: the NLP
-# model fires it on the letterhead ("e-mops", jurisdiction city, ...) and the
-# recipient's street/city is already covered precisely by DE_ADDRESS.
+# LOCATION is excluded: it fires on letterhead words; DE_ADDRESS covers addresses.
 PII_ENTITIES = [
     "PERSON",
     "IBAN_CODE",
@@ -39,58 +32,29 @@ PII_ENTITIES = [
 # PERSON tokens that are OCR/NER noise, not names.
 _PERSON_WHITELIST = {"Bgr", "Faktor", "Anz", "Anzahl"}
 
-# A German dotted date ("09.07.2026") parses as a valid DE phone number
-# (0907 is a real area code), so PHONE_NUMBER matches of this shape are ignored.
-# Dates are not phone PII; the one date that *is* PII (the birthdate) is handled
-# spatially by backend.rules. The trailing class covers a date the recognizer
-# swallowed together with the code column beside it ("12.12.15 51-61") — without
-# it the span is not a bare date any more and the guard misses.
+# A dotted date ("09.07.2026", maybe with the code column after it) parses as a
+# DE phone number; it is never one here.
 _DOTTED_DATE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}[\s\d.\-/]*")
 
-# An undelimited run of digits is an identifier (a lab or order number), not a
-# phone number: on these documents a real number is written with a separator or
-# carries a Tel/Fax label, and a labeled one is already caught deterministically
-# by backend.rules.CONTACT before the classifier ever runs. python-phonenumbers
-# scores such a run at exactly the 0.4 threshold, with no context to spare.
+# An undelimited digit run is an identifier, not a phone number (real ones are
+# written with separators or a label, which the rules catch).
 _BARE_DIGITS = re.compile(r"\d+")
 
 
-# The one label whose entity may legitimately run across a line break. Every
-# other label reaches us from one of the `PatternRecognizer`s registered above,
-# and a pattern describes a typographic unit: a German ZIP+city, a street, a
-# phone number and an IBAN are each printed on one line by definition. A
-# person's name is not - "Max" on one line and "Mustermann" on the next is one
-# person, and seeing that is the whole reason the page is analyzed as one text.
+# The one label that may run across a line break: a name split by a wrap. Every
+# other label comes from a pattern, and a pattern is printed on one line.
 _MAY_WRAP = frozenset({PiiLabel.PERSON})
 
 
 def _drop_wrapped(spans: Sequence[Span]) -> list[Span]:
-    """Discard pattern matches that only exist because two lines were joined.
-
-    This lives here, not in the pipeline, because it is an artifact of *this*
-    classifier: the recognizers above are regexes running over the joined page
-    text, and a regex's whitespace class matches the joining newline, so one
-    glues the tail of a line to the head of the next and reports something that
-    is nowhere on the page. Measured on the corpus it is not theoretical -
-    `de_plz_city` turned a bare invoice number at a line end plus the first word
-    below it into an address three times over, each blackening a line that has
-    to stay readable.
-
-    A span model has no such failure mode, and applying this to one would throw
-    away the addresses it legitimately reports across a wrap - which is exactly
-    what happened while this sat in the shared path.
-
-    The cost of the rule is an address genuinely broken across a wrap, which
-    then falls to the per-line street/ZIP rules in `backend.rules`.
-    """
+    """Drop pattern matches that only exist because two lines were joined: a
+    regex's whitespace matches the joining newline. Presidio-only — a span model
+    legitimately reports entities across a wrap."""
     return [s for s in spans if s.label in _MAY_WRAP or "\n" not in s.text]
 
 
 class _Token(Protocol):
-    """What :func:`_redactable` needs of a token — the structural subset of a
-    spaCy ``Token``, so tests can pass a namedtuple and stay model-free. A
-    ``Sequence`` of these, not an iterator: a line with two PERSON spans walks
-    them twice."""
+    """The part of a spaCy ``Token`` the guards read; tests pass a namedtuple."""
 
     idx: int
     text: str
@@ -98,12 +62,8 @@ class _Token(Protocol):
 
 
 def build_analyzer():
-    # Imported here, not at module scope: `presidio_analyzer` eagerly imports its
-    # HuggingFace and GLiNER recognizers, which pull transformers and torch — a
-    # second's import cost this module's pure guards below have no use for, and
-    # which the fast test suite must not pay. Same convention as
-    # `PaddleLayoutDetector` and the guard-omni adapter beside it: a module is
-    # importable for its constants without loading anyone's runtime.
+    # Imported here: presidio_analyzer pulls in torch, which importing this
+    # module for its guards must not.
     from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
     from presidio_analyzer.nlp_engine import NlpEngineProvider
     from presidio_analyzer.predefined_recognizers import (
@@ -117,11 +77,7 @@ def build_analyzer():
         nlp_configuration={
             "nlp_engine_name": "spacy",
             "models": [{"lang_code": "de", "model_name": "de_core_news_lg"}],
-            # de_core_news_lg labels PER/LOC/ORG/MISC; MISC has no Presidio
-            # counterpart, so presidio logs "Entity MISC is not mapped..." for every
-            # one it sees — once per entity per OCR line. Dropping it costs nothing:
-            # analyze() only ever asks for PII_ENTITIES. Presidio's own default for
-            # labels_to_ignore is empty, so this list overrides nothing.
+            # MISC has no Presidio entity and would only log a warning per hit.
             "ner_model_configuration": {"labels_to_ignore": ["MISC"]},
         }
     ).create_engine()
@@ -132,18 +88,14 @@ def build_analyzer():
     analyzer.registry.add_recognizer(IbanRecognizer(supported_language="de"))
     analyzer.registry.add_recognizer(EmailRecognizer(supported_language="de"))
     analyzer.registry.add_recognizer(CreditCardRecognizer(supported_language="de"))
-    # Phone numbers via python-phonenumbers. DE only: the default region list
-    # runs 8 regional matchers per line and lets e.g. US formats match random
-    # digit columns. Note PhoneRecognizer.SCORE is 0.4 — exactly at the
-    # classifier threshold, so matches pass with no context boost to spare.
+    # DE only: other regions match random digit columns. Its score (0.4) sits
+    # exactly at the threshold.
     analyzer.registry.add_recognizer(
         PhoneRecognizer(supported_language="de", supported_regions=("DE",))
     )
 
-    # BIC / SWIFT: 8 or 11 chars, AAAABBCC[DDD]. Case-sensitive (real BICs are
-    # uppercase) so we don't match lowercase words, and given a low base score so
-    # only matches near a "BIC"/"SWIFT" context word clear the threshold — this
-    # keeps all-caps German words like "RECHNUNG" from being redacted.
+    # BIC: case-sensitive, and a low score so only a "BIC"/"SWIFT" context word
+    # lifts it over the threshold — "RECHNUNG" has the same shape.
     analyzer.registry.add_recognizer(
         PatternRecognizer(
             supported_entity="BIC_CODE",
@@ -154,12 +106,7 @@ def build_analyzer():
         )
     )
 
-    # German account number / bank code, matched *with* its label ("Kto. 520 22
-    # 111", "BLZ 200 30000", "Konto-Nr.: 4 399 267 00"). Lines are classified one
-    # at a time, so the label is always in the same text as the number — matching
-    # it inline scores high enough on its own, instead of a low base score that
-    # would need the context enhancer (which never fired here: the old context
-    # word "bank" does not appear on these lines).
+    # Account number or bank code with its label: "Kto. 520 22 111", "BLZ 200 30000".
     analyzer.registry.add_recognizer(
         PatternRecognizer(
             supported_entity="KONTO",
@@ -175,11 +122,7 @@ def build_analyzer():
         )
     )
 
-    # German address bits: "<Street>strasse 23" or "<Name> Straße 23" (suffix
-    # attached lowercase, or capitalized as its own word), and "12345 Musterstadt"
-    # postal + city. Both accept the all-caps form a letterhead prints, and the
-    # city pattern is imported from backend.rules rather than restated — the two
-    # are supposed to agree, and while they were written out twice they did not.
+    # Street and ZIP+city: the rules' own patterns, so the two cannot disagree.
     analyzer.registry.add_recognizer(
         PatternRecognizer(
             supported_entity="DE_ADDRESS",
@@ -187,24 +130,16 @@ def build_analyzer():
             patterns=[
                 Pattern(
                     "de_street",
-                    # Kept in step with backend.rules.DE_STREET: the name part
-                    # allows upper case throughout and the suffix is matched
-                    # case-insensitively, so an all-caps "MUSTERSTR.23" is
-                    # found as well as "Musterstrasse 23".
-                    r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß.\-]+(?:(?i:stra(?:ße|sse)|str|weg|platz|gasse|allee|ring|damm)|\s+(?i:stra(?:ße|sse)|str|weg|platz|gasse|allee|ring|damm))\.?\s*\d+[a-zA-Z]?\b",
+                    DE_STREET.pattern,
                     0.7,
                 ),
                 Pattern(
                     "de_plz_city",
-                    # backend.rules.DE_PLZ_CITY itself, so the two cannot drift:
-                    # this pattern used to allow a two-letter all-caps tail and so
-                    # matched the "15118 MID" its own comment promised to keep out.
                     DE_PLZ_CITY.pattern,
                     0.6,
                 ),
             ],
-            # Case-sensitive so the lowercase city class really means lowercase:
-            # keeps "15118 MID" out and stops city names from eating " www".
+            # Case-sensitive, so "15118 MID" stays out.
             global_regex_flags=re.DOTALL | re.MULTILINE,
         )
     )
@@ -213,24 +148,11 @@ def build_analyzer():
 
 def _name_fragments(
     text: str, tokens: Sequence[_Token], start: int, end: int
-) -> list[tuple[int, int]]:
-    """A wrapped PERSON span, cut back to the parts that are actually a name.
-
-    The model extends an entity across a line break in two very different
-    situations, and only one of them is wanted. "Max\nMustermann" is a name
-    *split* by a wrap, and catching it is the whole reason the page is read as
-    one text. "Max Mustermann\nLeistungsdatum" is the model running on past the
-    end of the name into the first word of the row below — measured on the
-    corpus, where it blackened a treatment date.
-
-    The tagger tells them apart, exactly as it does inside :func:`_name_token_count`:
-    the fragment on each line is kept only if it holds a proper noun. A name half
-    keeps its PROPN whatever OCR did to its capital; a German compound noun that
-    happens to start the next line does not.
-
-    An unwrapped span comes back unchanged, as its single fragment.
-    """
-    fragments: list[tuple[int, int]] = []
+) -> list[TextRange]:
+    """A PERSON span cut into its lines, keeping each line's part only if it holds
+    a proper noun: "Andrea\nMuster" keeps both, "Andrea Muster\nLeistungsdatum"
+    only the name."""
+    fragments: list[TextRange] = []
     pos = start
     for piece in text[start:end].split("\n"):
         lo, hi = pos, pos + len(piece)
@@ -238,7 +160,7 @@ def _name_fragments(
             tok.pos_ == "PROPN" and tok.idx < hi and tok.idx + len(tok.text) > lo
             for tok in tokens
         ):
-            fragments.append((lo, hi))
+            fragments.append(TextRange(lo, hi))
         pos = hi + 1  # + the "\n"
     return fragments
 
@@ -246,30 +168,10 @@ def _name_fragments(
 def _name_token_count(text: str, tokens: Sequence[_Token], start: int, end: int) -> int:
     """How many name tokens the PERSON span ``[start, end)`` is worth.
 
-    Inside the span a token must be a proper noun — whatever its case. The case
-    is not asked because German capitalizes every noun, which is the reason this
-    guard exists at all: that is an argument about capitals appearing where they
-    mean nothing, not about a missing one meaning something. OCR reads the capital
-    I of a name as a lowercase l ("loanna" for "Ioanna", "llona" for "Ilona"), and
-    half a name destroyed is still a name — the tagger, which called it a proper
-    noun regardless, is the better witness than the pixel that got lost.
-
-    *Across a comma* the bar is instead only that the token be capitalized: NER
-    routinely returns just one half of "Muster,Andrea" — surname-comma-forename is
-    how a patient row is written — and the surnames it leaves out are exactly the
-    ones the tagger reads as common nouns ("Bauer", "Jäger", "Wolf" are all
-    ordinary German words). There the case is the *only* evidence left, precisely
-    because the tagger has already declined to call the token a proper noun. The
-    comma carries that weight safely because *something* on the line still has to
-    have been recognized as a PERSON: the Leistungstexte this guard exists to
-    reject ("Mikroskopie,Kultur", "Summe,Betrag", "Ferritin,CRP") produce no
-    PERSON entity at all, so there is no span here to extend.
-
-    The comma must be on the **same OCR line** as the span. The page is analyzed
-    as one text now, so the token before a span is often the last cell of the row
-    above — and a table row ending in a comma would lend its capital to whatever
-    single word starts the next line. That is how "Leistungsdatum" came to count
-    as two name tokens on the corpus.
+    Inside the span a token counts if the tagger calls it a proper noun, whatever
+    its case (OCR turns "Ioanna" into "loanna"). Across a comma on the same line,
+    a capitalized neighbour counts too: NER returns one half of "Muster,Andrea"
+    and the tagger reads many surnames as nouns.
     """
     inside = [
         i
@@ -297,23 +199,9 @@ def _name_token_count(text: str, tokens: Sequence[_Token], start: int, end: int)
 
 
 def _keep(results, line: str, tokens: Sequence[_Token], trace: Trace) -> list:
-    """The results worth acting on, dropping the two kinds of known false hit.
-
-    A PERSON must contain at least two *proper-noun* tokens ("First Last").
-    Capitalization alone is not evidence in German — every noun is capitalized,
-    so a two-word Leistungstext reads exactly like a forename/surname pair to the
-    NER model. The tagger disagrees with it there, and the tagger is right:
-    "Orientierende" (of "Orientierende Testuntersuchg.") is NOUN and "Cleed" (of
-    the culture medium "Cleed Agar") is ADV, while both tokens of a real name are
-    PROPN. It is the *coarse* tag that separates them — "Cleed" is tag_=NE.
-
-    Requiring two also still drops the model's single-token noise ("5.0016") and
-    its hits on German medical terms. See :func:`_name_token_count` for the two
-    places the bar moves — a name across a comma, and a name OCR decapitalized.
-
-    None of this reaches an item row: ``compute_boxes`` ignores classifier spans
-    for a line inside the item table entirely.
-    """
+    """The results worth acting on: no date or bare digit run as a phone number,
+    and no PERSON with fewer than two name tokens — German capitalizes every noun,
+    so a two-word service text reads like a name to NER."""
     kept = []
     for r in results:
         if r.entity_type == "PHONE_NUMBER":
@@ -324,7 +212,7 @@ def _keep(results, line: str, tokens: Sequence[_Token], trace: Trace) -> list:
         if r.entity_type == "PERSON":
             names = _name_token_count(line, tokens, r.start, r.end)
             if names < 2:
-                trace.add("      Ignoring PERSON with only %d name token(s)", names)
+                trace.add("      Ignoring PERSON %r: only %d name token(s)", line[r.start : r.end], names)
                 continue
         kept.append(r)
     return kept
@@ -376,15 +264,15 @@ class PresidioClassifier:
             pieces = (
                 _name_fragments(text, artifacts.tokens, r.start, r.end)
                 if label is PiiLabel.PERSON and "\n" in text[r.start : r.end]
-                else [(r.start, r.end)]
+                else [TextRange(r.start, r.end)]
             )
-            for lo, hi in pieces:
+            for piece in pieces:
                 spans.append(
                     Span(
                         label=label,
-                        start=lo,
-                        end=hi,
-                        text=text[lo:hi],
+                        start=piece.start,
+                        end=piece.end,
+                        text=text[piece.start : piece.end],
                         source="presidio",
                         score=r.score,
                     )
