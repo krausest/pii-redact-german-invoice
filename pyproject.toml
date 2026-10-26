@@ -11,7 +11,7 @@ dependencies = [
     "onnxruntime>=1.19.0",
     "paddleocr>=3.7.0",
     "paddlepaddle>=3.3.1",
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "presidio-analyzer>=2.2.0",
     # Config + request validation. FastAPI pulls it in anyway; declared because
     # backend.config and backend.options import it directly.
