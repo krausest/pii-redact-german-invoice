@@ -43,10 +43,11 @@ def item_table_lines(lines: list[Line]) -> set[Line]:
 
 
 def _money_rows(lines: list[Line]) -> list[_Band]:
-    """Each row holding an amount; overlapping lines form one row."""
+    """Each row holding an amount; a line whose middle falls in a row joins it.
+    Mere overlap would not do: boxes of tightly set rows touch and chain into one."""
     rows: list[_Band] = []
     for top, bottom in sorted((ln.top, ln.bottom) for ln in lines if MONEY.search(ln.text)):
-        if rows and top <= rows[-1].bottom:
+        if rows and rows[-1].contains((top + bottom) / 2):
             rows[-1] = _Band(rows[-1].top, max(rows[-1].bottom, bottom))
         else:
             rows.append(_Band(top, bottom))

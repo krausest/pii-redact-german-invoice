@@ -120,7 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="write <stem>_layout.jpg showing the detected layout regions "
-        "(labeled, cyclically colored) and the line groups derived from them",
+        "(labeled, cyclically colored), the line groups derived from them and "
+        "the item-table lines (tinted blue)",
     )
     return parser
 

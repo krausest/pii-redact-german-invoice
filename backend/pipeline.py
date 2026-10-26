@@ -24,6 +24,7 @@ from backend.models import Box, Line
 from backend.ocr.base import OCRBackend
 from backend.redactor import PageRedactor
 from backend.registry import ModelRegistry
+from backend.rules import item_table_lines
 from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
 from backend.verdict import PageVerdict
@@ -152,8 +153,9 @@ class RedactionPipeline:
         lines: list[Line] | None = None,
         regions: list[LayoutRegion] | None = None,
     ) -> Image.Image | None:
-        """``image`` with the detected regions and line groups outlined, for
-        ``--debug-layout``; ``None`` without a layout detector."""
+        """``image`` with the detected regions and line groups outlined and the
+        item table tinted, for ``--debug-layout``; ``None`` without a layout
+        detector."""
         if self._layout is None:
             return None
         if lines is None:
@@ -161,4 +163,6 @@ class RedactionPipeline:
         if regions is None:
             regions = self.regions(image)
         text_lines = [ln for ln in lines if ln.text.strip()]
-        return draw_layout_debug(image, assign_lines(text_lines, regions), regions)
+        return draw_layout_debug(
+            image, assign_lines(text_lines, regions), regions, item_table_lines(lines)
+        )
