@@ -38,4 +38,7 @@ echo "== checks"
 uv run pytest -m 'not slow' -q
 (cd frontend && npm run check && npm run build)
 
-echo "Done. Review: git diff uv.lock frontend/package*.json — new/removed deps need LICENSE.md."
+echo "Done. Review: git diff uv.lock frontend/package*.json — new/removed deps need docs/LICENSE.md."
+echo
+echo "== pyproject.toml floors"
+uv run --no-sync python check_floors.py

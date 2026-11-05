@@ -164,5 +164,5 @@ class RedactionPipeline:
             regions = self.regions(image)
         text_lines = [ln for ln in lines if ln.text.strip()]
         return draw_layout_debug(
-            image, assign_lines(text_lines, regions), regions, item_table_lines(lines)
+            image, assign_lines(text_lines, regions), regions, item_table_lines(text_lines)
         )

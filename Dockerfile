@@ -20,7 +20,7 @@ RUN npm run build            # -> /build/dist
 FROM python:3.13-slim AS runtime
 
 # The *image* is AGPL because it bundles PyMuPDF; the project source itself is
-# MIT — see LICENSE.md ("License of the built Docker image").
+# MIT — see docs/LICENSE.md ("License of the built Docker image").
 LABEL org.opencontainers.image.source=https://github.com/krausest/pii-redact-german-invoice
 LABEL org.opencontainers.image.description="Removes PII from German invoices. FastAPI service with bundled web UI and REST API; all models baked in, runs fully offline."
 LABEL org.opencontainers.image.licenses=AGPL-3.0-or-later

@@ -73,6 +73,7 @@ matters as much as `REDACT`: it catches over-redaction.
 uv run python -m backend.replay dump example/GOÄ_Rechnung1.png --out-dir tests/regression  # slow, once
 uv run python -m backend.replay check tests/regression             # exit 1 on a diff
 uv run python -m backend.replay check tests/regression --update    # rewrite snapshots
+uv run python -m backend.replay check tests/regression --safe-update  # rewrite reasons only
 uv run python -m backend.replay check <dir> --ignore-text          # after scrubbing
 ```
 
@@ -80,6 +81,9 @@ uv run python -m backend.replay check <dir> --ignore-text          # after scrub
   detected from pixels, and the replayed page is blank. Snapshots therefore pin the
   per-line detection only; region boxes are covered by `-m slow` and
   `test_layout.py`.
+- `--safe-update` rewrites lines whose verdict kind (`REDACT`/`keep`/`PARTIAL`) is
+  unchanged and holds the others at their snapshot entry, so the remaining
+  failures are exactly the verdict changes (exit 1 if there are any).
 - Re-run `dump` after a change that alters what OCR reads (e.g. `det_box_thresh`).
 - Samples: `tests/regression/` (synthetic, committed) and `tests/Arztrechnungen/`
   (real layouts, scrubbed, git-ignored).

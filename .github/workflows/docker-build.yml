@@ -52,7 +52,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
           # Both overridden rather than auto-derived: the *image* license is AGPL
-          # because it bundles PyMuPDF (see LICENSE.md) — not the repo's MIT — and
+          # because it bundles PyMuPDF (see docs/LICENSE.md) — not the repo's MIT — and
           # the description must match the Dockerfile LABEL. Applied to labels and
           # annotations alike so config and index never disagree.
           labels: |
