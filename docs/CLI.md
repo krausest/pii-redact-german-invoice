@@ -36,7 +36,7 @@ error messages. A flag you leave out takes its default from
 | `--jpeg-quality N` | `redaction.jpeg_quality` | quality of every JPEG produced (1–100) |
 | `--classifier NAME` | `engine.classifier` | `presidio` \| `guard-omni` (needs `PII_GUARD_OMNI=true`) |
 | `--debug` | off | add the detection trace to the report (needs `--json-output`) |
-| `--debug-layout` | off | CLI only: write `<stem>_layout.jpg` (per page `_layout_pN.jpg`) with the detected layout regions drawn |
+| `--debug-layout` | off | CLI only: write `<stem>_layout.jpg` (per page `_layout_pN.jpg`) with the detected layout regions drawn and the item-table lines tinted blue |
 
 `PII_LOG_LEVEL=DEBUG uv run pii-redact …` prints the full detection trace to the
 console — every OCR line, every match and the verdict.

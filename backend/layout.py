@@ -25,6 +25,7 @@ paddle.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -70,6 +71,8 @@ _DEBUG_PALETTE: list[tuple[int, int, int]] = [
 # that set rather than listed again, so the debug image cannot drift from what
 # the pipeline actually does.
 _ALWAYS_FILL = (220, 30, 30, 60)
+# Translucent blue over each line the item-table rule claims.
+_ITEM_TABLE_FILL = (30, 90, 220, 70)
 
 
 @dataclass(frozen=True)
@@ -468,6 +471,7 @@ def draw_layout_debug(
     image: Image.Image,
     groups: list[list[Line]],
     regions: list[LayoutRegion],
+    item_table: Iterable[Line] = (),
 ) -> Image.Image:
     """A copy of ``image`` with the detected regions outlined in a cyclically
     repeating color and labeled with a chip naming the detected class
@@ -479,13 +483,15 @@ def draw_layout_debug(
     Regions in :data:`_ALWAYS_BLACKEN` get a translucent red background: those
     are the ones blackened on sight. Everything else is left untinted because
     whether it gets blackened depends on the per-line verdicts, which this view
-    does not compute."""
+    does not compute. The ``item_table`` lines get a translucent blue one."""
     out = image.convert("RGBA")
     overlay = Image.new("RGBA", out.size, (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
     for region in regions:
         if region.label in _ALWAYS_BLACKEN:
             overlay_draw.rectangle(region.box.as_list(), fill=_ALWAYS_FILL)
+    for line in item_table:
+        overlay_draw.rectangle(line.box.as_list(), fill=_ITEM_TABLE_FILL)
     out = Image.alpha_composite(out, overlay)
     draw = ImageDraw.Draw(out)
     font = _label_font(out.height)

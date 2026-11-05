@@ -32,8 +32,9 @@ class PageRedactor:
         memory: Memory,
         trace: Trace,
     ) -> PageVerdict:
-        doc = _read(lines, regions)
-        keep = kept_lines(lines, doc.item_table)
+        text_lines = [ln for ln in lines if ln.text.strip()]
+        doc = _read(text_lines, regions)
+        keep = kept_lines(text_lines, doc.item_table)
         dropped: dict[Line, list[Span]] = {}
         hits = _merge(
             _sift(doc, detector, keep, dropped, trace)
@@ -60,12 +61,8 @@ class PageRedactor:
 
 
 def _read(lines: list[Line], regions: list[LayoutRegion]) -> Document:
-    """The page's readable lines in reading order, with its item table (found on
-    *all* OCR lines: it is page geometry, not text)."""
-    return Document(
-        [ln for ln in document_order(lines, regions) if ln.text.strip()],
-        item_table=item_table_lines(lines),
-    )
+    """The page's lines in reading order, with its item table."""
+    return Document(document_order(lines, regions), item_table=item_table_lines(lines))
 
 
 def _sift(

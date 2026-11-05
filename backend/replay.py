@@ -57,6 +57,10 @@ the placeholder still redacts where the real value did::
     $EDITOR samples/regression/x_ocr.txt              # replace PII with placeholders
     ... check samples/regression --ignore-text        # no verdict may have moved
     ... check samples/regression --update             # scrub the snapshots too
+
+After a rule change that only renames *why* lines are redacted or kept,
+``--safe-update`` rewrites the reasons but holds every line whose verdict moved
+at its snapshot value, so what is left failing is exactly the verdict changes.
 """
 
 from __future__ import annotations
@@ -66,7 +70,7 @@ import ast
 import re
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -137,6 +141,7 @@ _PAGE_RE = re.compile(r"^=== page (\d+)(?: \((\d+)x(\d+)\))? ===$")
 _LINE_RE = re.compile(r"^line @\((-?\d+),(-?\d+) (\d+)x(\d+) conf=(\S+)\): (.+)$")
 _VERDICT_RE = re.compile(r"^\s+-> (REDACT|keep|PARTIAL)\b(.*)$")
 _REASON_RE = re.compile(r"\(([^)]*)\)\s*$")
+_PERCENT_RE = re.compile(r"^\s*(\d+)%")
 
 
 def _parse_line(text: str) -> Line | None:
@@ -220,11 +225,13 @@ def parse_expected(text: str) -> list[Outcome]:
             if not verdicts:
                 raise ValueError(f"verdict before any line: {raw!r}")
             reason = _REASON_RE.search(verdict.group(2))
+            # Kept so a PARTIAL held by --safe-update renders its percentage again.
+            percent = _PERCENT_RE.match(verdict.group(2))
             verdicts[-1] = Verdict(
                 line=verdicts[-1].line,
                 kind=verdict.group(1),
                 reason=reason.group(1) if reason else None,
-                coverage=0.0,
+                coverage=int(percent.group(1)) / 100 if percent else 0.0,
             )
     flush()
     return outcomes
@@ -352,6 +359,12 @@ def _geometry(header: str) -> str:
     return header.split("): ", 1)[0]
 
 
+def _same_line(got: Verdict, wanted: Verdict, ignore_text: bool) -> bool:
+    if ignore_text:
+        return _geometry(got.line) == _geometry(wanted.line)
+    return got.line == wanted.line
+
+
 def compare(
     outcomes: list[Outcome], expected: list[Outcome], ignore_text: bool = False
 ) -> list[str]:
@@ -376,12 +389,7 @@ def compare(
             )
             continue
         for i, (got, wanted) in enumerate(zip(actual.verdicts, want.verdicts)):
-            same = (
-                _geometry(got.line) == _geometry(wanted.line)
-                if ignore_text
-                else got.line == wanted.line
-            )
-            if not same:
+            if not _same_line(got, wanted, ignore_text):
                 failures.append(
                     f"{page} line {i}: the snapshot was written for different OCR "
                     f"output, regenerate it\n    dump:     {got.line}\n"
@@ -393,6 +401,44 @@ def compare(
                     f"{_verdict_text(wanted)}, got {_verdict_text(got)}"
                 )
     return failures
+
+
+class SafeUpdate(NamedTuple):
+    outcomes: list[Outcome]
+    reasons: int  # lines whose reason was rewritten
+    held: list[str]  # lines whose verdict moved, kept at the snapshot's
+
+
+def safe_update(
+    outcomes: list[Outcome], expected: list[Outcome], ignore_text: bool = False
+) -> SafeUpdate | None:
+    """The replay with every line whose verdict kind moved held at the snapshot's.
+
+    ``None`` when the snapshot no longer lines up with the dump (page or line
+    counts, or a line's text), since there is then no line to hold anything at."""
+    if len(outcomes) != len(expected):
+        return None
+    merged: list[Outcome] = []
+    reasons = 0
+    held: list[str] = []
+    for actual, want in zip(outcomes, expected):
+        if len(actual.verdicts) != len(want.verdicts):
+            return None
+        verdicts: list[Verdict] = []
+        for i, (got, wanted) in enumerate(zip(actual.verdicts, want.verdicts)):
+            if not _same_line(got, wanted, ignore_text):
+                return None
+            if got.kind == wanted.kind:
+                reasons += got.reason != wanted.reason
+                verdicts.append(got)
+                continue
+            verdicts.append(replace(wanted, line=got.line))
+            held.append(
+                f"page {actual.index} line {i} {_excerpt(got.line)}: expected "
+                f"{_verdict_text(wanted)}, got {_verdict_text(got)}"
+            )
+        merged.append(Outcome(index=actual.index, verdicts=tuple(verdicts)))
+    return SafeUpdate(merged, reasons, held)
 
 
 # -- CLI ------------------------------------------------------------------- #
@@ -512,7 +558,9 @@ def _dump(targets: list[str], out_dir: str | None) -> int:
     return status
 
 
-def _check(targets: list[str], update: bool, ignore_text: bool = False) -> int:
+def _check(
+    targets: list[str], update: bool, ignore_text: bool = False, safe: bool = False
+) -> int:
     from backend.config import load_config
     from backend.factory import build_classifier
 
@@ -532,9 +580,25 @@ def _check(targets: list[str], update: bool, ignore_text: bool = False) -> int:
             print(f"{ocr.name}: no snapshot at {out} — run `check --update`")
             status = 1
             continue
-        failures = compare(
-            outcomes, parse_expected(out.read_text(encoding="utf-8")), ignore_text
-        )
+        snapshot = out.read_text(encoding="utf-8")
+        expected = parse_expected(snapshot)
+        if safe:
+            result = safe_update(outcomes, expected, ignore_text)
+            if result is not None:
+                merged = render(result.outcomes, classifier_name)
+                if merged != snapshot:
+                    out.write_text(merged, encoding="utf-8")
+                note = f" ({result.reasons} reason(s) updated)" if result.reasons else ""
+                if result.held:
+                    status = 1
+                    print(f"{ocr.name}: {len(result.held)} difference(s){note}")
+                    for line in result.held:
+                        print(f"  {line}")
+                else:
+                    print(f"{ocr.name}: ok{note}")
+                continue
+            print(f"{ocr.name}: not updated — the snapshot no longer matches the dump")
+        failures = compare(outcomes, expected, ignore_text)
         if failures:
             status = 1
             print(f"{ocr.name}: {len(failures)} difference(s)")
@@ -565,7 +629,14 @@ def main(argv: list[str] | None = None) -> int:
 
     check = sub.add_parser("check", help="replay <stem>_ocr.txt against its snapshot")
     check.add_argument("targets", nargs="+", metavar="OCR_TXT|DIR")
-    check.add_argument("--update", action="store_true", help="rewrite the snapshots")
+    mode = check.add_mutually_exclusive_group()
+    mode.add_argument("--update", action="store_true", help="rewrite the snapshots")
+    mode.add_argument(
+        "--safe-update",
+        action="store_true",
+        help="rewrite only reasons; a line whose verdict moved keeps its snapshot "
+        "entry and still fails",
+    )
     check.add_argument(
         "--ignore-text",
         action="store_true",
@@ -576,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "dump":
         return _dump(args.targets, args.out_dir)
-    return _check(args.targets, args.update, args.ignore_text)
+    return _check(args.targets, args.update, args.ignore_text, args.safe_update)
 
 
 if __name__ == "__main__":

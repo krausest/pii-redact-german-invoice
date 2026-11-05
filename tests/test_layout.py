@@ -113,6 +113,15 @@ def test_draw_layout_debug_tints_only_the_always_blackened_labels():
     assert out.getpixel((150, 275)) == (255, 255, 255)
 
 
+def test_draw_layout_debug_tints_the_item_table_lines_blue():
+    row = _line("Beratung 4,66", left=10, top=10)
+    img = Image.new("RGB", (200, 100), color=(255, 255, 255))
+    out = draw_layout_debug(img, [], [], item_table=[row])
+    r, g, b = out.getpixel((60, 20))
+    assert b > r and b > g
+    assert out.getpixel((60, 70)) == (255, 255, 255)
+
+
 def test_draw_layout_debug_names_each_region_in_a_readable_chip():
     # The label is drawn as glyphs knocked out of a filled chip, sized from the
     # text: a longer label makes a wider chip. Pinned because the label used to
