@@ -324,9 +324,22 @@ def create_app(config: Config | None = None) -> FastAPI:
     # last at "/", so the API routes and /health above take precedence.
     static_dir = os.environ.get("PII_STATIC_DIR")
     if static_dir and Path(static_dir).is_dir():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="spa")
+        app.mount("/", SpaStaticFiles(directory=static_dir, html=True), name="spa")
 
     return app
+
+
+class SpaStaticFiles(StaticFiles):
+    """Vite hashes asset names, so they are immutable; everything else
+    (index.html) must be revalidated or a release is not picked up."""
+
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        if path.startswith("assets/") and response.status_code in (200, 304):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 # Module-level app for `gunicorn backend.api:app` / `uvicorn backend.api:app`.

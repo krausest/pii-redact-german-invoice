@@ -56,6 +56,10 @@ command from the repo root — `PII_STATIC_DIR` is resolved against the current
 directory. If `/` returns 404, the UI is not mounted: the variable is unset or
 `frontend/dist/` does not exist.
 
+**Caching.** `index.html` is sent with `Cache-Control: no-cache` (revalidated via
+ETag on every load); the content-hashed files under `assets/` are `immutable`. A
+new release is therefore picked up on the next page load, without a forced reload.
+
 **Scaling.** Each Gunicorn worker (`-w`) is a process with its own copy of the
 models (~4 GB RAM with both classifiers loaded). Inside a worker, redactions run
 one at a time ([`max_concurrent_per_worker`](Configuration.md#api)) on a background
