@@ -41,4 +41,4 @@ uv run pytest -m 'not slow' -q
 echo "Done. Review: git diff uv.lock frontend/package*.json — new/removed deps need docs/LICENSE.md."
 echo
 echo "== pyproject.toml floors"
-uv run --no-sync python check_floors.py
+uv run --no-sync python check_floors.py --update

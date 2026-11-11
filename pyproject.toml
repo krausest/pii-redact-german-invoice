@@ -6,18 +6,18 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "de-core-news-lg",
-    "fastapi>=0.115.0",
-    "gunicorn>=23.0.0",
-    "onnxruntime>=1.19.0",
+    "fastapi>=0.162.2",
+    "gunicorn>=26.2.0",
+    "onnxruntime>=1.31.1",
     "paddleocr>=3.7.0",
     "paddlepaddle>=3.3.1",
     "pillow>=13.0.0",
-    "presidio-analyzer>=2.2.0",
+    "presidio-analyzer>=2.2.362",
     # Config + request validation. FastAPI pulls it in anyway; declared because
     # backend.config and backend.options import it directly.
-    "pydantic>=2.9.0",
-    "pymupdf>=1.28.0",
-    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.14.3",
+    "pymupdf>=2.1",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [build-system]
@@ -38,18 +38,18 @@ pii-redact = "backend.cli:main"
 # model in-process — without it gliner2 2.x is only a client for their hosted
 # API, and importing it fails on `torch`; see the torch pin below.
 guard-omni = [
-    "gliner2[local]>=2.0.0",
+    "gliner2[local]>=2.1.0",
     # Direct only so the CPU index below applies — uv ignores sources on
     # transitive dependencies.
     "torch",
 ]
 dev = [
-    "httpx>=0.28.0",
+    "httpx>=0.28.1",
     # Jupyter notebooks (dev only, not the runtime service). The notebooks call the
     # API with requests.post; nothing in `backend` imports it.
-    "ipykernel>=7.3.0",
+    "ipykernel>=7.4.0",
     "requests>=2.34.2",
-    "pytest>=8.3.0",
+    "pytest>=9.2.0",
 ]
 
 [tool.pytest.ini_options]
