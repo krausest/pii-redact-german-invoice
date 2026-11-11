@@ -26,8 +26,10 @@ LABEL org.opencontainers.image.description="Removes PII from German invoices. Fa
 LABEL org.opencontainers.image.licenses=AGPL-3.0-or-later
 
 # Native libs required at runtime by opencv (a paddlex dep), paddle and
-# onnxruntime; curl is for the HEALTHCHECK.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# onnxruntime; curl is for the HEALTHCHECK. `upgrade` pulls Debian security fixes
+# released since the base image was built.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 libgomp1 curl \
     && rm -rf /var/lib/apt/lists/*
 

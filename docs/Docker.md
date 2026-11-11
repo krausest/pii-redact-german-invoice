@@ -27,11 +27,13 @@ on this page to use a published image.
 ## Build
 
 ```bash
-docker build --platform linux/amd64 -t pii-redact .
+docker build --pull --platform linux/amd64 -t pii-redact .
 ```
 
 `--platform linux/amd64` is required: PaddlePaddle ships no Linux ARM64 wheel. On
-Apple Silicon the build runs under emulation and takes a while.
+Apple Silicon the build runs under emulation and takes a while. `--pull` fetches
+the current `python:3.13-slim` instead of a stale local copy, so security patches
+in the base image are picked up.
 
 What the [`Dockerfile`](../Dockerfile) does:
 
