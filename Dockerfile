@@ -3,7 +3,7 @@
 # =========================================================================== #
 # Stage 1 — build the Svelte SPA
 # =========================================================================== #
-FROM node:22-slim AS frontend
+FROM node:25-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
