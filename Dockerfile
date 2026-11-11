@@ -17,7 +17,7 @@ RUN npm run build            # -> /build/dist
 # manylinux1_x86_64 / macOS-arm64 / win). On Apple Silicon build with
 # `docker build --platform linux/amd64 .` (runs under emulation).
 # =========================================================================== #
-FROM python:3.13-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 # The *image* is AGPL because it bundles PyMuPDF; the project source itself is
 # MIT — see docs/LICENSE.md ("License of the built Docker image").
