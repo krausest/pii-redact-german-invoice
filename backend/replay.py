@@ -558,55 +558,83 @@ def _dump(targets: list[str], out_dir: str | None) -> int:
     return status
 
 
+def _check_one(
+    ocr: Path,
+    pipeline: RedactionPipeline,
+    classifier_name: str,
+    update: bool,
+    ignore_text: bool,
+    safe: bool,
+) -> int:
+    """Replay one dump and print its result. Returns how many differences it has."""
+    outcomes = replay(pipeline, parse_ocr(ocr.read_text(encoding="utf-8")))
+    text = render(outcomes, classifier_name)
+    out = expected_path(ocr)
+    if update:
+        out.write_text(text, encoding="utf-8")
+        print(f"{ocr.name}: wrote {out}")
+        return 0
+    if not out.is_file():
+        print(f"{ocr.name}: no snapshot at {out} — run `check --update`")
+        return 1
+    snapshot = out.read_text(encoding="utf-8")
+    expected = parse_expected(snapshot)
+    if safe:
+        result = safe_update(outcomes, expected, ignore_text)
+        if result is not None:
+            merged = render(result.outcomes, classifier_name)
+            if merged != snapshot:
+                out.write_text(merged, encoding="utf-8")
+            note = f" ({result.reasons} reason(s) updated)" if result.reasons else ""
+            if result.held:
+                print(f"{ocr.name}: {len(result.held)} difference(s){note}")
+                for line in result.held:
+                    print(f"  {line}")
+            else:
+                print(f"{ocr.name}: ok{note}")
+            return len(result.held)
+        print(f"{ocr.name}: not updated — the snapshot no longer matches the dump")
+    failures = compare(outcomes, expected, ignore_text)
+    if failures:
+        print(f"{ocr.name}: {len(failures)} difference(s)")
+        for failure in failures:
+            print(f"  {failure}")
+    else:
+        print(f"{ocr.name}: ok")
+    return len(failures)
+
+
+def _summary(total: int, failed: dict[str, int]) -> str:
+    """The verdict on the whole run, printed last so a long diff can't bury it."""
+    if not failed:
+        return f"OK: {total} document(s)"
+    head = f"FAILED: {len(failed)} of {total} document(s), {sum(failed.values())} difference(s)"
+    return "\n".join([head, *(f"  {name}: {count}" for name, count in failed.items())])
+
+
 def _check(
     targets: list[str], update: bool, ignore_text: bool = False, safe: bool = False
 ) -> int:
     from backend.config import load_config
     from backend.factory import build_classifier
 
+    files = _ocr_files(targets)
+    if not files:
+        # Exit 0 here would pass a mistyped directory as a clean replay.
+        print(f"FAILED: no {OCR_SUFFIX} dumps found")
+        return 1
+
     config = load_config()
-    classifier_name = config.engine.classifier
     pipeline = build_replay_pipeline(config, build_classifier(config))
-    status = 0
-    for ocr in _ocr_files(targets):
-        outcomes = replay(pipeline, parse_ocr(ocr.read_text(encoding="utf-8")))
-        text = render(outcomes, classifier_name)
-        out = expected_path(ocr)
-        if update:
-            out.write_text(text, encoding="utf-8")
-            print(f"{ocr.name}: wrote {out}")
-            continue
-        if not out.is_file():
-            print(f"{ocr.name}: no snapshot at {out} — run `check --update`")
-            status = 1
-            continue
-        snapshot = out.read_text(encoding="utf-8")
-        expected = parse_expected(snapshot)
-        if safe:
-            result = safe_update(outcomes, expected, ignore_text)
-            if result is not None:
-                merged = render(result.outcomes, classifier_name)
-                if merged != snapshot:
-                    out.write_text(merged, encoding="utf-8")
-                note = f" ({result.reasons} reason(s) updated)" if result.reasons else ""
-                if result.held:
-                    status = 1
-                    print(f"{ocr.name}: {len(result.held)} difference(s){note}")
-                    for line in result.held:
-                        print(f"  {line}")
-                else:
-                    print(f"{ocr.name}: ok{note}")
-                continue
-            print(f"{ocr.name}: not updated — the snapshot no longer matches the dump")
-        failures = compare(outcomes, expected, ignore_text)
-        if failures:
-            status = 1
-            print(f"{ocr.name}: {len(failures)} difference(s)")
-            for failure in failures:
-                print(f"  {failure}")
-        else:
-            print(f"{ocr.name}: ok")
-    return status
+    failed: dict[str, int] = {}
+    for ocr in files:
+        differences = _check_one(
+            ocr, pipeline, config.engine.classifier, update, ignore_text, safe
+        )
+        if differences:
+            failed[ocr.name] = differences
+    print(_summary(len(files), failed))
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
