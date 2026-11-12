@@ -18,15 +18,13 @@ updates:
       npm:
         patterns: ["*"]
 
-  # Python minors need requires-python and wheels to follow; odd Node majors are
-  # not LTS. Both stay manual (see bump_versions.sh).
+  # Odd Node majors are not LTS; stays manual (see bump_versions.sh). The runtime
+  # base is wolfi-base, which only has a moving `latest` tag.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
     ignore:
-      - dependency-name: "python"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
 

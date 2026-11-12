@@ -34,14 +34,16 @@ docker build --pull --platform linux/amd64 -t pii-redact .
 
 `--platform linux/amd64` is required: PaddlePaddle ships no Linux ARM64 wheel. On
 Apple Silicon the build runs under emulation and takes a while. `--pull` fetches
-the current `python:3.13-slim` instead of a stale local copy, so security patches
-in the base image are picked up.
+the current `wolfi-base` instead of a stale local copy, so security patches in the
+base image are picked up.
 
 What the [`Dockerfile`](../Dockerfile) does:
 
 1. A Node stage builds the web UI (`frontend/dist`).
-2. A `python:3.13-slim` stage installs runtime dependencies only
-   (`uv sync --no-default-groups`) — no dev tools and no `guard-omni` runtime (torch).
+2. A [Wolfi](https://github.com/wolfi-dev) stage (`cgr.dev/chainguard/wolfi-base`, a
+   minimal rolling glibc distro with few known CVEs) installs Python 3.13 and the
+   runtime dependencies only (`uv sync --no-default-groups`) — no dev tools, no
+   `guard-omni` runtime (torch), no pip, curl or uv in the final image.
 3. [`docker/warmup.py`](../docker/warmup.py) constructs every engine, the
    presidio classifier and the dewarping model, which downloads all weights into the image.
    A model that cannot be fetched fails the build.
@@ -59,7 +61,7 @@ Verify it needs no network:
 
 ```bash
 docker run -d --name pii --network none pii-redact
-docker exec pii curl -fsS http://localhost:8000/health
+docker exec pii python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"
 ```
 
 ## Parameters

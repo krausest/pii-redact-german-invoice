@@ -92,6 +92,10 @@ AGPL-3.0 (dual-licensed, with a paid Artifex commercial alternative) — one AGP
 dependency makes the whole combined image AGPL, regardless of every other
 dependency here being permissive (MIT/BSD/Apache-2.0).
 
+The OS layer is [Wolfi](https://github.com/wolfi-dev) (`cgr.dev/chainguard/wolfi-base`,
+Apache-2.0 packaging) plus its `python-3.13`, `libstdc++`, `libgomp`, `glib` and
+`mesa-gl` packages, each under its own upstream open-source license.
+
 This project's own source code stays **MIT** (see [`LICENSE`](LICENSE)) — AGPL
 doesn't relicense the code it's combined with, it only requires that anyone
 served by a deployment of the image can get the complete source of the

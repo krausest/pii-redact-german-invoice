@@ -12,7 +12,7 @@ echo "== uv"
 uv self update
 
 # Latest patch of each installed minor; the venv follows it. A new minor means
-# raising requires-python in pyproject.toml and `FROM python:` in the Dockerfile.
+# raising requires-python in pyproject.toml and `python-3.13` in the Dockerfile's `apk add`.
 echo "== Python"
 uv python upgrade
 uv run --no-sync python --version
