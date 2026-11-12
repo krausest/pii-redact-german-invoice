@@ -15,9 +15,11 @@ docker run --rm --platform linux/amd64 -p 8000:8000 ghcr.io/krausest/pii-redact-
 
 | Tag | Image |
 |---|---|
-| `latest`, `main` | current `main` branch |
+| `latest` | the newest release |
 | `0.7`, `0.7.0` | a release (`v0.7.0`); `0.7` follows the latest patch |
-| `17d0c8c` | a single commit (short SHA) |
+| `17d0c8c` | the commit a release was built from (short SHA) |
+
+Images are built only for release tags (`v*.*.*`); pushes to `main` build nothing.
 
 `--platform linux/amd64` is only needed on Apple Silicon and other ARM hosts, which
 run the image under emulation (see [below](#limits-on-apple-silicon)). Replace

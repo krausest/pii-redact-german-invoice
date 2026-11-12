@@ -1,8 +1,8 @@
 name: Docker build
 
+# Release tags only: a push to main builds nothing; `latest` follows the newest release.
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
 
 permissions:
@@ -46,8 +46,6 @@ jobs:
           # No explicit `latest`: flavor latest=auto adds it to non-prerelease
           # semver tags, so a release's version tags and `latest` share one digest.
           tags: |
-            # the branch name as a moving tag, i.e. `docker pull …:main`
-            type=ref,event=branch
             type=sha,prefix=,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
