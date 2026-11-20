@@ -113,6 +113,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="include the per-line detection trace in the report (needs --json-output)",
     )
+    opts.add_argument(
+        "--redact-word",
+        metavar="WORD",
+        action="append",
+        help="always redact the line holding this word or phrase (repeatable)",
+    )
+    opts.add_argument(
+        "--keep-word",
+        metavar="WORD",
+        action="append",
+        help="drop every finding containing this word or phrase (repeatable)",
+    )
     # Deliberately NOT a RedactOptions field / query parameter — it never
     # reaches POST /api/redact, only the CLI. See backend/layout.py.
     parser.add_argument(

@@ -202,7 +202,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     def _options(cls, request: Request, config: Config):
         try:
-            return cls.from_query(dict(request.query_params), config)
+            return cls.from_query(cls.raw_query(request.query_params.multi_items()), config)
         except ValueError as e:
             raise ApiError(400, str(e))
 

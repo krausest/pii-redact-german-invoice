@@ -376,3 +376,24 @@ def test_health_lists_guard_omni_only_when_enabled():
     with client:
         r = client.get("/health")
     assert r.json()["classifiers"] == ["presidio", "guard-omni"]
+
+
+def test_word_lists_reach_the_pipeline(png_bytes):
+    client, fake = build_client()
+    with client:
+        r = client.post(
+            f"{URL}?redact-word=Andrea%20Muster&redact-word=Muster&keep-word=Praxis",
+            content=png_bytes,
+            headers=PNG,
+        )
+    assert r.status_code == 200
+    assert fake.lists.redact == ("Andrea Muster", "Muster")
+    assert fake.lists.keep == ("Praxis",)
+
+
+def test_a_word_in_both_lists_is_a_400(png_bytes):
+    client, _ = build_client()
+    with client:
+        r = client.post(f"{URL}?redact-word=Muster&keep-word=muster", content=png_bytes, headers=PNG)
+    assert r.status_code == 400
+    assert "both" in r.json()["detail"]

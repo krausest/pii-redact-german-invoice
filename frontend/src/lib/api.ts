@@ -47,6 +47,10 @@ export interface AnalyzeOptions {
   unwarp: boolean
   /** Which model detects PII; `null` until `/health` named the server default. */
   classifier: string | null
+  /** Always redact the line holding one of these words; the same for the whole batch. */
+  redactWords: string[]
+  /** Never let a finding containing one of these words redact. */
+  keepWords: string[]
 }
 
 /** What the server offers: its default classifier and every one a request may name. */
@@ -107,6 +111,8 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
   })
   if (opts.classifier) params.set('classifier', opts.classifier)
   if (debug) params.set('debug', 'true')
+  for (const w of opts.redactWords) params.append('redact-word', w)
+  for (const w of opts.keepWords) params.append('keep-word', w)
   const res = await fetch(`${REDACT_URL}?${params}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type },

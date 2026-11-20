@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from backend.classifiers.base import Classifier
-from backend.detectors import Detector, MemoryDetector, ModelDetector, RuleDetector
+from backend.detectors import Detector, ListDetector, MemoryDetector, ModelDetector, RuleDetector
 from backend.document import Document
 from backend.harvest import Memory
 from backend.layout import LayoutRegion, document_order, region_boxes, signature_boxes, subtract
@@ -15,6 +15,7 @@ from backend.pii import Span
 from backend.rules import birth_year_note, item_table_lines, kept_lines
 from backend.trace import Trace
 from backend.verdict import PageVerdict
+from backend.wordlists import EMPTY, WordLists
 
 
 class PageRedactor:
@@ -31,19 +32,23 @@ class PageRedactor:
         classifier: Classifier,
         memory: Memory,
         trace: Trace,
+        lists: WordLists = EMPTY,
     ) -> PageVerdict:
         text_lines = [ln for ln in lines if ln.text.strip()]
         doc = _read(text_lines, regions)
         keep = kept_lines(text_lines, doc.item_table)
         dropped: dict[Line, list[Span]] = {}
         hits = _merge(
-            _sift(doc, detector, keep, dropped, trace)
-            for detector in (RuleDetector(), ModelDetector(classifier))
+            [
+                _sift(doc, RuleDetector(), keep, dropped, trace, lists),
+                _sift(doc, ModelDetector(classifier), keep, dropped, trace, lists),
+                _sift(doc, ListDetector(lists), keep, dropped, trace),
+            ]
         )
         # Learned from the survivors only: a model's find in the item table must
         # not spread across the document.
         memory.learn(doc, hits, trace)
-        recalled = _sift(doc, MemoryDetector(memory), keep, dropped, trace)
+        recalled = _sift(doc, MemoryDetector(memory), keep, dropped, trace, lists)
         found = {ln: spans for ln, spans in _merge([hits, recalled]).items() if spans}
         pad = self._padding
         return PageVerdict(
@@ -71,14 +76,16 @@ def _sift(
     keep: dict[Line, str],
     dropped: dict[Line, list[Span]],
     trace: Trace,
+    veto: WordLists = EMPTY,
 ) -> dict[Line, list[Span]]:
-    """``detector``'s spans per line that its line's keep reason admits; the
-    rest go to ``dropped``."""
+    """``detector``'s spans per line that its line's keep reason admits and
+    ``veto``'s keep list does not name; the rest go to ``dropped``."""
     survivors: dict[Line, list[Span]] = {}
     for line, spans in doc.per_line(detector.spans(doc, trace)).items():
         why = keep.get(line)
-        survivors[line] = [s for s in spans if detector.admits(s, why)]
-        lost = [s for s in spans if not detector.admits(s, why)]
+        ok = [detector.admits(s, why) and not veto.vetoes(s) for s in spans]
+        survivors[line] = [s for s, keep_it in zip(spans, ok) if keep_it]
+        lost = [s for s, keep_it in zip(spans, ok) if not keep_it]
         if lost:
             dropped.setdefault(line, []).extend(lost)
     return survivors

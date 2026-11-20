@@ -18,6 +18,7 @@ from backend.models import Box, Line
 from backend.pii import PiiLabel, Span
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace
+from backend.wordlists import WordLists
 from tests.conftest import (
     RecordingUnwarper,
     StubClassifier,
@@ -385,3 +386,61 @@ def test_the_trace_narrates_region_then_content_then_verdict():
     assert "-> REDACT" in out
     # the graphic region is narrated too, though it has no lines to show
     assert "--- region 1  image  0.90  [0, 0, 90, 40] ---" in out
+
+
+# -- the user's word lists --------------------------------------------------- #
+def test_a_listed_word_redacts_its_line_even_in_the_item_table():
+    rows = [_line(f"Beratung {n}", top=100 + 20 * n) for n in range(4)]
+    money = [_line("10,72", top=100 + 20 * n, left=200) for n in range(4)]
+    p = _pipeline([*rows, *money], [], padding=0)
+    assert p.compute_boxes(_page()) == []
+    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("beratung 2",)))
+    assert boxes == [Box(10, 140, 90, 150)]
+
+
+def test_a_keep_word_drops_the_rule_and_the_model_finding():
+    lines = [_line("Musterstrasse 7", top=10), _line("Andrea Muster", top=50)]
+    p = _pipeline(lines, ["Andrea Muster"], padding=0)
+    assert len(p.compute_boxes(_page())) == 2
+    lists = WordLists(keep=("Musterstrasse", "Muster"))
+    assert p.compute_boxes(_page(), lists=lists) == []
+
+
+def test_a_keep_word_is_not_recalled_from_the_memory():
+    memory = Memory()
+    p1 = _pipeline([_line("Patient Muster, Andrea", top=10)], [], padding=0)
+    lists = WordLists(keep=("Muster",))
+    p1.compute_boxes(_page(), memory=memory, lists=lists)
+    p2 = _pipeline([_line("Diagnose Muster", top=10)], [], padding=0)
+    assert p2.compute_boxes(_page(), memory=memory, lists=lists) == []
+
+
+def test_the_listed_word_wins_over_a_keep_word_inside_it():
+    lines = [_line("Andrea Muster", top=10)]
+    lists = WordLists(redact=("Andrea Muster",), keep=("Muster",))
+    assert _pipeline(lines, [], padding=0).compute_boxes(_page(), lists=lists) == [Box(10, 10, 90, 20)]
+
+
+@pytest.mark.parametrize(
+    "text,boxes",
+    [
+        # several doctors on one line: the whole line goes, not just the listed name
+        (
+            "Dr. Andrea Muster * Dr. Erika Beispiel * Dr. Max Probe-Mustermann",
+            [Box(226, 212, 2318, 274)],
+        ),
+        # "Surname,Forename date": the word after the comma matches; the note stays
+        ("Muster,Erika 16.04.12", [Box(226, 212, 2318, 274), Box(1521, 212, 2318, 274, text="2012")]),
+    ],
+)
+def test_a_listed_name_blackens_its_whole_line_like_any_finding(text, boxes):
+    line = Line(text, left=226, top=212, width=2092, height=62)
+    p = _pipeline([line], [], padding=0)
+    page = Image.new("RGB", (2400, 1200))
+    listed = p.compute_verdict(page, lists=WordLists(redact=("Erika",)))
+    assert [(s.label, s.text) for s in listed.found[line] if s.source == "user-list"] == [
+        (PiiLabel.LISTED, "Erika")
+    ]
+    assert listed.boxes == boxes
+    # the rules already took these lines: the list adds a reason, not a box
+    assert p.compute_verdict(page).boxes == boxes

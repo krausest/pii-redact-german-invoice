@@ -49,6 +49,20 @@ Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
 | `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it. `guard-omni` only if enabled, otherwise `400` |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report — **requires `json-output=true`** |
+| `redact-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: always redact the line holding this word or phrase |
+| `keep-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: drop every finding whose text contains this word or phrase |
+
+**Word lists.** An entry matches as a whole word or phrase, case-insensitively;
+whitespace inside a phrase matches any whitespace, line breaks included.
+`redact-word` wins over every kept line (item table, dates, …) and over
+`keep-word`. `keep-word` vetoes rule, classifier and memory findings; it does not
+lift whole-region or signature boxes. An entry in both lists is a `400`.
+
+```bash
+curl -X POST --data-binary @example/GOÄ_Rechnung1.pdf \
+     -H "Content-Type: application/pdf" \
+     "http://localhost:8000/api/redact?redact-word=Andrea%20Muster&keep-word=Musterpraxis" -o redacted.pdf
+```
 
 ### File response (default)
 
@@ -117,7 +131,7 @@ A region of a blackened-whole type (`footer`, `image`, …) ends with
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,
-`birthdate-memory`, or the classifier (`presidio`, `guard-omni`). A span a kept
+`birthdate-memory`, `user-list` (a `redact-word` entry), or the classifier (`presidio`, `guard-omni`). A span a kept
 line rejected prints the same way after `rejected `. A `name-memory`
 or `birthdate-memory` span quotes the remembered name or date it matched; each
 enters the memory with a page-level line `name memory 'Muster' <- '<line>'` or

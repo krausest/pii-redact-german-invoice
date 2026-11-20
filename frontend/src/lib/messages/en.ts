@@ -58,7 +58,26 @@ export const en = {
     classifierTitle: 'The model that detects PII in the recognized text',
     language: 'Language',
   },
+  wordlists: {
+    group: 'Word lists',
+    redactTitle: 'Always redact',
+    redactHint: 'A line holding one of these words is always blacked out.',
+    keepTitle: 'Never redact',
+    keepHint: 'No finding containing one of these words is blacked out.',
+    placeholder: 'Word or phrase',
+    add: 'Add',
+    addTo: (list: string) => `Add to “${list}”`,
+    remove: (word: string) => `Remove ${word}`,
+    empty: 'No entries',
+    duplicate: 'Already in this list.',
+    inOther: (list: string) => `Already in “${list}”.`,
+    tooLong: (n: number) => `At most ${n} characters.`,
+    tooMany: (n: number) => `At most ${n} entries.`,
+  },
   dialog: {
+    listsTitle: 'Re-analyze all documents?',
+    listsMessage: (n: number) =>
+      `The word lists apply to every document, so all of them are analyzed again. Hand edits in ${n} document${n === 1 ? '' : 's'} will be lost.`,
     discardTitle: 'Discard your edits?',
     discardMessage:
       'Changing this setting re-runs the detection on the whole document. The boxes you added or removed by hand will be lost.',

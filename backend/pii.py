@@ -27,6 +27,7 @@ class PiiLabel(str, Enum):
     CONTACT = "CONTACT"
     BANK = "BANK"
     ID = "ID"
+    LISTED = "LISTED"  # on the user's always-redact list
 
     def __str__(self) -> str:  # keeps "%s" in the trace from printing PiiLabel.PERSON
         return self.value
@@ -36,6 +37,7 @@ class PiiLabel(str, Enum):
 LABELED_VALUE = "labeled-value"
 NAME_MEMORY = "name-memory"
 BIRTHDATE_MEMORY = "birthdate-memory"
+USER_LIST = "user-list"
 _RULE_PREFIX = "rule "
 
 

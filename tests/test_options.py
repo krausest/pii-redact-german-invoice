@@ -77,3 +77,29 @@ def test_debug_needs_json_output():
 def test_assemble_rejects(raw):
     with pytest.raises(ValueError):
         assemble(raw)
+
+
+def test_word_lists_collect_every_repeat():
+    raw = RedactOptions.raw_query(
+        [("redact-word", "Andrea Muster"), ("unwarp", "true"), ("redact-word", " Muster "), ("keep-word", "Praxis")]
+    )
+    opts = redact(raw)
+    assert opts.lists.redact == ("Andrea Muster", "Muster")
+    assert opts.lists.keep == ("Praxis",)
+    assert opts.unwarp is True
+    assert redact({}).lists.redact == ()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"redact-word": ["  "]},
+        {"keep-word": ["x" * 101]},
+        {"redact-word": ["w"] * 201},
+        {"redact-word": ["Muster"], "keep-word": ["MUSTER"]},
+        {"redact_word": ["Muster"]},
+    ],
+)
+def test_word_lists_reject(raw):
+    with pytest.raises(ValueError):
+        redact(raw)

@@ -6,6 +6,7 @@
   import FileDrop from './lib/FileDrop.svelte'
   import Settings from './lib/Settings.svelte'
   import Toolbar from './lib/Toolbar.svelte'
+  import WordLists, { type Lists } from './lib/WordLists.svelte'
   import PageEditor from './lib/PageEditor.svelte'
   import LanguageSelect from './lib/LanguageSelect.svelte'
   import { i18n, t } from './lib/i18n.svelte'
@@ -33,6 +34,8 @@
     dpi: DEFAULT_DPI,
     unwarp: DEFAULT_UNWARP,
     classifier: null,
+    redactWords: [],
+    keepWords: [],
   })
   /** Empty until `/health` answers; then the select appears if there is a choice. */
   let classifiers = $state<string[]>([])
@@ -43,6 +46,7 @@
     | { kind: 'remove'; id: number }
     | { kind: 'discard-all' }
     | { kind: 'replace'; files: File[] }
+    | { kind: 'lists'; lists: Lists }
   let confirm = $state<Confirm | null>(null)
 
   /** The detection trace, once fetched; null while the dialog is closed. */
@@ -127,12 +131,32 @@
     else reset()
   }
 
+  const sameWords = (a: string[], b: string[]) => a.length === b.length && a.every((w, i) => w === b[i])
+
   function sameOptions(a: AnalyzeOptions, b: AnalyzeOptions) {
     return (
       a.dpi === b.dpi &&
       a.unwarp === b.unwarp &&
-      a.classifier === b.classifier
+      a.classifier === b.classifier &&
+      sameWords(a.redactWords, b.redactWords) &&
+      sameWords(a.keepWords, b.keepWords)
     )
+  }
+
+  /**
+   * The word lists hold for the whole batch, so a change re-analyzes every
+   * document — after asking, if that throws away hand edits on any of them.
+   */
+  function requestLists(next: Lists) {
+    if (store.docs.some((d) => d.boxesEdited)) confirm = { kind: 'lists', lists: next }
+    else applyLists(next)
+  }
+
+  function applyLists(next: Lists) {
+    const lists = { redactWords: [...next.redactWords], keepWords: [...next.keepWords] }
+    defaults = { ...defaults, ...lists }
+    if (store.docs.length) store.reanalyzeAll((o) => ({ ...o, ...lists }))
+    selected = null
   }
 
   /**
@@ -180,6 +204,7 @@
     else if (next?.kind === 'remove') removeDoc(next.id)
     else if (next?.kind === 'discard-all') reset()
     else if (next?.kind === 'replace') replaceAll(next.files)
+    else if (next?.kind === 'lists') applyLists(next.lists)
   }
 
   const confirmText = $derived.by(() => {
@@ -193,6 +218,10 @@
         message: m.dialog.replaceMessage(unsaved.length),
         label: m.dialog.replaceConfirm,
       }
+    }
+    if (confirm?.kind === 'lists') {
+      const edited = store.docs.filter((d) => d.boxesEdited).length
+      return { title: m.dialog.listsTitle, message: m.dialog.listsMessage(edited), label: m.dialog.reanalyze }
     }
     if (confirm?.kind === 'discard-all') {
       return { title: m.dialog.discardAllTitle, message: m.dialog.discardAllMessage, label: m.dialog.discardAllConfirm }
@@ -367,6 +396,7 @@
   {#if !doc}
     <FileDrop onselect={onSelectFiles} onerror={(msg) => (errorMsg = msg)} />
     <Settings options={defaults} {classifiers} onChange={requestSettings} />
+    <div class="lists-idle"><WordLists lists={defaults} onChange={requestLists} /></div>
   {:else}
     <div class="workspace" class:batch>
       {#if batch}
@@ -380,6 +410,7 @@
         />
       {/if}
       <div class="editor">
+        <WordLists lists={defaults} onChange={requestLists} disabled={rendering || zipping} />
         <Toolbar
           bind:tool
           current={doc.current}
@@ -493,6 +524,9 @@
     .workspace.batch {
       grid-template-columns: 1fr;
     }
+  }
+  .lists-idle {
+    margin-top: 1.2rem;
   }
   .failed {
     flex-direction: column;

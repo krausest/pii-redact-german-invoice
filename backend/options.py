@@ -18,12 +18,13 @@ Everything raises ``ValueError`` with a one-line message ready to become an HTTP
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Annotated, Any, Literal, Self
+from collections.abc import Iterable, Mapping
+from typing import Annotated, Any, Literal, Self, get_origin
 
-from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from backend.config import ClassifierName, Config
+from backend.wordlists import WordLists
 
 Quality = Annotated[int, Field(ge=1, le=100)]
 Dpi = Annotated[int, Field(ge=36, le=1200)]
@@ -31,6 +32,8 @@ Dpi = Annotated[int, Field(ge=36, le=1200)]
 # rather than a 4-tuple so a short box reports "should have at least 4 items"
 # instead of pydantic's per-index "Field required".
 BoxList = Annotated[list[int], Field(min_length=4, max_length=4)]
+Word = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+WordList = Annotated[list[Word], Field(max_length=200)]
 
 
 class NoteIn(BaseModel):
@@ -81,6 +84,19 @@ class _QueryModel(BaseModel):
     )
 
     @classmethod
+    def raw_query(cls, items: Iterable[tuple[str, str]]) -> dict[str, Any]:
+        """The query's ``(name, value)`` pairs as ``from_query`` takes them: a
+        list-typed option collects every repeat, any other keeps the last."""
+        lists = {f.alias for f in cls.model_fields.values() if get_origin(f.annotation) is list}
+        raw: dict[str, Any] = {}
+        for name, value in items:
+            if name in lists:
+                raw.setdefault(name, []).append(value)
+            else:
+                raw[name] = value
+        return raw
+
+    @classmethod
     def wire_names(cls) -> list[str]:
         return sorted(f.alias or name for name, f in cls.model_fields.items())
 
@@ -107,6 +123,13 @@ class RedactOptions(_QueryModel):
     # Not config-backed: nothing sensible would turn the trace on for every
     # request, so this one really is a class default, like `json_output`.
     debug: bool = False
+    # The user's word lists, repeatable: `?redact-word=a&redact-word=b`.
+    redact_word: WordList = []
+    keep_word: WordList = []
+
+    @property
+    def lists(self) -> WordLists:
+        return WordLists(tuple(self.redact_word), tuple(self.keep_word))
 
     @classmethod
     def from_query(cls, raw: Mapping[str, Any], config: Config) -> RedactOptions:
@@ -129,6 +152,9 @@ class RedactOptions(_QueryModel):
             raise ValueError("debug=true requires json-output=true")
         if opts.classifier not in config.engine.classifiers:
             raise ValueError(f"classifier {opts.classifier!r} is not enabled on this server")
+        both = {w.casefold() for w in opts.redact_word} & {w.casefold() for w in opts.keep_word}
+        if both:
+            raise ValueError(f"in both redact-word and keep-word: {sorted(both)}")
         return opts
 
 

@@ -18,6 +18,11 @@ the server stores nothing.
 4. **Download:** `POST /api/assemble` turns the pages and kept boxes into the final
    PDF or JPEG — per document, or all finished documents as one ZIP.
 
+Two word lists above the toolbar (also on the start page) hold for the whole
+batch: *Always redact* and *Never redact* (`redact-word` / `keep-word`). Adding or
+removing an entry re-analyzes every document, asking first if boxes were edited;
+the lists are not saved across reloads.
+
 Resolution, dewarping and classifier are set per document; changing one re-runs
 the analysis for that document (asking first if boxes were edited). The footer's
 *Debug log* re-runs detection with `debug=true` and shows the trace without
@@ -37,7 +42,7 @@ downloaded (alone or in a ZIP) since its last change.
 | `src/lib/documents.svelte.ts` | document list and the sequential analysis queue |
 | `src/lib/zip.ts` | ZIP unpack/pack ([fflate](https://github.com/101arrowz/fflate)) |
 | `src/lib/PageEditor.svelte` | box editor over one page image |
-| `src/lib/DocumentList.svelte`, `Toolbar.svelte`, `Settings.svelte`, `FileDrop.svelte` | UI parts |
+| `src/lib/DocumentList.svelte`, `Toolbar.svelte`, `Settings.svelte`, `WordLists.svelte`, `FileDrop.svelte` | UI parts |
 | `src/lib/i18n.svelte.ts`, `src/lib/messages/{en,de}.ts` | translations; `de` is type-checked against `en` |
 
 ## Commands

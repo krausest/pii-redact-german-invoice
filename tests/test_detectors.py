@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from backend.detectors import MemoryDetector, ModelDetector, RuleDetector
+from backend.detectors import ListDetector, MemoryDetector, ModelDetector, RuleDetector
 from backend.harvest import Memory
 from backend.pii import PiiLabel, Span
+from backend.wordlists import WordLists
 
 RULES, MODEL, MEMORY = RuleDetector(), ModelDetector(classifier=None), MemoryDetector(Memory())
+LIST = ListDetector(WordLists())
 
 
 @pytest.mark.parametrize(
@@ -30,6 +32,9 @@ RULES, MODEL, MEMORY = RuleDetector(), ModelDetector(classifier=None), MemoryDet
         (MEMORY, "birthdate-memory", "DIAG", True),
         (MEMORY, "name-memory", "FACH", False),
         (MEMORY, "birthdate-memory", "PVS", False),
+        # the user's list wins over every keep reason
+        (LIST, "user-list", "item table", True),
+        (LIST, "user-list", "PVS", True),
     ],
 )
 def test_what_a_kept_line_admits(detector, source, keep, admitted):

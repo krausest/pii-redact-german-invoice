@@ -53,7 +53,26 @@ export const de: Messages = {
     classifierTitle: 'Das Modell, das personenbezogene Daten im erkannten Text findet',
     language: 'Sprache',
   },
+  wordlists: {
+    group: 'Wortlisten',
+    redactTitle: 'Immer schwärzen',
+    redactHint: 'Eine Zeile mit einem dieser Wörter wird immer geschwärzt.',
+    keepTitle: 'Nie schwärzen',
+    keepHint: 'Kein Fund, der eines dieser Wörter enthält, wird geschwärzt.',
+    placeholder: 'Wort oder Wortfolge',
+    add: 'Hinzufügen',
+    addTo: (list: string) => `Zu „${list}“ hinzufügen`,
+    remove: (word: string) => `${word} entfernen`,
+    empty: 'Keine Einträge',
+    duplicate: 'Steht bereits in dieser Liste.',
+    inOther: (list: string) => `Steht bereits in „${list}“.`,
+    tooLong: (n: number) => `Höchstens ${n} Zeichen.`,
+    tooMany: (n: number) => `Höchstens ${n} Einträge.`,
+  },
   dialog: {
+    listsTitle: 'Alle Dokumente neu analysieren?',
+    listsMessage: (n: number) =>
+      `Die Wortlisten gelten für alle Dokumente, daher werden alle neu analysiert. Von Hand bearbeitete Markierungen in ${n} Dokument${n === 1 ? '' : 'en'} gehen verloren.`,
     discardTitle: 'Änderungen verwerfen?',
     discardMessage:
       'Wird diese Einstellung geändert, läuft die Erkennung für das gesamte Dokument neu. Die von Hand ergänzten oder entfernten Markierungen gehen dabei verloren.',

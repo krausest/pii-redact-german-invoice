@@ -28,6 +28,7 @@ from backend.rules import item_table_lines
 from backend.trace import Trace, trace_page
 from backend.unwarp import DocUnwarper
 from backend.verdict import PageVerdict
+from backend.wordlists import EMPTY, WordLists
 
 
 def _print_note(draw: ImageDraw.ImageDraw, box: Box) -> None:
@@ -93,9 +94,10 @@ class RedactionPipeline:
         trace: Trace | None = None,
         regions: list[LayoutRegion] | None = None,
         classifier: str | None = None,
+        lists: WordLists = EMPTY,
     ) -> list[Box]:
         """Boxes to redact, in the pixel space of ``image``; see :meth:`compute_verdict`."""
-        return self.compute_verdict(image, lines, memory, trace, regions, classifier).boxes
+        return self.compute_verdict(image, lines, memory, trace, regions, classifier, lists).boxes
 
     def compute_verdict(
         self,
@@ -105,13 +107,14 @@ class RedactionPipeline:
         trace: Trace | None = None,
         regions: list[LayoutRegion] | None = None,
         classifier: str | None = None,
+        lists: WordLists = EMPTY,
     ) -> PageVerdict:
         """What the page decides: which lines go black and why, and the boxes.
 
         ``lines`` and ``regions`` must be this very image's, if given. ``memory``
         carries names and birthdates from page to page (forward only); ``None``
-        keeps it page-local. ``classifier`` names the model to run. ``trace``
-        collects why each box exists."""
+        keeps it page-local. ``classifier`` names the model to run. ``lists`` are
+        the user's word lists. ``trace`` collects why each box exists."""
         if lines is None:
             lines = self._ocr.lines(image)
         trace = trace or Trace()
@@ -119,7 +122,7 @@ class RedactionPipeline:
             regions = self.regions(image)
         memory = memory if memory is not None else Memory()
         verdict = self._redactor.decide(
-            image.width, lines, regions, self.classifier(classifier), memory, trace
+            image.width, lines, regions, self.classifier(classifier), memory, trace, lists
         )
         trace_page(trace, verdict)
         return verdict

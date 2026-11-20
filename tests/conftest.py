@@ -84,8 +84,9 @@ class FakePipeline:
         self.calls.append("unwarp")
         return Image.new("RGB", image.size, (10, 20, 30))
 
-    def compute_boxes(self, image, lines=None, memory=None, trace=None, regions=None, classifier=None):  # noqa: ARG002
+    def compute_boxes(self, image, lines=None, memory=None, trace=None, regions=None, classifier=None, lists=None):  # noqa: ARG002
         self.calls.append("compute_boxes")
+        self.lists = lists
         if trace is not None:
             trace.add("fake pipeline: %d box(es)", len(self.boxes))
         return list(self.boxes)

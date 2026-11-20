@@ -42,3 +42,7 @@ export const DEFAULT_UNWARP = false
 // Mirror the backend cap so we can reject before uploading. Keep in sync with the
 // redaction service's api.max_upload_bytes.
 export const MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+
+// Mirror the backend's word-list limits (backend/options.py).
+export const MAX_WORD_LENGTH = 100
+export const MAX_WORDS = 200

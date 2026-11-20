@@ -21,6 +21,8 @@ export interface Doc {
   boxesEdited: boolean
   /** Saved (alone or in a ZIP) since the last change. */
   downloaded: boolean
+  /** Bumped by every re-analysis, so a result for older options is dropped. */
+  generation: number
 }
 
 /** Discarding it would lose work: analysis in progress, or a result not downloaded. */
@@ -61,6 +63,7 @@ export class Documents {
         current: 0,
         boxesEdited: false,
         downloaded: false,
+        generation: 0,
       })
       this.#queue.push(id)
       ids.push(id)
@@ -72,7 +75,20 @@ export class Documents {
   /** Re-run detection with new options, ahead of everything still waiting. */
   reanalyze(id: number, options: AnalyzeOptions) {
     const doc = this.get(id)
-    if (!doc || doc.status === 'analyzing') return
+    if (!doc) return
+    this.#reset(doc, options)
+    this.#queue = [id, ...this.#queue.filter((q) => q !== id)]
+    this.#pump()
+  }
+
+  /** Re-run detection for every document, in upload order, with `update` applied to its options. */
+  reanalyzeAll(update: (options: AnalyzeOptions) => AnalyzeOptions) {
+    for (const doc of this.docs) this.#reset(doc, update(doc.options))
+    this.#queue = this.docs.map((d) => d.id)
+    this.#pump()
+  }
+
+  #reset(doc: Doc, options: AnalyzeOptions) {
     doc.options = { ...options }
     doc.status = 'queued'
     doc.error = null
@@ -80,8 +96,7 @@ export class Documents {
     doc.current = 0
     doc.boxesEdited = false
     doc.downloaded = false
-    this.#queue = [id, ...this.#queue.filter((q) => q !== id)]
-    this.#pump()
+    doc.generation++
   }
 
   remove(id: number) {
@@ -102,13 +117,18 @@ export class Documents {
         const doc = this.get(id)
         if (!doc) continue
         doc.status = 'analyzing'
+        const generation = doc.generation
+        // Removed, or re-queued with new options, while it ran: drop the result.
+        const current = () => {
+          const live = this.get(id)
+          return live?.generation === generation ? live : undefined
+        }
         try {
           const pages = await analyze(doc.file, $state.snapshot(doc.options))
-          // Removed while it ran: the result has nowhere to go.
-          const live = this.get(id)
+          const live = current()
           if (live) Object.assign(live, { pages, current: 0, status: 'ready' })
         } catch (e) {
-          const live = this.get(id)
+          const live = current()
           if (live) Object.assign(live, { status: 'error', error: e instanceof ApiError ? e.message : null })
         }
       }

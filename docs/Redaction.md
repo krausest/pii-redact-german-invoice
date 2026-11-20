@@ -74,8 +74,12 @@ The heart of the pipeline, per page:
    - `rules.rule_spans` runs the deterministic rules per line (see below).
    - The classifier analyses the whole page text once and returns `Span`s;
      `Document.per_line` maps them back to lines.
+   - The user's `redact-word` list (`wordlists.WordLists`) adds a `LISTED` span
+     per match; its `ListDetector` admits it on every kept line.
    - Each detector's `admits` drops the candidates a kept line does not allow
-     ([below](#what-stays-readable)); the trace lists them as `rejected …`.
+     ([below](#what-stays-readable)); the trace lists them as `rejected …`. A
+     rule, classifier or memory span containing a `keep-word` entry is rejected
+     the same way, so it neither redacts nor feeds the name memory.
 4. **Name memory.** `Memory.learn` collects surnames named by the surviving spans
    (patient label, title, salutation, birth-date line, or a classifier `PERSON`
    outside the item table). `Memory.recall` then marks every other line on the

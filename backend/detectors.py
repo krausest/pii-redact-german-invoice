@@ -17,6 +17,7 @@ from backend.pii import Span, rule_source
 from backend.rules import rule_spans
 from backend.rules.keep import KeepReason
 from backend.trace import Trace
+from backend.wordlists import WordLists
 
 
 class Detector(Protocol):
@@ -64,3 +65,16 @@ class MemoryDetector:
 
     def admits(self, span: Span, keep: str | None) -> bool:  # noqa: ARG002
         return keep not in (KeepReason.FACH, KeepReason.PVS)
+
+
+class ListDetector:
+    """The user's always-redact list. The user wins over every keep reason."""
+
+    def __init__(self, lists: WordLists) -> None:
+        self._lists = lists
+
+    def spans(self, doc: Document, trace: Trace) -> list[Span]:  # noqa: ARG002
+        return self._lists.redact_spans(doc)
+
+    def admits(self, span: Span, keep: str | None) -> bool:  # noqa: ARG002
+        return True
