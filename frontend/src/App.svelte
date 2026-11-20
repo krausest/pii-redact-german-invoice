@@ -37,6 +37,11 @@
     redactWords: [],
     keepWords: [],
   })
+  /**
+   * The word lists as edited. They reach the documents only on "Refresh"
+   * (`defaults` holds what they were analyzed with); with none loaded, at once.
+   */
+  let draftLists = $state<Lists>({ redactWords: [], keepWords: [] })
   /** Empty until `/health` answers; then the select appears if there is a choice. */
   let classifiers = $state<string[]>([])
 
@@ -108,6 +113,7 @@
   function onSelectFiles(files: File[]) {
     errorMsg = null
     const wasIdle = !store.docs.length
+    if (wasIdle) defaults = { ...defaults, ...$state.snapshot(draftLists) }
     const ids = store.add(files, $state.snapshot(defaults))
     if (!doc) selectDoc(ids[0])
     if (wasIdle) focusToolbar()
@@ -143,8 +149,12 @@
     )
   }
 
+  const listsPending = $derived(
+    !sameWords(draftLists.redactWords, defaults.redactWords) || !sameWords(draftLists.keepWords, defaults.keepWords),
+  )
+
   /**
-   * The word lists hold for the whole batch, so a change re-analyzes every
+   * The word lists hold for the whole batch, so "Refresh" re-analyzes every
    * document — after asking, if that throws away hand edits on any of them.
    */
   function requestLists(next: Lists) {
@@ -396,7 +406,7 @@
   {#if !doc}
     <FileDrop onselect={onSelectFiles} onerror={(msg) => (errorMsg = msg)} />
     <Settings options={defaults} {classifiers} onChange={requestSettings} />
-    <div class="lists-idle"><WordLists lists={defaults} onChange={requestLists} /></div>
+    <div class="lists-idle"><WordLists lists={draftLists} onChange={(next) => (draftLists = next)} /></div>
   {:else}
     <div class="workspace" class:batch>
       {#if batch}
@@ -410,7 +420,13 @@
         />
       {/if}
       <div class="editor">
-        <WordLists lists={defaults} onChange={requestLists} disabled={rendering || zipping} />
+        <WordLists
+          lists={draftLists}
+          onChange={(next) => (draftLists = next)}
+          onRefresh={() => requestLists($state.snapshot(draftLists))}
+          pending={listsPending}
+          disabled={rendering || zipping}
+        />
         <Toolbar
           bind:tool
           current={doc.current}

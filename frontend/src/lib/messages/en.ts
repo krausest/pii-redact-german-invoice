@@ -73,6 +73,9 @@ export const en = {
     inOther: (list: string) => `Already in “${list}”.`,
     tooLong: (n: number) => `At most ${n} characters.`,
     tooMany: (n: number) => `At most ${n} entries.`,
+    refresh: 'Refresh',
+    refreshTitle: 'Analyze every document again with these word lists',
+    pending: 'Changes not applied yet',
   },
   dialog: {
     listsTitle: 'Re-analyze all documents?',

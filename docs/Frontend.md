@@ -19,9 +19,10 @@ the server stores nothing.
    PDF or JPEG — per document, or all finished documents as one ZIP.
 
 Two word lists above the toolbar (also on the start page) hold for the whole
-batch: *Always redact* and *Never redact* (`redact-word` / `keep-word`). Adding or
-removing an entry re-analyzes every document, asking first if boxes were edited;
-the lists are not saved across reloads.
+batch: *Always redact* and *Never redact* (`redact-word` / `keep-word`). Editing
+them re-analyzes nothing; *Refresh* below them re-analyzes every document with the
+current lists, asking first if boxes were edited. On the start page they apply to
+the next upload directly. The lists are not saved across reloads.
 
 Resolution, dewarping and classifier are set per document; changing one re-runs
 the analysis for that document (asking first if boxes were edited). The footer's

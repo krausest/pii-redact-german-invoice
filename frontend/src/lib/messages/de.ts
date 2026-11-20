@@ -68,6 +68,9 @@ export const de: Messages = {
     inOther: (list: string) => `Steht bereits in „${list}“.`,
     tooLong: (n: number) => `Höchstens ${n} Zeichen.`,
     tooMany: (n: number) => `Höchstens ${n} Einträge.`,
+    refresh: 'Aktualisieren',
+    refreshTitle: 'Alle Dokumente mit diesen Wortlisten neu analysieren',
+    pending: 'Änderungen noch nicht angewendet',
   },
   dialog: {
     listsTitle: 'Alle Dokumente neu analysieren?',
