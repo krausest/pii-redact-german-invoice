@@ -95,7 +95,7 @@ The heart of the pipeline, per page:
    document, so a name or birthdate labelled on page 1 is caught bare on page 2
    (forward only).
 5. **Line boxes.** Every line that carries at least one span gets a box over the
-   whole line, plus `padding`. With `granularity=word` (experimental) each span is
+   whole line, plus `padding`. With `granularity=word` (the default) each span is
    widened to whole tokens, runs separated only by whitespace or punctuation are
    joined, and only those runs are boxed, positioned by the OCR's word geometry
    (`Line.words`, by character share where there is none); the padding is clipped where it would reach into a

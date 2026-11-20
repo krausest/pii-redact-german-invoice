@@ -93,6 +93,9 @@ class LayoutConfig(BaseModel):
     layout_nms: bool = True
 
 
+Granularity = Literal["line", "word"]
+
+
 class RedactionConfig(BaseModel):
     model_config = _STRICT
 
@@ -100,6 +103,8 @@ class RedactionConfig(BaseModel):
     padding: Annotated[int, Field(ge=0)] = 2
     score_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.4
     unwarp: bool = False
+    # Black out only a finding's words, or its whole OCR line.
+    granularity: Granularity = "word"
     # PDF rasterization DPI, max pages accepted, and JPEG quality for the rendered
     # output (visually lossless at ~90, much smaller than PNG). The bounds are the
     # same ones the matching query parameters are held to.
@@ -142,6 +147,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "PII_CLASSIFIER": ("engine", "classifier"),
     "PII_GUARD_OMNI": ("engine", "guard_omni"),
     "PII_UNWARP": ("redaction", "unwarp"),
+    "PII_GRANULARITY": ("redaction", "granularity"),
     "PII_REDACT_REGIONS": ("redaction", "redact_regions"),
 }
 

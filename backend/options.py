@@ -23,7 +23,7 @@ from typing import Annotated, Any, Literal, Self, get_origin
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from backend.config import ClassifierName, Config
+from backend.config import ClassifierName, Config, Granularity
 from backend.wordlists import WordLists
 
 Quality = Annotated[int, Field(ge=1, le=100)]
@@ -126,8 +126,7 @@ class RedactOptions(_QueryModel):
     # The user's word lists, repeatable: `?redact-word=a&redact-word=b`.
     redact_word: WordList = []
     keep_word: WordList = []
-    # Box a redacted line whole, or only its redacted words (experimental).
-    granularity: Literal["line", "word"] = "line"
+    granularity: Granularity
 
     @property
     def lists(self) -> WordLists:
@@ -142,6 +141,7 @@ class RedactOptions(_QueryModel):
                 "pdf-dpi": red.pdf_dpi,
                 "jpeg-quality": red.jpeg_quality,
                 "classifier": config.engine.classifier,
+                "granularity": red.granularity,
             },
             raw,
         )

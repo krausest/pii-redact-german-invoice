@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from typing import Literal
 
 from backend.classifiers.base import Classifier
+from backend.config import Granularity
 from backend.detectors import Detector, ListDetector, MemoryDetector, ModelDetector, RuleDetector
 from backend.document import Document
 from backend.harvest import Memory
@@ -19,7 +19,6 @@ from backend.trace import Trace
 from backend.verdict import PageVerdict
 from backend.wordlists import EMPTY, WordLists
 
-Granularity = Literal["line", "word"]
 # What may sit between two redacted ranges and still join them into one box.
 _GLUE = re.compile(r"[\W_]*")
 

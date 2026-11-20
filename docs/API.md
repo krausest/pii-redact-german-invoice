@@ -49,7 +49,7 @@ Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
 | `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it. `guard-omni` only if enabled, otherwise `400` |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report — **requires `json-output=true`** |
-| `granularity` | `line` \| `word` | `line` | **experimental**: `word` boxes only the redacted words of a line instead of the whole line |
+| `granularity` | `word` \| `line` | `redaction.granularity` | `word` boxes only the redacted words of a line, `line` the whole line |
 | `redact-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: always redact the line holding this word or phrase |
 | `keep-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: drop every finding whose text contains this word or phrase |
 

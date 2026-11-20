@@ -54,7 +54,7 @@ export const en = {
     resolutionDisabledTitle: 'Resolution applies to PDF input only',
     unwarp: 'Unwarp',
     wordLevel: 'Word-level',
-    wordLevelTitle: 'Black out only the words found, not their whole line (experimental)',
+    wordLevelTitle: 'Black out only the words found, not their whole line',
     unwarpTitle: 'Flatten a photographed page before detecting text',
     classifier: 'Model',
     classifierTitle: 'The model that detects PII in the recognized text',

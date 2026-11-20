@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     opts.add_argument(
         "--granularity",
         metavar="MODE",
-        help="line: black out every line holding a finding (default); word: only its words",
+        help="word: black out only a finding's words; line: its whole line (default: redaction.granularity)",
     )
     opts.add_argument(
         "--redact-word",

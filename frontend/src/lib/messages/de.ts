@@ -49,7 +49,7 @@ export const de: Messages = {
     resolutionDisabledTitle: 'Die Auflösung gilt nur für PDF-Dateien',
     unwarp: 'Entzerren',
     wordLevel: 'Wortgenau',
-    wordLevelTitle: 'Nur die gefundenen Wörter schwärzen statt der ganzen Zeile (experimentell)',
+    wordLevelTitle: 'Nur die gefundenen Wörter schwärzen statt der ganzen Zeile',
     unwarpTitle: 'Fotografierte Seite vor der Texterkennung begradigen',
     classifier: 'Modell',
     classifierTitle: 'Das Modell, das personenbezogene Daten im erkannten Text findet',

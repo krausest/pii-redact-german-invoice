@@ -18,6 +18,7 @@ fill = [0, 0, 0]           # black
 padding = 2                # pixels added around each OCR line box
 score_threshold = 0.4      # Presidio minimum entity score
 unwarp = false              # flatten the page before OCR (default for ?unwarp=)
+granularity = "word"       # word | line: black out a finding's words or its line (default for ?granularity=)
 pdf_dpi = 200              # rasterization DPI for uploaded PDFs (default for ?pdf-dpi=)
 max_pages = 30             # reject PDFs with more pages than this
 jpeg_quality = 90          # output quality (visually lossless, default for ?jpeg-quality=)
