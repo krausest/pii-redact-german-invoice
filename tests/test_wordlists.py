@@ -41,3 +41,24 @@ def test_keep_vetoes_a_span_containing_the_entry():
     assert lists.vetoes(Span(PiiLabel.PERSON, 0, 13, "Andrea Muster", "stub"))
     assert not lists.vetoes(Span(PiiLabel.PERSON, 0, 10, "Mustermann", "stub"))
     assert not WordLists().vetoes(Span(PiiLabel.PERSON, 0, 6, "Muster", "stub"))
+
+
+@pytest.mark.parametrize(
+    "text,hit",
+    [
+        ("Beratung.", True),
+        ("Beratung)", True),
+        ("Beratung-", True),
+        ("(Beratung", True),
+        ("Beratung, auch telefonisch", True),
+        ("Beratungsfehler", False),
+        ("Fehlberatung", False),
+        ("Beratung2", False),
+    ],
+)
+def test_a_symbol_ends_an_entry_like_whitespace_a_letter_does_not(text, hit):
+    """Both lists match the same way: only a letter or digit beside the entry
+    makes it part of a longer word."""
+    lists = WordLists(redact=("Beratung",), keep=("Beratung",))
+    assert bool(lists.redact_spans(_doc(text))) is hit
+    assert lists.vetoes(Span(PiiLabel.PERSON, 0, len(text), text, "stub")) is hit
