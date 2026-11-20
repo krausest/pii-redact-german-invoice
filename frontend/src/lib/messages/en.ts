@@ -53,6 +53,8 @@ export const en = {
     resolutionTitle: 'Resolution PDF pages are rasterized at',
     resolutionDisabledTitle: 'Resolution applies to PDF input only',
     unwarp: 'Unwarp',
+    wordLevel: 'Word-level',
+    wordLevelTitle: 'Black out only the words found, not their whole line (experimental)',
     unwarpTitle: 'Flatten a photographed page before detecting text',
     classifier: 'Model',
     classifierTitle: 'The model that detects PII in the recognized text',

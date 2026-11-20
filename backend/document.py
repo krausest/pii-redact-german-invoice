@@ -47,6 +47,11 @@ class Document:
         r = self._ranges[line]
         return Span(label, r.start, r.end, text, source)
 
+    def part_of(self, line: Line, start: int, end: int, label: PiiLabel, source: str) -> Span:
+        """A span over ``line.text[start:end]``."""
+        r = self._ranges[line]
+        return Span(label, r.start + start, r.start + end, line.text[start:end], source)
+
     def per_line(self, spans: Sequence[Span]) -> dict[Line, list[Span]]:
         """Each line's spans, clipped to the line and in its own coordinates.
 

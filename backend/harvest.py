@@ -5,10 +5,10 @@ A surname recurs on lines no detector reaches on its own (a subject line, a
 greeting, a footer). So a page is read twice: the detectors find what they find,
 then every bare recurrence of a name or birthdate they witnessed is redacted too.
 
-A *pattern* (patient label, title, salutation, birth line) names a person on its
-line, so the whole line is harvested. A classifier *span* says where the person
-is, so only the span is harvested: a letterhead line holds a person and a company.
-Only ``PERSON`` spans count.
+A *pattern* (patient label, title, salutation, birth mark) points at a person:
+the name tokens running from it are harvested, not the rest of its line. A
+classifier *span* says where the person is, so only the span is harvested. Only
+``PERSON`` spans count, and every token must be shaped like a name.
 """
 
 from __future__ import annotations
@@ -27,12 +27,17 @@ from backend.rules.patterns import (
     BIRTH_MARK,
     DATE_KEEP_LABEL,
     DATE_RE,
+    NAME_AT,
     NAME_DATE,
     NAME_TOKEN,
-    PATIENT_NAME,
+    ORG_LEGAL,
+    PERSON_LABEL,
     PERSON_LABEL_CELL,
     SALUT,
-    TITLE_NAME,
+    SPECIALTY_WORD,
+    STREET_END,
+    TITLE_WORD,
+    TITLES,
 )
 from backend.trace import Trace
 
@@ -51,13 +56,19 @@ _NAME_STOPWORDS = frozenset({
     "September", "Oktober", "November", "Dezember",
     "Arzt", "Ärztin", "Zahnarzt", "Zahnärztin", "Facharzt", "Fachärztin",
     "Praxis", "Medizin", "Innere", "Allgemeinmedizin",
+    "Kollegen", "Kolleginnen", "Partner",
 })
 
 # Compared case-folded: an all-caps letterhead must not teach "FACHARZT".
 _NAME_STOPWORDS_CF = frozenset(w.casefold() for w in _NAME_STOPWORDS)
 
-# A line matching one of these names a person outright, whatever any span says.
-_NAME_EVIDENCE = (PATIENT_NAME, TITLE_NAME, SALUT, BIRTH_MARK, NAME_DATE)
+# How many name tokens one pattern may point at: "Prof. Dr. Andrea Muster-Beispiel".
+_MAX_RUN = 4
+# What joins two names in one run: "Muster & Beispiel", "Muster und Beispiel".
+_JOIN = re.compile(r"\s*(?:&|\bund\b)")
+_VOWEL = re.compile(r"(?i)[aeiouyäöü]")
+# A capital after a small letter: OCR junk ("DrSaer") or a degree ("MSc").
+_INNER_CAPITAL = re.compile(r"[a-zäöüß][A-ZÄÖÜ]")
 
 
 def _is_label(token: str) -> bool:
@@ -75,22 +86,85 @@ def _tokens(text: str) -> set[str]:
     return {
         part
         for token in NAME_TOKEN.findall(text)
+        if _name_shaped(token)
         for part in token.split("-")  # each half of a double name recurs alone
         if len(part) >= _MIN_NAME_LENGTH
         and part.casefold() not in _NAME_STOPWORDS_CF
         and not _is_label(part)
+        and _name_shaped(part)
     }
+
+
+def _name_shaped(token: str) -> bool:
+    """Not a street, legal form, specialty, title or OCR junk."""
+    return not (
+        not _VOWEL.search(token)
+        or _INNER_CAPITAL.search(token)
+        or STREET_END.search(token)
+        or ORG_LEGAL.fullmatch(token)
+        or SPECIALTY_WORD.fullmatch(token)
+        or TITLE_WORD.fullmatch(token)
+    )
+
+
+def _is_name(token: str) -> bool:
+    return _name_shaped(token) and token.casefold() not in _NAME_STOPWORDS_CF and not _is_label(token)
+
+
+def _run_after(text: str, pos: int, comma: bool = False) -> list[str]:
+    """The name tokens from ``pos`` on, until anything else; ``comma`` allows
+    one after the first ("Muster, Andrea")."""
+    names: list[str] = []
+    while len(names) < _MAX_RUN:
+        if comma and len(names) == 1 and text.startswith(",", pos):
+            pos += 1
+        m = NAME_AT.match(text, pos)
+        if m is None or not _is_name(m.group(1)):
+            break
+        names.append(m.group(1))
+        pos = m.end()
+        if (j := _JOIN.match(text, pos)) is not None:
+            pos = j.end()
+    return names
+
+
+def _run_before(text: str, pos: int) -> list[str]:
+    """The name tokens directly before ``pos``, one comma allowed before it."""
+    names: list[str] = []
+    for i, word in enumerate(reversed(text[:pos].split())):
+        word = word.rstrip(",") if i == 0 else word
+        if word in ("&", "und"):
+            continue
+        if len(names) == _MAX_RUN or not NAME_TOKEN.fullmatch(word) or not _is_name(word):
+            break
+        names.append(word)
+    return names
+
+
+def _named_by_patterns(text: str) -> list[str]:
+    """The names the person patterns on a line point at."""
+    found: list[str] = []
+    for m in TITLES.finditer(text):
+        found += _run_after(text, m.end())
+    for m in SALUT.finditer(text):
+        found += _run_after(text, m.end())
+    for m in PERSON_LABEL.finditer(text):
+        found += _run_after(text, m.end(), comma=True)
+    for m in NAME_DATE.finditer(text):
+        found += NAME_TOKEN.findall(m.group())
+    for m in BIRTH_MARK.finditer(text):
+        found += _run_before(text, m.start())
+    if DATE_RE.search(text):
+        for m in BIRTH_LABEL.finditer(text):
+            found += _run_before(text, m.start())
+    return found
 
 
 def _harvest_names(doc: Document, hits: Mapping[Line, Sequence[Span]]) -> dict[str, str]:
     """The names this page witnesses, each mapped to the first line naming it."""
     names: dict[str, str] = {}
     for line in doc.lines:
-        found: set[str] = set()
-        if any(p.search(line.text) for p in _NAME_EVIDENCE) or (
-            BIRTH_LABEL.search(line.text) and DATE_RE.search(line.text)
-        ):
-            found |= _tokens(line.text)
+        found = _tokens(" ".join(_named_by_patterns(line.text)))
         for span in hits.get(line, []):
             if span.label is PiiLabel.PERSON:
                 found |= _tokens(span.text)
@@ -102,20 +176,28 @@ def _harvest_names(doc: Document, hits: Mapping[Line, Sequence[Span]]) -> dict[s
 def mentions_name(text: str, names: set[str]) -> str | None:
     """The first remembered name in ``text`` as a whole word, in any casing that
     starts with a capital ("MUSTER" for "Muster", never "klein" for "Klein")."""
-    for name in names:
-        for m in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
-            if m.group()[:1].isupper():
-                return m.group()
-    return None
+    found = name_mentions(text, names)
+    return found[0].group() if found else None
+
+
+def name_mentions(text: str, names: set[str]) -> list[re.Match[str]]:
+    """Every remembered name in ``text``, by :func:`mentions_name`'s rule."""
+    return [
+        m
+        for name in names
+        for m in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE)
+        if m.group()[:1].isupper()
+    ]
 
 
 def _name_spans(doc: Document, names: set[str]) -> list[Span]:
-    """A whole-line span for every line mentioning a remembered name, quoting it."""
+    """A span over every mention of a remembered name."""
     spans: list[Span] = []
     for line in doc.lines:
-        name = mentions_name(line.text, names) if line.text.strip() else None
-        if name is not None:
-            spans.append(doc.whole_line(line, PiiLabel.PERSON, name, NAME_MEMORY))
+        if not line.text.strip():
+            continue
+        for m in name_mentions(line.text, names):
+            spans.append(doc.part_of(line, m.start(), m.end(), PiiLabel.PERSON, NAME_MEMORY))
     return spans
 
 
@@ -180,11 +262,10 @@ def _harvest_birthdates(doc: Document, hits: Mapping[Line, Sequence[Span]]) -> d
 
 
 def _birthdate_spans(doc: Document, birthdates: set[DateKey]) -> list[Span]:
-    """A whole-line span for every line holding a remembered birthdate."""
+    """A span over every remembered birthdate."""
     spans: list[Span] = []
     for line in doc.lines:
         for m in DATE_RE.finditer(line.text):
             if date_key(m.group()) in birthdates:
-                spans.append(doc.whole_line(line, PiiLabel.DATE_OF_BIRTH, m.group(), BIRTHDATE_MEMORY))
-                break
+                spans.append(doc.part_of(line, m.start(), m.end(), PiiLabel.DATE_OF_BIRTH, BIRTHDATE_MEMORY))
     return spans

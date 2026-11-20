@@ -3,7 +3,9 @@ reject, what the memory learns and recalls, and the boxes that follow."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
+from typing import Literal
 
 from backend.classifiers.base import Classifier
 from backend.detectors import Detector, ListDetector, MemoryDetector, ModelDetector, RuleDetector
@@ -16,6 +18,10 @@ from backend.rules import birth_year_note, item_table_lines, kept_lines
 from backend.trace import Trace
 from backend.verdict import PageVerdict
 from backend.wordlists import EMPTY, WordLists
+
+Granularity = Literal["line", "word"]
+# What may sit between two redacted ranges and still join them into one box.
+_GLUE = re.compile(r"[\W_]*")
 
 
 class PageRedactor:
@@ -33,6 +39,7 @@ class PageRedactor:
         memory: Memory,
         trace: Trace,
         lists: WordLists = EMPTY,
+        granularity: Granularity = "line",
     ) -> PageVerdict:
         text_lines = [ln for ln in lines if ln.text.strip()]
         doc = _read(text_lines, regions)
@@ -58,10 +65,11 @@ class PageRedactor:
             found=found,
             keep=keep,
             dropped=dropped,
-            line_boxes=_line_boxes(found, keep, pad),
+            line_boxes=(_word_boxes if granularity == "word" else _line_boxes)(found, keep, pad),
             notes=_birth_year_notes(found),
             region_boxes=region_boxes(lines, regions, set(found), pad, set(keep)),
             signatures=signature_boxes(lines, page_width, pad),
+            granularity=granularity,
         )
 
 
@@ -112,6 +120,33 @@ def _line_boxes(found: dict[Line, list[Span]], keep: dict[Line, str], pad: int) 
             parts = [p for p in parts if not line.box.contains(p)] + [line.box]
         boxes.extend(parts)
     return boxes
+
+
+def _word_boxes(found: dict[Line, list[Span]], keep: dict[Line, str], pad: int) -> list[Box]:
+    """A padded box over every run of redacted words; clipped like :func:`_line_boxes`."""
+    holes = [ln.box for ln in keep if ln not in found]
+    boxes: list[Box] = []
+    for line, spans in found.items():
+        for start, end in redacted_runs(line, spans):
+            own = line.span_box(start, end)
+            padded = own.padded(pad)
+            parts = subtract(padded, holes)
+            if parts != [padded]:
+                parts = [p for p in parts if not own.contains(p)] + [own]
+            boxes.extend(parts)
+    return boxes
+
+
+def redacted_runs(line: Line, spans: list[Span]) -> list[tuple[int, int]]:
+    """The spans' ranges on ``line``, widened to whole tokens and joined where
+    only whitespace or punctuation separates them."""
+    runs: list[tuple[int, int]] = []
+    for start, end in sorted(line.tokens(s.start, s.end) for s in spans):
+        if runs and (start <= runs[-1][1] or _GLUE.fullmatch(line.text, runs[-1][1], start)):
+            runs[-1] = (runs[-1][0], max(runs[-1][1], end))
+        else:
+            runs.append((start, end))
+    return runs
 
 
 def _birth_year_notes(found: dict[Line, list[Span]]) -> dict[Line, Box]:

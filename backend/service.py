@@ -167,6 +167,7 @@ def run_redaction(
             trace=trace,
             classifier=opts.classifier,
             lists=opts.lists,
+            granularity=opts.granularity,
         )
         # apply_boxes fills in place, so redact a copy — `image` is the clean page
         # the boxes refer to, and callers may want both.

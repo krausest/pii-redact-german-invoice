@@ -12,7 +12,7 @@ from backend.rules.patterns import (
     CONTACT,
     DE_PLZ_CITY,
     DE_STREET,
-    IMPRINT,
+    IMPRINT_VALUES,
     NAME_DATE,
     ORG_LEGAL,
     PATIENT_NAME,
@@ -46,7 +46,6 @@ STATIC_RULES: list[LineRule] = [
     LineRule(PiiLabel.ORG, "ORG_LEGAL", ORG_LEGAL),
     LineRule(PiiLabel.CONTACT, "CONTACT", CONTACT),
     LineRule(PiiLabel.CONTACT, "PHONE", PHONE),
-    LineRule(PiiLabel.BANK, "IMPRINT", IMPRINT),
     LineRule(PiiLabel.ID, "TAX_NUMBER", TAX_NUMBER),
 ]
 
@@ -62,4 +61,15 @@ def line_spans(doc: Document) -> list[Span]:
             for m in rule.pattern.finditer(line.text):
                 start, end = offset + m.start(), offset + m.end()
                 spans.append(Span(rule.label, start, end, m.group(), rule_source(rule.name)))
+    return spans
+
+
+def imprint_spans(doc: Document) -> list[Span]:
+    """The value after each imprint marker ("IBAN", "Konto"), not the marker;
+    it may sit on the next line in reading order."""
+    spans: list[Span] = []
+    for pattern in IMPRINT_VALUES:
+        for m in pattern.finditer(doc.text):
+            start, end = m.span("value")
+            spans.append(Span(PiiLabel.BANK, start, end, m.group("value"), rule_source("IMPRINT")))
     return spans

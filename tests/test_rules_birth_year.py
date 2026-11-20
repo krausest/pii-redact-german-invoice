@@ -34,7 +34,7 @@ def _note(text):
 
 def test_the_birth_year_is_printed_where_the_date_stood():
     note = _note("Geburtsdatum: 26.06.1975")
-    assert (note.text, note.x0, note.x1, note.y0, note.y1) == ("1975", 140, 240, 10, 30)
+    assert (note.text, note.x0, note.x1, note.y0, note.y1) == ("1975", 135, 240, 10, 30)
 
 
 def test_a_two_digit_birth_year_is_written_out():

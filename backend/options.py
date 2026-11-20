@@ -126,6 +126,8 @@ class RedactOptions(_QueryModel):
     # The user's word lists, repeatable: `?redact-word=a&redact-word=b`.
     redact_word: WordList = []
     keep_word: WordList = []
+    # Box a redacted line whole, or only its redacted words (experimental).
+    granularity: Literal["line", "word"] = "line"
 
     @property
     def lists(self) -> WordLists:

@@ -48,6 +48,8 @@ export const de: Messages = {
     resolutionTitle: 'Auflösung, mit der PDF-Seiten gerastert werden',
     resolutionDisabledTitle: 'Die Auflösung gilt nur für PDF-Dateien',
     unwarp: 'Entzerren',
+    wordLevel: 'Wortgenau',
+    wordLevelTitle: 'Nur die gefundenen Wörter schwärzen statt der ganzen Zeile (experimentell)',
     unwarpTitle: 'Fotografierte Seite vor der Texterkennung begradigen',
     classifier: 'Modell',
     classifierTitle: 'Das Modell, das personenbezogene Daten im erkannten Text findet',

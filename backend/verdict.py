@@ -28,6 +28,8 @@ class PageVerdict:
     notes: dict[Line, Box]
     region_boxes: list[RegionBox]
     signatures: list[SignatureBox]
+    # "word": only the redacted words of a line are boxed.
+    granularity: str = "line"
 
     @property
     def boxes(self) -> list[Box]:

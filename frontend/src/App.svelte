@@ -14,7 +14,7 @@
   import type { AnalyzeOptions } from './lib/api'
   import { Documents, isUnsaved, type Doc } from './lib/documents.svelte'
   import { zipFiles } from './lib/zip'
-  import { DEFAULT_DPI, DEFAULT_UNWARP } from './lib/types'
+  import { DEFAULT_DPI, DEFAULT_UNWARP, DEFAULT_WORD_LEVEL } from './lib/types'
   import type { Box, OutputFormat, Selection, Tool } from './lib/types'
   import { version as appVersion } from '../package.json'
 
@@ -33,6 +33,7 @@
   let defaults = $state<AnalyzeOptions>({
     dpi: DEFAULT_DPI,
     unwarp: DEFAULT_UNWARP,
+    wordLevel: DEFAULT_WORD_LEVEL,
     classifier: null,
     redactWords: [],
     keepWords: [],
@@ -143,6 +144,7 @@
     return (
       a.dpi === b.dpi &&
       a.unwarp === b.unwarp &&
+      a.wordLevel === b.wordLevel &&
       a.classifier === b.classifier &&
       sameWords(a.redactWords, b.redactWords) &&
       sameWords(a.keepWords, b.keepWords)

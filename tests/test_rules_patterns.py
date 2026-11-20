@@ -228,3 +228,24 @@ PATTERN_CASES: list[tuple[str, str, bool]] = [
 )
 def test_the_pattern_judgement(name: str, text: str, matches: bool) -> None:
     assert bool(getattr(patterns, name).search(text)) is matches
+
+
+@pytest.mark.parametrize(
+    "text,values",
+    [
+        ("IBAN: DE00 1234 5678 9012 3456 78 BIC MUSTDEFFXXX", ["DE00 1234 5678 9012 3456 78", "MUSTDEFFXXX"]),
+        ("IBAN\nDE00123456789012345678", ["DE00123456789012345678"]),
+        ("IBAN DE00123456789012345678\n01.02.20", ["DE00123456789012345678"]),  # stops at the line
+        ("Konto-Nr.: 520 22 111", ["520 22 111"]),
+        ("Steuernummer: DE123456789", ["DE123456789"]),
+        ("IK: 123456789 UST-1dNr: DE 123456789", ["DE 123456789", "123456789"]),
+        ("Steuernummer: 123/456/78901", ["123/456/78901"]),
+        ("BSNR:12/3456789", ["12/3456789"]),
+        ("Amtsgericht Musterstadt HRB-Nr. 12345", ["12345"]),
+        ("Postfach 01.02.20", []),  # a date is no box number
+        ("Konto bei der Musterbank", []),
+        ("Bankverbindung: Musterbank", []),
+    ],
+)
+def test_an_imprint_marker_claims_only_a_value_of_its_format(text, values):
+    assert [m.group("value") for p in patterns.IMPRINT_VALUES for m in p.finditer(text)] == values

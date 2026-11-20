@@ -80,9 +80,11 @@ The heart of the pipeline, per page:
      ([below](#what-stays-readable)); the trace lists them as `rejected …`. A
      rule, classifier or memory span containing a `keep-word` entry is rejected
      the same way, so it neither redacts nor feeds the name memory.
-4. **Name memory.** `Memory.learn` collects surnames named by the surviving spans
-   (patient label, title, salutation, birth-date line, or a classifier `PERSON`
-   outside the item table). `Memory.recall` then marks every other line on the
+4. **Name memory.** `Memory.learn` collects the names a person pattern points at
+   — the run of name tokens after a title, salutation or patient label, before a
+   birth mark or birth label, in a `Surname,Forename date` row — and a classifier
+   `PERSON` span outside the item table, never the rest of their line. A token
+   shaped like a street, legal form, specialty, title or OCR junk is never learned. `Memory.recall` then marks every other line on the
    page that mentions one of them; these candidates pass the memory detector's `admits`. Label
    words on an evidence line (`Datum`, `Geburtsdatum`, `Patient`, …) are never taken
    for a name. A birth-date line (birth label, `geb.`/`*` mark, `Surname,Forename
@@ -93,7 +95,10 @@ The heart of the pipeline, per page:
    document, so a name or birthdate labelled on page 1 is caught bare on page 2
    (forward only).
 5. **Line boxes.** Every line that carries at least one span gets a box over the
-   whole line, plus `padding`; the padding is clipped where it would reach into a
+   whole line, plus `padding`. With `granularity=word` (experimental) each span is
+   widened to whole tokens, runs separated only by whitespace or punctuation are
+   joined, and only those runs are boxed, positioned by the OCR's word geometry
+   (`Line.words`, by character share where there is none); the padding is clipped where it would reach into a
    kept line, the line's own box never is. A line holding a birthdate also gets a *note*: the
    birth year (`YYYY`), printed white where the date stood (`rules.birth_year_note`;
    a two-digit year is written out, several dates without a birth marker give none).
@@ -127,7 +132,7 @@ shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
 | `DE_STREET`, `DE_PLZ_CITY` | German street + number (suffix glued or as its own word: `Musterstr. 1`, `Musterer Straße 12`), postcode + city |
 | `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
 | `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
-| `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail, registry and bank identifiers |
+| `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail, registry and bank identifiers; `IMPRINT` takes the value after a marker (`IBAN`, `Konto`, `BIC`, `BLZ`, `HRB`, `USt-IdNr`, `Steuernummer`, `IK`, `LANR`/`BSNR`, `Postfach`) when it has that marker's format, also on the next line — never the marker itself |
 | `TAX_NUMBER` | a tax number in slash groups (`123/456/78901`, `123/4567/8901`), whatever its label |
 | labelled values | spatial label ↔ value pairs (below) |
 

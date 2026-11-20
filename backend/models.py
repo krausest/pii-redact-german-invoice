@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import NamedTuple
+
+_TOKEN = re.compile(r"\S+")
+
+
+class WordBox(NamedTuple):
+    """Where ``text[start:end]`` of a line sits horizontally: ``x0`` to ``x1``."""
+
+    start: int
+    end: int
+    x0: int
+    x1: int
 
 
 @dataclass(frozen=True, eq=False)
@@ -21,6 +34,8 @@ class Line:
     width: int
     height: int
     conf: float | None = None
+    # The OCR's own word geometry, in text order; empty: estimate by character share.
+    words: tuple[WordBox, ...] = ()
 
     @property
     def right(self) -> int:
@@ -41,6 +56,38 @@ class Line:
     @property
     def box(self) -> Box:
         return Box(self.left, self.top, self.right, self.bottom)
+
+    def x_range(self, start: int, end: int) -> tuple[int, int]:
+        """Pixel columns of ``text[start:end]``: from the OCR's word boxes when
+        they cover both ends, else by the characters' share of the line width."""
+        first = next((w for w in self.words if w.start <= start < w.end), None)
+        last = next((w for w in self.words if w.start < end <= w.end), None)
+        if first is None or last is None:
+            n = max(len(self.text), 1)
+            return self.left + self.width * start // n, self.left + self.width * end // n
+        x0 = first.x0 + (first.x1 - first.x0) * (start - first.start) // (first.end - first.start)
+        x1 = last.x0 + (last.x1 - last.x0) * (end - last.start) // (last.end - last.start)
+        return x0, x1
+
+    def tokens(self, start: int, end: int) -> tuple[int, int]:
+        """``[start, end)`` widened to the whitespace-delimited tokens it touches."""
+        for m in _TOKEN.finditer(self.text):
+            if m.end() > start and m.start() < end:
+                start = min(start, m.start())
+                end = max(end, m.end())
+        return start, end
+
+    def span_box(self, start: int, end: int) -> Box:
+        """The box over the tokens ``text[start:end]`` touches, full line height,
+        widened to the middle of the gap to each neighbouring word, or to the
+        line's edge: OCR word boxes clip the outer strokes."""
+        start, end = self.tokens(start, end)
+        x0, x1 = self.x_range(start, end)
+        before = self.text[:start].rstrip()
+        after = len(self.text) - len(self.text[end:].lstrip())
+        x0 = (x0 + self.x_range(len(before) - 1, len(before))[1]) // 2 if before else min(x0, self.left)
+        x1 = (x1 + self.x_range(after, after + 1)[0]) // 2 if after < len(self.text) else max(x1, self.right)
+        return Box(x0, self.top, max(x1, x0 + 1), self.bottom)
 
 
 @dataclass(frozen=True)

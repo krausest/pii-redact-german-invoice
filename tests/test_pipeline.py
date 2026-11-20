@@ -14,7 +14,7 @@ from PIL import Image
 
 from backend.harvest import Memory
 from backend.layout import LayoutRegion
-from backend.models import Box, Line
+from backend.models import Box, Line, WordBox
 from backend.pii import PiiLabel, Span
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace
@@ -337,7 +337,7 @@ def test_the_birth_year_is_printed_over_the_redacted_birthdate():
     lines = [_line("Geburtsdatum: 26.06.1975", top=10, width=240, height=20)]
     p = _pipeline(lines, [], padding=0, fill=(0, 0, 0))
     boxes = p.compute_boxes(_page())
-    assert boxes == [Box(10, 10, 250, 30), Box(150, 10, 250, 30, text="1975")]
+    assert boxes == [Box(10, 10, 250, 30), Box(145, 10, 250, 30, text="1975")]
     out = p.apply_boxes(Image.new("RGB", (300, 300), (255, 255, 255)), boxes)
     printed = [out.getpixel((x, y)) for x in range(150, 250) for y in range(10, 30)]
     assert (255, 255, 255) in printed  # the year, white on black
@@ -430,7 +430,7 @@ def test_the_listed_word_wins_over_a_keep_word_inside_it():
             [Box(226, 212, 2318, 274)],
         ),
         # "Surname,Forename date": the word after the comma matches; the note stays
-        ("Muster,Erika 16.04.12", [Box(226, 212, 2318, 274), Box(1521, 212, 2318, 274, text="2012")]),
+        ("Muster,Erika 16.04.12", [Box(226, 212, 2318, 274), Box(1471, 212, 2318, 274, text="2012")]),
     ],
 )
 def test_a_listed_name_blackens_its_whole_line_like_any_finding(text, boxes):
@@ -444,3 +444,83 @@ def test_a_listed_name_blackens_its_whole_line_like_any_finding(text, boxes):
     assert listed.boxes == boxes
     # the rules already took these lines: the list adds a reason, not a box
     assert p.compute_verdict(page).boxes == boxes
+
+
+# -- word granularity ---------------------------------------------------------- #
+def _worded(text, top=10):
+    """A line whose OCR word geometry puts every character 10 px wide, from x=0."""
+    words = tuple(WordBox(i, i + 1, 10 * i, 10 * i + 10) for i in range(len(text)))
+    return Line(text, left=0, top=top, width=10 * len(text), height=10, words=words)
+
+
+def test_word_mode_boxes_only_the_listed_name():
+    line = _worded("Termin mit Erika am Montag")
+    p = _pipeline([line], [], padding=0)
+    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("Erika",)), granularity="word")
+    assert boxes == [Box(105, 10, 165, 20)]  # half of each neighbouring gap
+
+
+def test_word_mode_widens_a_partial_hit_to_its_token():
+    line = _worded("Rechnung an Muster-Probe heute")
+    p = _pipeline([line], ["Muster"], padding=0)
+    assert p.compute_boxes(_page(), granularity="word") == [Box(115, 10, 245, 20)]
+
+
+def test_word_mode_joins_neighbouring_hits_across_punctuation():
+    line = _worded("Andrea Muster, Erika Probe")
+    p = _pipeline([line], ["Andrea Muster", "Erika Probe"], padding=0)
+    assert p.compute_boxes(_page(), granularity="word") == [Box(0, 10, 260, 20)]
+
+
+def test_word_mode_boxes_only_a_labeled_value():
+    line = _worded("Geburtsdatum: 01.02.1980 vorgelegt")
+    p = _pipeline([line], [], padding=0)
+    boxes = p.compute_boxes(_page(), granularity="word")
+    assert Box(135, 10, 245, 20) in boxes  # the date, neither label nor "vorgelegt"
+    assert all(b.x1 <= 245 and b.x0 >= 135 for b in boxes)
+
+
+def test_without_word_geometry_the_box_follows_the_character_share():
+    line = Line("Termin mit Erika Probe", left=0, top=10, width=220, height=10)
+    p = _pipeline([line], [], padding=0)
+    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("Probe",)), granularity="word")
+    assert boxes == [Box(165, 10, 220, 20)]
+
+
+def test_word_mode_traces_the_redacted_runs():
+    line = _worded("Rechnung an Muster-Probe heute")
+    trace = Trace(collect=True)
+    _pipeline([line], ["Muster"], padding=0).compute_boxes(_page(), trace=trace, granularity="word")
+    assert "-> REDACT 'Rechnung an [Muster-Probe] heute'" in trace.collected
+
+
+@pytest.mark.parametrize(
+    "texts,redacted",
+    [
+        (["Konto-Nr.: 520 22 111 bei der Musterbank"], ["Konto-Nr.: [520 22 111] bei der Musterbank"]),
+        (["Musterbank IBAN DE00 1234 5678 9012 3456 78"], ["Musterbank IBAN [DE00 1234 5678 9012 3456 78]"]),
+        (["Amtsgericht Musterstadt HRB 12345"], ["Amtsgericht Musterstadt HRB [12345]"]),
+        (["IBAN:", "DE00 1234 5678 9012 3456 78"], ["[DE00 1234 5678 9012 3456 78]"]),
+    ],
+)
+def test_word_mode_boxes_the_value_after_a_footer_marker_not_the_marker(texts, redacted):
+    """The value may stand on the next line; the marker stays readable."""
+    lines = [_worded(t, top=10 + 30 * i) for i, t in enumerate(texts)]
+    trace = Trace(collect=True)
+    _pipeline(lines, [], padding=0).compute_boxes(_page(), trace=trace, granularity="word")
+    for want in redacted:
+        assert f"-> REDACT {want!r}" in trace.collected
+    assert "-> REDACT 'IBAN:'" not in trace.collected
+
+
+def test_a_footer_marker_without_a_value_redacts_nothing():
+    lines = [_worded("Bankverbindung: Musterbank"), _worded("Konto bei der Musterbank", top=40)]
+    assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == []
+
+
+def test_a_word_box_reaches_into_half_of_each_gap_and_to_the_line_edge():
+    """OCR word boxes clip a word's outer strokes."""
+    words = (WordBox(0, 3, 12, 38), WordBox(3, 4, 40, 50), WordBox(4, 10, 62, 118))
+    line = Line("Max Muster", left=5, top=0, width=120, height=10, words=words)
+    assert line.span_box(0, 3) == Box(5, 0, 50, 10)  # line edge, then gap midpoint
+    assert line.span_box(4, 10) == Box(50, 0, 125, 10)

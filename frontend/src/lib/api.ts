@@ -45,6 +45,8 @@ export interface AnalyzeOptions {
   dpi: Dpi
   /** Flatten a photographed page before OCR. */
   unwarp: boolean
+  /** Black out only the redacted words of a line, not the whole line. */
+  wordLevel: boolean
   /** Which model detects PII; `null` until `/health` named the server default. */
   classifier: string | null
   /** Always redact the line holding one of these words; the same for the whole batch. */
@@ -108,6 +110,7 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
     'json-output': 'true',
     'pdf-dpi': String(opts.dpi),
     unwarp: String(opts.unwarp),
+    granularity: opts.wordLevel ? 'word' : 'line',
   })
   if (opts.classifier) params.set('classifier', opts.classifier)
   if (debug) params.set('debug', 'true')

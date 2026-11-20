@@ -110,6 +110,7 @@ def trace_page(trace: Trace, verdict: PageVerdict) -> None:
     rather than the way the detector emitted its boxes.
     """
     from backend.layout import lines_by_region
+    from backend.redactor import redacted_runs
 
     per_region = lines_by_region(verdict.lines, verdict.regions)
     rank = {ln: pos for pos, ln in enumerate(verdict.reading)}
@@ -136,7 +137,10 @@ def trace_page(trace: Trace, verdict: PageVerdict) -> None:
                     "      rejected %s %r [%s %.2f]", span.label, span.text, span.source, span.score
                 )
             if ln in verdict.found:
-                trace.add("      -> REDACT")
+                if verdict.granularity == "word":
+                    trace.add("      -> REDACT %r", _bracketed(ln.text, redacted_runs(ln, verdict.found[ln])))
+                else:
+                    trace.add("      -> REDACT")
                 if ln in verdict.notes:
                     trace.add("      note %r", verdict.notes[ln].text)
             elif ln in verdict.keep:
@@ -158,3 +162,12 @@ def trace_page(trace: Trace, verdict: PageVerdict) -> None:
     unclaimed = [ln for ln in verdict.lines if ln.text.strip() and ln not in claimed]
     if unclaimed:
         narrate(unclaimed, "--- unclaimed lines ---")
+
+
+def _bracketed(text: str, runs: list[tuple[int, int]]) -> str:
+    """``text`` with every redacted run in brackets."""
+    out, pos = [], 0
+    for start, end in runs:
+        out += [text[pos:start], "[", text[start:end], "]"]
+        pos = end
+    return "".join(out) + text[pos:]

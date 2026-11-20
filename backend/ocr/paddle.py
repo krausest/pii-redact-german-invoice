@@ -28,7 +28,7 @@ os.environ.setdefault(
 import numpy as np
 from PIL import Image
 
-from backend.models import Line
+from backend.models import Line, WordBox
 
 logging.getLogger("paddlex").setLevel(logging.WARNING)
 
@@ -66,16 +66,18 @@ class PaddleOCRBackend:
         self._ocr = PaddleOCR(**kwargs)
 
     def lines(self, image: Image.Image) -> list[Line]:
-        results = self._ocr.predict(np.array(image.convert("RGB")))
+        results = self._ocr.predict(np.array(image.convert("RGB")), return_word_box=True)
         if not results:  # blank / OCR-failed page
             return []
         result = results[0]
         texts = result["rec_texts"]
         scores = result["rec_scores"]
         boxes = result["rec_boxes"]  # axis-aligned [x1, y1, x2, y2]
+        pieces = result.get("text_word") or [[] for _ in texts]
+        piece_boxes = result.get("text_word_boxes") or [[] for _ in texts]
 
         out: list[Line] = []
-        for text, score, box in zip(texts, scores, boxes):
+        for text, score, box, words, wboxes in zip(texts, scores, boxes, pieces, piece_boxes):
             x1, y1, x2, y2 = (int(v) for v in np.asarray(box).tolist())
             out.append(
                 Line(
@@ -85,6 +87,20 @@ class PaddleOCRBackend:
                     width=x2 - x1,
                     height=y2 - y1,
                     conf=float(score) * 100.0,  # Presidio uses a 0-100 scale
+                    words=_word_boxes(text, words, wboxes),
                 )
             )
         return out
+
+
+def _word_boxes(text: str, pieces: list[str], boxes) -> tuple[WordBox, ...]:
+    """Paddle's word pieces as offsets into ``text``; nothing unless they spell it."""
+    if "".join(pieces) != text or len(pieces) != len(boxes):
+        return ()
+    out: list[WordBox] = []
+    pos = 0
+    for piece, box in zip(pieces, boxes):
+        x0, _, x1, _ = (int(v) for v in np.asarray(box).tolist())
+        out.append(WordBox(pos, pos + len(piece), x0, x1))
+        pos += len(piece)
+    return tuple(out)

@@ -32,6 +32,8 @@ _NAME_PART_OCR = r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß]{2,}(?:-[A-ZÄÖ�
 _NAME_SEP = r"(?:\s*,\s*|\s+)"
 # One name token on its own, as the name memory learns it.
 NAME_TOKEN = re.compile(rf"\b{_NAME_PART}\b")
+# The next name token at a position, initials skipped: "A. Muster".
+NAME_AT = re.compile(rf"\s*(?:[A-ZÄÖÜ]\.\s*)*\b({_NAME_PART})\b")
 
 _PERSON_LABEL = (
     r"(?:Pat(?:ient(?:in|en)?)?"
@@ -43,9 +45,11 @@ _PERSON_LABEL = (
     r"|Zahlungspflichtige[rn]?)"
 )
 
+# A person label and what may follow it before the name: "Pat.: ".
+PERSON_LABEL = re.compile(rf"\b{_PERSON_LABEL}\b\.?\s*:?\s*")
 # A person label and the name after it: "Pat.: A. Muster".
 PATIENT_NAME = re.compile(
-    rf"\b{_PERSON_LABEL}\b\.?\s*:?\s*"
+    rf"{PERSON_LABEL.pattern}"
     r"(?:[A-ZÄÖÜ]\.\s*)*"  # initials
     rf"{_NAME_PART}"
 )
@@ -59,8 +63,13 @@ NAME_VALUE = re.compile(
     rf"|{_NAME_PART_OCR}{_NAME_SEP}{_NAME_PART})\s*$"
 )
 # Title(s) and a name: "Prof. Dr. med. Andrea Muster", "DR. MED. ANDREA MUSTER".
+_TITLE_WORD = r"Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med"
+# The titles before a name: "Prof. Dr. med. ".
+TITLES = re.compile(rf"\b(?i:(?:{_TITLE_WORD})\.\s*)+")
+# A title word on its own, without its dot: "Prof".
+TITLE_WORD = re.compile(rf"(?i:{_TITLE_WORD}|Priv|Doz|Dipl)")
 TITLE_NAME = re.compile(
-    r"\b(?i:(?:Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med)\.\s*)+"
+    rf"{TITLES.pattern}"
     r"(?:[A-ZÄÖÜ]\.\s*)*"  # initials
     r"[A-ZÄÖÜ](?:[a-zäöüß]+|[A-ZÄÖÜß]+\b)"
 )
@@ -80,6 +89,8 @@ BIRTH_MARK = re.compile(rf"{GEB_DATE.pattern}|{STAR_DATE.pattern}")
 # --- addresses --------------------------------------------------------------- #
 # "Musterstraße 1", "MUSTERSTR.23", "Musterer Straße 12" (OCR reads ß as B).
 _STREET_WORD = r"stra(?:ße|sse|be)|str|platz|gasse|allee"
+# A token ending like a street: "Musterstraße", "Musterstr.".
+STREET_END = re.compile(rf"(?i)(?:{_STREET_WORD})\.?$")
 DE_STREET = re.compile(
     r"\b[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß.\-]+"
     rf"(?:(?i:{_STREET_WORD}|weg|ring|damm)|\s+(?=[A-ZÄÖÜ])(?i:{_STREET_WORD})\b)"
@@ -125,7 +136,7 @@ REF_MERGED = re.compile(rf"(?i)\b{_REF}\b[.,]?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}"
 # --- sender identifiers ------------------------------------------------------ #
 # "IK", "IK-Zeichen", or "IK Musterstelle" naming its holder.
 _IK = r"(?-i:\bIK)(?:[-\s.]?(?:Nr|Nummer|Zeichen))?\.?(?:\s+[A-Za-zÄÖÜäöüß]+){0,3}"
-_UST_ID = r"USt[-.\s]*Id"
+_UST_ID = r"USt[-.\s]*[Il1]d"  # OCR reads the I as l or 1
 # "Steuernummer:", "USt-IdNr.:", "LANR:" closing its cell, maybe after its holder.
 SENDER_LABEL_CELL = re.compile(
     rf"(?i)(?:^|,)\s*(?:Steuer[-\s]?(?:nummer|Nr)|{_UST_ID}(?:[-.\s]?(?:Nr|Nummer))?"
@@ -137,15 +148,32 @@ SENDER_VALUE = re.compile(
 )
 # A tax number in slash groups, whatever its label: "123/456/78901".
 TAX_NUMBER = re.compile(r"(?<![\d/])\d{2,3}/\d{3,4}/\d{4,5}(?!\d)")
-# Registry and bank identifiers of the footer imprint.
-IMPRINT = re.compile(
-    r"(?i)\bHR[AB]\s*\d|(?-i:\b(?:GnR|VR|PR)\s?\d)|\w*register(?:nummer|[-\s.]*Nr)\b"
-    rf"|\b(?:{_UST_ID}|Umsatzsteuer[-.\s]*Id)"
-    r"|\bSteuer[\-\s]?(?:nummer|Nr)"
-    rf"|{_IK}\s*:?\s*\d"
-    r"|\b(?:LANR|LAN\-Nr|BSNR|IBAN|BIC|BLZ)\b"
-    r"|\bBankverbindung\b|\bKonto(?:\-?Nr)?\b|\bPostfach\b"
-)
+# Registry and bank identifiers of the footer imprint: a marker, then a value of
+# its format, maybe on the next line. Only the value is a finding.
+_IMPRINT_SEP = r"[\s.:#\-]*(?:(?i:Nr|Nummer)\b\.?[\s.:#\-]*)?"
+# A value never continues across a line break, nor into a date or an amount.
+_END = r"\b(?![.,/]\d)"
+_NINE_DIGITS = r"\d(?:[ /]?\d){8}"
+_VAT_ID = r"[A-Z]{2} ?\d(?: ?\d){8,11}"
+IMPRINT_VALUES: list[re.Pattern[str]] = [
+    re.compile(rf"\bIBAN\b{_IMPRINT_SEP}(?P<value>[A-Z]{{2}} ?\d{{2}}(?: ?\d{{1,4}}){{3,8}}{_END})"),
+    re.compile(rf"\b(?:BIC|SWIFT)\b{_IMPRINT_SEP}(?P<value>[A-Z]{{6}}[A-Z0-9]{{2}}(?:[A-Z0-9]{{3}})?{_END})"),
+    re.compile(rf"\b(?:Kto|Konto(?:nummer)?)\b{_IMPRINT_SEP}(?P<value>\d(?:[ .]?\d){{3,}}{_END})"),
+    re.compile(rf"\b(?:BLZ|Bankleitzahl)\b{_IMPRINT_SEP}(?P<value>\d{{3}} ?\d{{3}} ?\d{{2}}{_END})"),
+    re.compile(
+        rf"(?:(?i:\bHR[AB])|\b(?:GnR|VR|PR)|(?i:\w*register(?:nummer)?))\b{_IMPRINT_SEP}"
+        rf"(?P<value>\d+(?: ?[A-Z]\b)?{_END})"
+    ),
+    re.compile(
+        rf"(?i:\b(?:{_UST_ID}|Umsatzsteuer[-.\s]*Id)\w*){_IMPRINT_SEP}(?P<value>{_VAT_ID}{_END})"
+    ),
+    re.compile(
+        rf"(?i:\bSteuer[\-\s]?(?:nummer|Nr)\b){_IMPRINT_SEP}"
+        rf"(?P<value>(?:\d{{2,3}} ?/ ?\d{{3,4}} ?/ ?\d{{4,5}}|\d(?:[ /]?\d){{9,12}}|{_VAT_ID}){_END})"
+    ),
+    re.compile(rf"(?:{_IK}|\b(?:LANR|LAN-Nr|BSNR))\b{_IMPRINT_SEP}(?P<value>{_NINE_DIGITS}{_END})"),
+    re.compile(rf"\bPostfach\b{_IMPRINT_SEP}(?P<value>\d(?: ?\d){{1,6}}{_END})"),
+]
 # A legal form: "GmbH", "e. K.".
 ORG_LEGAL = re.compile(
     r"\b(?:g?GmbH|mbH|UG|AG|KG|OHG|GbR|PartG(?:mbB)?|Ltd|Inc)\b|\be\.\s?[KV]\."
@@ -189,9 +217,14 @@ PVS_NAME = re.compile(
     r"(?i)\w*verrechnung\w*|\bAbrechnungs(?:stelle|gesellschaft|zentrum)\w*|\bPVS\b|\bRechenzentrum\b"
 )
 # Specialty words, and the glue allowed between them: "Facharzt für Orthopädie".
-SPECIALTY = re.compile(
-    r"(?i)\b(?:\w*ärzt\w*|\w*arzt\w*|\w*(?:logie|logisch|medizin|medizinisch|chirurgie"
+_SPECIALTY_STEM = (
+    r"\w*ärzt\w*|\w*arzt\w*|\w*(?:logie|logisch|medizin|medizinisch|chirurgie"
     r"|pädie|iatrie|heilkunde|therapie|pathie|diagnostik)\w*"
+)
+# One word of a specialty: "Pathologie", "Ärztliche".
+SPECIALTY_WORD = re.compile(rf"(?i:{_SPECIALTY_STEM})")
+SPECIALTY = re.compile(
+    rf"(?i)\b(?:{_SPECIALTY_STEM}"
     r"|Praxis|Privatpraxis|Gemeinschaftspraxis|Innere|Allgemein\w*|Zahn\w*|Kiefer\w*"
     r"|ambulante[nr]?|Operationen|Akupunktur|Naturheilverfahren|Homöopathie)\b"
 )

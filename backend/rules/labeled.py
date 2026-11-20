@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from backend.models import Line
 from backend.pii import PiiLabel
@@ -87,17 +87,40 @@ def labeled_values(
 ) -> dict[Line, PiiLabel | KeepReason]:
     """Lines holding a labeled value, mapped to the ``kind`` of the first rule
     that claimed them. Nothing beneath a label reaches into ``table``."""
+    return {ln: claim.kind for ln, claim in labeled_claims(lines, table, rules).items()}
+
+
+class Claim(NamedTuple):
+    """What claimed a line, and where on it the value sits: ``text[start:end]``."""
+
+    kind: PiiLabel | KeepReason
+    start: int
+    end: int
+
+
+def labeled_claims(
+    lines: list[Line],
+    table: set[Line] | None = None,
+    rules: list[LabeledValue] = LABELED_VALUES,
+) -> dict[Line, Claim]:
+    """:func:`labeled_values` with the value's range on its line."""
     table = table or set()
     gap = column_gap(lines)
-    found: dict[Line, PiiLabel | KeepReason] = {}
+    found: dict[Line, Claim] = {}
     for rule in rules:
         values = _paired_values(lines, rule, table, gap)
         for i in sorted(values):
-            found.setdefault(lines[i], rule.kind)
+            found.setdefault(lines[i], _claim(lines[i], rule.kind, rule.value))
         if rule.below is not None and rule.below_kind is not None:
             for i in sorted(_lines_below(lines, values, rule.below, table, gap)):
-                found.setdefault(lines[i], rule.below_kind)
+                found.setdefault(lines[i], _claim(lines[i], rule.below_kind, rule.below))
     return found
+
+
+def _claim(line: Line, kind: PiiLabel | KeepReason, value: re.Pattern[str]) -> Claim:
+    m = value.search(line.text)
+    start, end = m.span() if m else (0, len(line.text))
+    return Claim(kind, start, end)
 
 
 def _paired_values(lines: list[Line], rule: LabeledValue, table: set[Line], gap: float) -> set[int]:

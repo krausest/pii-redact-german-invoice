@@ -62,3 +62,50 @@ def test_each_half_of_a_double_name_is_learned():
     """Either half recurs alone ("Frau Beispiel" after "Muster-Beispiel")."""
     lines = [cell("Patientin: Andrea Muster-Beispiel", 10, 10, width=300)]
     assert {"Muster", "Beispiel"} <= _learn(Document(lines)).names
+
+
+def _names(*texts: str) -> set[str]:
+    lines = [cell(t, 10, 10 + 50 * i, width=600) for i, t in enumerate(texts)]
+    return _learn(Document(lines)).names
+
+
+def test_a_title_teaches_the_name_after_it_not_its_line():
+    assert _names("Dr. Andrea Muster GmbH, Erikastraße 1, Musterstadt") == {"Andrea", "Muster"}
+
+
+def test_a_run_continues_across_an_ampersand_and_stops_at_colleagues():
+    assert _names("Dr. Dr. Muster & Beispiel MSc & Kollegen") == {"Muster", "Beispiel"}
+
+
+def test_a_street_named_after_a_person_is_not_a_name():
+    assert _names("Probe & Kollegen GmbH, Erika-Muster-Str 1, Musterstadt") == set()
+
+
+def test_a_surname_after_title_and_forename_is_learned():
+    assert _names("Prof. Dr. Dr. Erik Musterfeld") == {"Erik", "Musterfeld"}
+
+
+def test_both_halves_after_an_initial_are_learned():
+    assert _names("Dr. med. A.Probe-Muster") == {"Probe", "Muster"}
+
+
+def test_the_sentence_around_a_birth_mark_is_not_learned():
+    assert _names("Behandelt wurde Andrea Muster, *01.02.2010") == {"Andrea", "Muster"}
+
+
+def test_a_heading_before_a_title_is_not_learned():
+    assert _names("Ärztliche Leitung: Dr. Erika Probe-Muster") == {"Erika", "Probe", "Muster"}
+    assert _names("Mikrobiologie & Pathologie der Dr. Muster & Kollegen GmbH") == {"Muster"}
+
+
+def test_a_name_before_a_birth_label_is_learned():
+    assert _names("Andrea Muster, geboren am 01.02.1980") == {"Andrea", "Muster"}
+
+
+def test_model_spans_are_shape_checked_too():
+    """A classifier calls streets, titles and OCR junk a person now and then."""
+    lines = [cell("Musterstraße Prof AbCde Andrea", 10, 10, width=300)]
+    doc = Document(lines)
+    text = lines[0].text
+    hits = {lines[0]: [Span(PiiLabel.PERSON, 0, len(text), text, "presidio")]}
+    assert _learn(doc, hits).names == {"Andrea"}

@@ -46,6 +46,10 @@ _BARE_DIGITS = re.compile(r"\d+")
 _MAY_WRAP = frozenset({PiiLabel.PERSON})
 
 
+# The label in front of a KONTO match.
+_KONTO_LABEL = re.compile(r"(?:Kto|Konto(?:nummer|[ \-]?Nr)?|BLZ|Bankleitzahl)\.?\s*:?\s*")
+
+
 def _drop_wrapped(spans: Sequence[Span]) -> list[Span]:
     """Drop pattern matches that only exist because two lines were joined: a
     regex's whitespace matches the joining newline. Presidio-only — a span model
@@ -261,10 +265,13 @@ class PresidioClassifier:
             label = PRESIDIO_LABELS[r.entity_type]
             # A PERSON is the one entity allowed to wrap, so it is also the one
             # that has to be cut back when the model wrapped it too far.
+            start = r.start
+            if r.entity_type == "KONTO" and (m := _KONTO_LABEL.match(text, r.start)):
+                start = m.end()  # the label stays readable, the number goes
             pieces = (
                 _name_fragments(text, artifacts.tokens, r.start, r.end)
                 if label is PiiLabel.PERSON and "\n" in text[r.start : r.end]
-                else [TextRange(r.start, r.end)]
+                else [TextRange(start, r.end)]
             )
             for piece in pieces:
                 spans.append(
