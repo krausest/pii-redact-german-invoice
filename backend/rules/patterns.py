@@ -130,8 +130,12 @@ REF_LABEL_CELL = re.compile(rf"(?i)^\s*{_REF}\.?\s*:?\s*$")
 REF_VALUE = re.compile(rf"^\s*{_REF_TOKEN}\s*$")
 # "Rechnung 2026-0815" or "Nummer: 24/0815" at the line's start, three digits at least.
 _REF_TITLE = rf"^\s*(?:Rechnung(?:\s*:)?\s+|Nummer\s*:\s*)(?=(?:[^\s\d]*\d){{3}}){_REF_TOKEN}"
+# Further digit groups of the same number: "1234 5678 9012 34"; no date or amount.
+_REF_MORE = rf"(?: {_NOT_DATE_OR_MONEY}\d(?:[\d/-]*\d)?(?![\w.,]))*"
 # Label and number on one line; OCR may read the label's dot as a comma.
-REF_MERGED = re.compile(rf"(?i)\b{_REF}\b[.,]?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}")
+REF_MERGED = re.compile(
+    rf"(?i)(?:\b{_REF}\b[.,]?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}){_REF_MORE}"
+)
 
 # --- sender identifiers ------------------------------------------------------ #
 # "IK", "IK-Zeichen", or "IK Musterstelle" naming its holder.
@@ -177,6 +181,19 @@ IMPRINT_VALUES: list[re.Pattern[str]] = [
 # A legal form: "GmbH", "e. K.".
 ORG_LEGAL = re.compile(
     r"\b(?:g?GmbH|mbH|UG|AG|KG|OHG|GbR|PartG(?:mbB)?|Ltd|Inc)\b|\be\.\s?[KV]\."
+)
+# Up to five words before a legal form name the company; a separator, an article
+# or preposition ("an die", "der") or a label ends the name.
+_ORG_SEP = r"\s:|·,;"
+_ORG_STOP = (
+    r"(?i:der|die|das|den|dem|des|ein|eine|einer|eines|an|von|vom|für|im|in|bei|beim"
+    r"|zu|zur|zum|mit|auf|aus|über|durch|als|Rechtsform|Firma|K(?:on)?to-?inh(?:aber)?\.?|Inhaber(?:in)?)"
+)
+_ORG_WORD = rf"(?!{_ORG_STOP}\s)(?:&|[^{_ORG_SEP}]*\w[^{_ORG_SEP}]*)"
+ORG_NAME = re.compile(
+    rf"(?:(?<![^{_ORG_SEP}])(?:{_ORG_WORD}\s+){{1,5}})?"
+    r"(?:\b(?:g?GmbH(?:\s*&\s*Co\.?\s*KG)?|mbH|UG|AG|KG|OHG|GbR|PartG(?:mbB)?|Ltd|Inc)\b"
+    r"|\be\.\s?[KV]\.)"
 )
 
 # --- contact ----------------------------------------------------------------- #

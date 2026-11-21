@@ -136,11 +136,11 @@ shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
 | `TITLE_NAME` | a title and name (`Dr. med. Max Mustermann`) |
 | `NAME_DATE` | `Surname,Forename DD.MM.YY` — an unlabelled patient table row |
 | `BIRTH_MARK` | a birthdate with its mark on the line (`geb. 13.08.1954`, `*13.08.1954`) |
-| `REF_MERGED` | an invoice number with its label on the line (`Rg.-Nr. 4711`, `Rechnung 2026-0815`) |
+| `REF_MERGED` | an invoice number with its label on the line (`Rg.-Nr. 4711`, `Rechnung 2026-0815`), with all its digit groups (`Rechn.Nr. 1234 5678 9012 34`) up to a date, amount or word |
 | `DE_STREET`, `DE_PLZ_CITY` | German street + number (suffix glued or as its own word: `Musterstr. 1`, `Musterer Straße 12`), postcode + city |
 | `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
 | `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
-| `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: legal form, URL/e-mail, registry and bank identifiers; `IMPRINT` takes the value after a marker (`IBAN`, `Konto`, `BIC`, `BLZ`, `HRB`, `USt-IdNr`, `Steuernummer`, `IK`, `LANR`/`BSNR`, `Postfach`) when it has that marker's format, also on the next line — never the marker itself |
+| `ORG_LEGAL`, `CONTACT`, `IMPRINT` | sender identity: company name with its legal form (`Muster MVZ GmbH`: up to five words before the form, stopped by a separator `: \| · , ;`, an article or preposition, or a label like `Rechtsform`/`Kontoinhaber`), URL/e-mail, registry and bank identifiers; `IMPRINT` takes the value after a marker (`IBAN`, `Konto`, `BIC`, `BLZ`, `HRB`, `USt-IdNr`, `Steuernummer`, `IK`, `LANR`/`BSNR`, `Postfach`) when it has that marker's format, also on the next line — never the marker itself |
 | `TAX_NUMBER` | a tax number in slash groups (`123/456/78901`, `123/4567/8901`), whatever its label |
 | labelled values | spatial label ↔ value pairs (below) |
 

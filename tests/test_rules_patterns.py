@@ -231,6 +231,41 @@ def test_the_pattern_judgement(name: str, text: str, matches: bool) -> None:
 
 
 @pytest.mark.parametrize(
+    "text,ref",
+    [
+        ("Rechn.Nr. 1234 5678 9012 34", "1234 5678 9012 34"),
+        ("Rg.-Nr.: 12/3456 7890", "12/3456 7890"),
+        ("Rechnung 2026 0815 4711", "2026 0815 4711"),
+        # A date, an amount or a word after the number is not part of it.
+        ("Rechnungs-Nr. 4711 12.03.2026", "4711"),
+        ("Rechnungs-Nr. 4711 150,68 EUR", "4711"),
+        ("Re-Nr. 4711 vom 12.03.2026", "4711"),
+    ],
+)
+def test_an_invoice_number_takes_all_its_digit_groups(text, ref):
+    (m,) = patterns.REF_MERGED.finditer(text)
+    assert m.group().endswith(ref)
+
+
+@pytest.mark.parametrize(
+    "text,name",
+    [
+        ("Muster Beispiel GmbH", "Muster Beispiel GmbH"),
+        ("Die Beträge wurden an die Muster health finance GmbH abgetreten.", "Muster health finance GmbH"),
+        ("Zweigniederlassung der Muster MVZ Beispielstadt GmbH", "Muster MVZ Beispielstadt GmbH"),
+        ("Im Auftrag von: MVZ Muster GmbH Beispielhof", "MVZ Muster GmbH"),
+        ("Dr. Muster & Kollegen GmbH & Co. KG", "Dr. Muster & Kollegen GmbH & Co. KG"),
+        ("Ktoinh. Muster factoring GmbH", "Muster factoring GmbH"),
+        ("Kontoinhaber: Muster GmbH - Beispielbank AG Musterstadt", "Muster GmbH"),
+        ("Rechtsform GmbH, Sitz Musterstadt", "GmbH"),
+        ("Muster GmbH·Musterweg 1", "Muster GmbH"),
+    ],
+)
+def test_a_legal_form_claims_the_company_name_before_it(text, name):
+    assert patterns.ORG_NAME.search(text).group() == name
+
+
+@pytest.mark.parametrize(
     "text,values",
     [
         ("IBAN: DE00 1234 5678 9012 3456 78 BIC MUSTDEFFXXX", ["DE00 1234 5678 9012 3456 78", "MUSTDEFFXXX"]),
