@@ -20,11 +20,11 @@ flowchart TD
         POS["Positive word list<br/>exact + OCR variants"]
     end
     DET --> SIFT["Sift: keep reasons · negative list veto"]
-    SIFT --> HARV["Harvest name + birthdate memory"]
+    SIFT --> HARV["Harvest name, birthdate + identifier memory"]
     HARV --> REC["Recall: remembered names + OCR variants,<br/>remembered birthdates"]
     REC --> SIFT2["Sift recalled"]
     SIFT2 --> WB["Boxes over redacted word runs"]
-    WB --> EXTRA["+ birth-year notes · region boxes · signature boxes"]
+    WB --> EXTRA["+ birth-year notes · region boxes · signature boxes<br/>· barcode + QR boxes (OpenCV)"]
     EXTRA --> REP["JSON report: page images + boxes"]
     REP --> UI["Web UI: review and edit boxes"]
     UI --> ASM["POST /api/assemble: fill boxes → PDF / JPEG"]
@@ -42,7 +42,8 @@ flowchart TD
 | Classifier | [`classifiers/`](../backend/classifiers/) |
 | Word lists | [`wordlists.py`](../backend/wordlists.py) |
 | Sift, boxes | [`redactor.py`](../backend/redactor.py), [`detectors.py`](../backend/detectors.py) |
-| Name and birthdate memory | [`harvest.py`](../backend/harvest.py) |
+| Name, birthdate and identifier memory | [`harvest.py`](../backend/harvest.py) |
+| Barcodes, QR codes | [`codes.py`](../backend/codes.py) |
 | OCR variants | [`ocr_variants.py`](../backend/ocr_variants.py) |
 | Report, assemble | [`service.py`](../backend/service.py) |
 | Web UI | [`frontend/`](../frontend/) |

@@ -72,6 +72,21 @@ CASES: list[tuple[str, set[PiiLabel]]] = [
     ("Rechnungs-Nz, 12345/2026-1234", {I}),
     ("Rechnungs-Nr, 4711", {I}),
     ("Rechnungsnachweis 2026", set()),
+    # An order number identifies the invoice as well.
+    ("Auftragsnummer 123.456 vom 01.02.2026", {I}),
+    ("Auftrags-Nr.: 4711", {I}),
+    ("Auftragsnummer bitte angeben", set()),
+    # Customer and client numbers, also without "Nr".
+    ("Kunde 12345", {I}),
+    ("Mandanten-Nr. 4711", {I}),
+    ("Unser Mandant: 012345/678901234 Musterpraxis", {I}),
+    ("Kunde seit 2015", set()),
+    ("angegebener Mandant hat die Forderung abgetreten", set()),
+    ("um unseren Mandanten Musterpraxis von", set()),
+    # A barcode's printed text, between its start and stop stars.
+    ("Musterdienst*123456-7890123*", {I}),
+    ("*Hinweis*", set()),
+    ("Im Auftrag von: MVZ Musterstadt", set()),
     # A tax number is identified by its slash groups, whatever OCR did to its label.
     ("Steuez-Nz. 123/456/78901", {I}),
     ("St.-Nr.123/456/78901", {I}),
@@ -157,6 +172,30 @@ def test_a_span_quotes_what_it_matched_and_names_the_rule() -> None:
     line = Line(text="Internet: praxis-muster.de", left=0, top=0, width=100, height=10)
     (span,) = rule_spans(Document([line]))
     assert (span.label, span.text, span.source) == (C, "praxis-muster.de", "rule CONTACT")
+
+
+@pytest.mark.parametrize(
+    "text,rule,value",
+    [
+        ("Behandelte Person: Andrea Muster", "PATIENT_NAME", "Andrea"),
+        ("Pat.: A. Muster", "PATIENT_NAME", "A. Muster"),
+        ("Rechn.Nr. 1234 5678", "REF_MERGED", "1234 5678"),
+        ("Re.-Nr.: 123456", "REF_MERGED", "123456"),
+        ("Rechnung 2026-0815", "REF_MERGED", "2026-0815"),
+        ("Nummer: 12/3456", "REF_MERGED", "12/3456"),
+        ("Kunde 12345", "REF_MERGED", "12345"),
+        ("Unser Mandant: 012345/678", "REF_MERGED", "012345/678"),
+        ("Andrea Muster, geb. 01.02.1980", "BIRTH_MARK", "01.02.1980"),
+        ("Andrea Muster *01.02.1980", "BIRTH_MARK", "01.02.1980"),
+        ("Telefon: 0123 456789", "PHONE", "0123 456789"),
+        ("Tel.(0123) 45678", "PHONE", "(0123) 45678"),
+        ("+49 911 1234567", "PHONE", "+49 911 1234567"),
+    ],
+)
+def test_a_labeled_rule_claims_the_value_not_its_label(text, rule, value):
+    line = Line(text=text, left=0, top=0, width=100, height=10)
+    spans = [s for s in rule_spans(Document([line])) if s.source == f"rule {rule}"]
+    assert [s.text for s in spans] == [value]
 
 
 # (pattern, text, whether it matches): why each pattern has its shape.

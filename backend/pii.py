@@ -37,6 +37,7 @@ class PiiLabel(str, Enum):
 LABELED_VALUE = "labeled-value"
 NAME_MEMORY = "name-memory"
 BIRTHDATE_MEMORY = "birthdate-memory"
+ID_MEMORY = "id-memory"
 USER_LIST = "user-list"
 _RULE_PREFIX = "rule "
 

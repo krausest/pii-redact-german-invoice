@@ -18,6 +18,7 @@ from collections.abc import Callable
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.classifiers.base import Classifier
+from backend.codes import code_boxes
 from backend.harvest import Memory
 from backend.layout import LayoutRegion, PaddleLayoutDetector, assign_lines, draw_layout_debug
 from backend.models import Box, Line
@@ -62,6 +63,7 @@ class RedactionPipeline:
             classifier, classifier_factories, default_classifier, unwarper, unwarper_factory
         )
         self._redactor = PageRedactor(padding)
+        self._padding = padding
         self._fill = fill
         self._unwarp_enabled = unwarp_enabled
         # No detector: no layout regions, and no whole-region redaction.
@@ -122,7 +124,8 @@ class RedactionPipeline:
             regions = self.regions(image)
         memory = memory if memory is not None else Memory()
         verdict = self._redactor.decide(
-            image.width, lines, regions, self.classifier(classifier), memory, trace, lists
+            image.width, lines, regions, self.classifier(classifier), memory, trace, lists,
+            code_boxes(image, self._padding),
         )
         trace_page(trace, verdict)
         return verdict

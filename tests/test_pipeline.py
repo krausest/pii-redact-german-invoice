@@ -530,3 +530,29 @@ def test_a_word_box_reaches_into_half_of_each_gap_and_to_the_line_edge():
     line = Line("Max Muster", left=5, top=0, width=120, height=10, words=words)
     assert line.span_box(0, 3) == Box(5, 0, 50, 10)  # line edge, then gap midpoint
     assert line.span_box(4, 10) == Box(50, 0, 125, 10)
+
+
+@pytest.mark.parametrize(
+    "text,value,widened",
+    [
+        ("Tel.:0123|456789", "0123|456789", "0123|456789"),
+        ("Internet:www.praxis-muster.de", "www.praxis-muster.de", "www.praxis-muster.de"),
+        ("E-Mail:info@praxis-muster.de", "info@praxis-muster.de", "info@praxis-muster.de"),
+        ("Rechnungsnr:4711", "4711", "4711"),
+        ("Fon 0123/4567-0·Fax 0123/4567-9", "0123/4567-0", "0123/4567-0"),
+        ("Kto.-Nr.1234567", "1234567", "1234567"),
+        ("USt-IdNr.DE123456789", "DE123456789", "DE123456789"),
+        ("Musterbank AG·IBAN:", "AG", "AG"),
+        # Not a label: the whole token goes, as before.
+        ("Muster-Beispiel", "Beispiel", "Muster-Beispiel"),
+        ("12345Musterstadt", "Musterstadt", "12345Musterstadt"),
+        ("Muster GmbH:Musterweg", "GmbH", "GmbH:Musterweg"),
+        ("https://www.praxis-muster.de", "www.praxis-muster.de", "https://www.praxis-muster.de"),
+        ("Rechnungsnummer", "Rechnungsnummer", "Rechnungsnummer"),
+    ],
+)
+def test_a_glued_label_is_torn_off_its_value(text, value, widened):
+    line = Line(text=text, left=0, top=0, width=10 * len(text), height=10)
+    start = text.index(value)
+    a, b = line.tokens(start, start + len(value))
+    assert text[a:b] == widened

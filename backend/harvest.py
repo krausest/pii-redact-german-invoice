@@ -1,5 +1,5 @@
-"""The name and birthdate memory: what one page said about a person, applied
-everywhere else.
+"""The name, birthdate and identifier memory: what one page said about a person,
+applied everywhere else.
 
 A surname recurs on lines no detector reaches on its own (a subject line, a
 greeting, a footer). So a page is read twice: the detectors find what they find,
@@ -21,13 +21,14 @@ from typing import NamedTuple
 from backend.document import Document
 from backend.models import Line
 from backend.ocr_variants import VariantIndex
-from backend.pii import BIRTHDATE_MEMORY, LABELED_VALUE, NAME_MEMORY, PiiLabel, Span
+from backend.pii import BIRTHDATE_MEMORY, ID_MEMORY, LABELED_VALUE, NAME_MEMORY, PiiLabel, Span
 from backend.rules.birth_year import DateKey, birth_date_in, date_key
 from backend.rules.patterns import (
     BIRTH_DATE,
     BIRTH_LABEL,
     BIRTH_MARK,
     DATE_KEEP_LABEL,
+    LABEL_WORD,
     NAME_AT,
     NAME_DATE,
     NAME_TOKEN,
@@ -77,6 +78,7 @@ def _is_label(token: str) -> bool:
     return bool(
         DATE_KEEP_LABEL.search(token)
         or BIRTH_LABEL.search(token)
+        or LABEL_WORD.match(token)
         or PERSON_LABEL_CELL.search(token)
     )
 
@@ -228,6 +230,7 @@ class Memory:
 
     names: set[str] = field(default_factory=set)
     birthdates: set[DateKey] = field(default_factory=set)
+    ids: set[str] = field(default_factory=set)
 
     def learn(self, doc: Document, hits: Mapping[Line, Sequence[Span]], trace: Trace) -> None:
         """Remember the names and birthdates ``hits`` witness on this page.
@@ -242,11 +245,19 @@ class Memory:
             if key not in self.birthdates:
                 trace.add("    birthdate memory %r <- %r", witness.printed, witness.line_text)
                 self.birthdates.add(key)
+        for ident, line_text in _harvest_ids(hits).items():
+            if ident not in self.ids:
+                trace.add("    id memory %r <- %r", ident, line_text)
+                self.ids.add(ident)
 
     def recall(self, doc: Document, trace: Trace | None = None) -> list[Span]:
         """Spans over every remembered name, its OCR variants, and every
-        remembered birthdate in ``doc``."""
-        return _name_spans(doc, self.names, trace) + _birthdate_spans(doc, self.birthdates)
+        remembered birthdate and identifier in ``doc``."""
+        return (
+            _name_spans(doc, self.names, trace)
+            + _birthdate_spans(doc, self.birthdates)
+            + _id_spans(doc, self.ids)
+        )
 
 
 def _is_birth_evidence(line: Line, spans: Sequence[Span]) -> bool:
@@ -288,3 +299,37 @@ def _birthdate_spans(doc: Document, birthdates: set[DateKey]) -> list[Span]:
             if date_key(m.group()) in birthdates:
                 spans.append(doc.part_of(line, m.start(), m.end(), PiiLabel.DATE_OF_BIRTH, BIRTHDATE_MEMORY))
     return spans
+
+
+# -- the identifier memory ---------------------------------------------------- #
+# A token of an identifier a rule found; six digits make it unmistakable.
+_ID_TOKEN = re.compile(r"[\w/.-]*\d[\w/.-]*")
+_ID_MIN_DIGITS = 6
+
+
+def _harvest_ids(hits: Mapping[Line, Sequence[Span]]) -> dict[str, str]:
+    """The identifiers a rule or a labeled value found on this page, each with its
+    line; a model's guess is no witness."""
+    found: dict[str, str] = {}
+    for line, spans in hits.items():
+        for span in spans:
+            if span.label is not PiiLabel.ID or not (span.source.startswith("rule ") or span.source == LABELED_VALUE):
+                continue
+            for token in _ID_TOKEN.findall(span.text):
+                token = token.strip("./-")
+                if sum(ch.isdigit() for ch in token) >= _ID_MIN_DIGITS:
+                    found.setdefault(token, line.text)
+    return found
+
+
+def _id_spans(doc: Document, ids: set[str]) -> list[Span]:
+    """A span over every bare recurrence of a remembered identifier."""
+    if not ids:
+        return []
+    alts = "|".join(map(re.escape, sorted(ids, key=len, reverse=True)))
+    pattern = re.compile(rf"(?<![\w/.-])(?:{alts})(?![\w/-]|\.\w)")
+    return [
+        doc.part_of(line, m.start(), m.end(), PiiLabel.ID, ID_MEMORY)
+        for line in doc.lines
+        for m in pattern.finditer(line.text)
+    ]

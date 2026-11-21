@@ -13,7 +13,7 @@ at the time of writing; re-check on upgrade.
 | gunicorn | MIT |
 | huggingface-hub (transitive: paddlex; also gliner2[local] → transformers) | Apache-2.0 |
 | onnxruntime | MIT |
-| opencv-contrib-python (transitive: paddleocr → paddlex[ocr-core]) | Apache-2.0 |
+| opencv-contrib-python (barcode and QR detection; also paddleocr → paddlex[ocr-core]) | Apache-2.0 |
 | paddleocr | Apache-2.0 |
 | paddlepaddle | Apache-2.0 |
 | pillow | MIT-CMU |

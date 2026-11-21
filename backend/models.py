@@ -70,12 +70,15 @@ class Line:
         return x0, x1
 
     def tokens(self, start: int, end: int) -> tuple[int, int]:
-        """``[start, end)`` widened to the whitespace-delimited tokens it touches."""
+        """``[start, end)`` widened to the whitespace-delimited tokens it touches,
+        but not over a label OCR glued to it ("Tel.:0123"): see :func:`glued_parts`."""
+        a, b = start, end
         for m in _TOKEN.finditer(self.text):
             if m.end() > start and m.start() < end:
-                start = min(start, m.start())
-                end = max(end, m.end())
-        return start, end
+                for p0, p1 in glued_parts(self.text, m.start(), m.end()):
+                    if p1 > start and p0 < end:
+                        a, b = min(a, p0), max(b, p1)
+        return a, b
 
     def span_box(self, start: int, end: int) -> Box:
         """The box over the tokens ``text[start:end]`` touches, full line height,
@@ -114,3 +117,22 @@ class Box:
         """``[x0, y0, x1, y1]`` — the JSON shape the API returns and the shape
         ``PIL.ImageDraw.rectangle`` accepts."""
         return [self.x0, self.y0, self.x1, self.y1]
+
+
+def glued_parts(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """The token ``text[start:end]`` split where OCR glued a label to its value:
+    "Tel.:0123" -> "Tel.:", "0123"; most tokens are one part."""
+    from backend.rules.patterns import COLON_LABEL, GLUED_LABEL, GLUED_LABEL_AFTER, VALUE_START  # rules import models
+
+    def label_before(i: int) -> bool:
+        return text[i] not in ".:|/-" and bool(
+            GLUED_LABEL.fullmatch(text, start, i)
+            or COLON_LABEL.fullmatch(text, start, i) and VALUE_START.match(text, i)
+        )
+
+    cut = max((i for i in range(start + 1, end) if label_before(i)), default=start)
+    tail = min(
+        (j for j in range(cut + 1, end) if GLUED_LABEL_AFTER.fullmatch(text, j, end)),
+        default=end,
+    )
+    return [(a, b) for a, b in ((start, cut), (cut, tail), (tail, end)) if a < b]

@@ -50,8 +50,8 @@ PERSON_LABEL = re.compile(rf"\b{_PERSON_LABEL}\b\.?\s*:?\s*")
 # A person label and the name after it: "Pat.: A. Muster".
 PATIENT_NAME = re.compile(
     rf"{PERSON_LABEL.pattern}"
-    r"(?:[A-ZÄÖÜ]\.\s*)*"  # initials
-    rf"{_NAME_PART}"
+    r"(?P<value>(?:[A-ZÄÖÜ]\.\s*)*"  # initials
+    rf"{_NAME_PART})"
 )
 # "Patient:" or "Behandelte Person:" alone in its cell; a modifier must inflect.
 PERSON_LABEL_CELL = re.compile(
@@ -82,11 +82,9 @@ BIRTH_LABEL = re.compile(r"(?i)geburt|geboren|geb[.\s-]*dat")
 BIRTH_LABEL_CELL = re.compile(r"(?i)^\s*(?:geburts(?:datum|tag)|geb[.\s-]*dat(?:um)?)\.?\s*:?\s*$")
 # A date on a line known to hold a birthdate; OCR may read a dot as a comma.
 BIRTH_DATE = re.compile(r"\b\d{1,2}[.,]\s?\d{1,2}[.,]\s?\d{2,4}\b")
-# "geb. 01.02.1980": the abbreviation directly before a date.
-GEB_DATE = re.compile(rf"(?i)\bgeb[.,]?\s*(?:am\s+)?{BIRTH_DATE.pattern}")
-# "*01.02.1980": the star reads "geboren".
-STAR_DATE = re.compile(rf"\*\s*{DATE_RE.pattern}")
-BIRTH_MARK = re.compile(rf"{GEB_DATE.pattern}|{STAR_DATE.pattern}")
+# "geb. 01.02.1980" or "*01.02.1980" (the star reads "geboren"); only the date
+# is the finding.
+BIRTH_MARK = re.compile(rf"(?:(?i:\bgeb[.,]?\s*(?:am\s+)?)|\*\s*)(?P<value>{BIRTH_DATE.pattern})")
 
 # --- addresses --------------------------------------------------------------- #
 # "Musterstraße 1", "MUSTERSTR.23", "Musterer Straße 12" (OCR reads ß as B).
@@ -124,19 +122,29 @@ ID_LABEL = re.compile(
 ID_VALUE = re.compile(rf"(?<![\d./-]){_NOT_DATE_OR_MONEY}\b[A-Z]?\d(?:[ ./-]?\d){{3,}}\b")
 
 # --- invoice references ------------------------------------------------------ #
-# Invoice, receipt and customer number: "Rg.-Nr.", "Kd.-Nr.", "BFS-Nr.".
-_REF = rf"(?:Rechnungs?|Rechn|Re|Rg|BFS|Beleg|Kunden|Kd)[-\s.]*{_NR}"
+# Invoice, order, receipt and customer number: "Rg.-Nr.", "Auftrags-Nr.", "Kd.-Nr.".
+_REF = rf"(?:Rechnungs?|Rechn|Re|Rg|Auftrags?|BFS|Beleg|Kunden?|Kd|Mandanten?)[-\s.]*{_NR}"
 # A token holding a digit: "248", "AB-12-3456".
 _REF_TOKEN = rf"(?<![^\s:]){_NOT_DATE_OR_MONEY}(?=[^\s\d]*\d)[A-Za-z0-9][\w/.:-]*"
 REF_LABEL_CELL = re.compile(rf"(?i)^\s*{_REF}\.?\s*:?\s*$")
 REF_VALUE = re.compile(rf"^\s*{_REF_TOKEN}\s*$")
 # "Rechnung 2026-0815" or "Nummer: 24/0815" at the line's start, three digits at least.
-_REF_TITLE = rf"^\s*(?:Rechnung(?:\s*:)?\s+|Nummer\s*:\s*)(?=(?:[^\s\d]*\d){{3}}){_REF_TOKEN}"
+_REF_TITLE = rf"^\s*(?:Rechnung(?:\s*:)?\s+|Nummer\s*:\s*)(?=(?:[^\s\d]*\d){{3}})"
 # Further digit groups of the same number: "1234 5678 9012 34"; no date or amount.
 _REF_MORE = rf"(?: {_NOT_DATE_OR_MONEY}\d(?:[\d/-]*\d)?(?![\w.,]))*"
-# Label and number on one line; OCR may read the label's dot as a comma.
+# "Kunde 12345", "Mandant: 012345/678": the holder word alone labels its number.
+_REF_HOLDER = rf"(?-i:\b(?:Kunde|Mandant))\s*:?\s+(?=(?:[^\s\d]*\d){{3}})"
+# Label and number on one line; OCR may read the label's dot as a comma. Only the
+# number is the finding.
 REF_MERGED = re.compile(
-    rf"(?i)(?:\b{_REF}\b[.,]?\s*:?\s*{_REF_TOKEN}|{_REF_TITLE}){_REF_MORE}"
+    rf"(?i)(?:\b{_REF}\b[.,]?\s*:?\s*|{_REF_TITLE}|{_REF_HOLDER})(?P<value>{_REF_TOKEN}{_REF_MORE})"
+)
+# A barcode's printed text between its start and stop stars: "*123456-7890123*".
+BARCODE_TEXT = re.compile(r"\*(?=(?:[^*\s]*?\d){6})[0-9A-Z][0-9A-Z.\-/+%$]*\*")
+# "RECHNUNG" | "Nr. 123456": OCR split the title from its number.
+REF_TITLE_CELL = re.compile(r"(?i)^\s*Rechnung\s*:?\s*$")
+REF_NR_VALUE = re.compile(
+    rf"(?i)^\s*{_NR}\.?\s*:?\s*(?=(?:[^\s\d]*\d){{3}})(?P<value>{_REF_TOKEN}{_REF_MORE})\s*$"
 )
 
 # --- sender identifiers ------------------------------------------------------ #
@@ -209,10 +217,11 @@ CONTACT = re.compile(
 # Six digits or more; OCR reads a printed separator bar as "|".
 _PHONE_DIGITS = r"(?:[\s()/+\-.|]*\d){6,}"
 # Behind a phone label, or with a DACH country code ("+49", "0043").
+_PHONE_LABEL = r"Tel(?:efon)?|Telefax|Fax|Mobil|Handy|Fon"
 PHONE = re.compile(
-    r"(?i)\b(?:Tel(?:efon)?|Telefax|Fax|Mobil|Handy|Fon)\b\.?\s*(?:Nr\.?)?\s*:?\s*"
-    rf"(?=[(+\d]){_PHONE_DIGITS}"
-    rf"|(?<![\w+])(?<!\d\s)(?:\+|00)\s?(?:49|43|41){_PHONE_DIGITS}"
+    rf"(?i)(?:\b(?:{_PHONE_LABEL})\b\.?\s*(?:Nr\.?)?\s*:?\s*"
+    rf"|(?<![\w+])(?<!\d\s)(?=(?:\+|00)\s?(?:49|43|41){_PHONE_DIGITS}))"
+    r"(?P<value>[(+]?\s?\d(?:[\s()/+\-.|]*\d){5,})"
 )
 PHONE_LABEL_CELL = re.compile(r"(?i)^\s*(?:Tel(?:efon)?|Telefax|Fax|Mobil)\.?\s*:?\s*$")
 PHONE_VALUE = re.compile(r"^\s*[(+]?\d(?:[\s()/\-.|]*\d){5,}\s*$")
@@ -248,3 +257,23 @@ SPECIALTY = re.compile(
     r"|ambulante[nr]?|Operationen|Akupunktur|Naturheilverfahren|Homöopathie)\b"
 )
 SPECIALTY_GLUE = re.compile(r"(?i)\b(?:für|und|u|sowie|der|des|die|im|in)\b|[\W\d_]")
+
+# --- labels ------------------------------------------------------------------ #
+# A token that labels a value: it stays readable and is never a name.
+_LABEL = (
+    rf"{_PERSON_LABEL}|Pat\.?-?Name|{_REF}|{_NR}|Rechnung|Kunde|Mandant"
+    rf"|geb|geboren|Geburtsdatum|Geb\.?-?Dat(?:um)?|{_PHONE_LABEL}"
+    r"|(?-i:IK)(?:[-.]?(?:Nr|Nummer|Zeichen))?"
+)
+LABEL_WORD = re.compile(rf"(?i)^(?:{_LABEL})[.:,]*$")
+# A label OCR glued to the front of its value: "Tel.:0123", "Internet:www…".
+_GLUED = (
+    rf"{_LABEL}|Internet|E-?Mail|Web|IBAN|BIC|{_UST_ID}(?:[-.]?Nr)?|USt|Steuer-?Nr"
+    r"|BSNR|LANR|HRB|BLZ|Kto|Konto"
+)
+GLUED_LABEL = re.compile(rf"(?i)(?:{_GLUED})(?:[-.\s]*Nr)?[.:|]+")
+# Any word closed by a colon is a label too, if a value follows: "Ust.-ID:DE123…".
+COLON_LABEL = re.compile(r"[^\W\d_][\w.\-]*:+")
+VALUE_START = re.compile(r"[\d(+]|[A-Z]{1,2}\d")
+# A label glued behind a value by a separator: "0123/4567-0·Fax".
+GLUED_LABEL_AFTER = re.compile(rf"(?i)[·|,;]+(?:{_GLUED})[.:]*")

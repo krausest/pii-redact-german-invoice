@@ -26,6 +26,8 @@ from backend.rules.patterns import (
     PHONE_LABEL_CELL,
     PHONE_VALUE,
     REF_LABEL_CELL,
+    REF_NR_VALUE,
+    REF_TITLE_CELL,
     REF_VALUE,
     SENDER_LABEL_CELL,
     SENDER_VALUE,
@@ -60,6 +62,8 @@ LABELED_VALUES: list[LabeledValue] = [
     LabeledValue(PiiLabel.ID, label=ID_LABEL, value=ID_VALUE),
     # "Rg.-Nr.:" | "AB-12-3456"
     LabeledValue(PiiLabel.ID, label=REF_LABEL_CELL, value=REF_VALUE, header=REF_LABEL_CELL, cell=True),
+    # "RECHNUNG" | "Nr. 123456"
+    LabeledValue(PiiLabel.ID, label=REF_TITLE_CELL, value=REF_NR_VALUE, header=REF_TITLE_CELL, cell=True),
     # "Steuernummer:" | "123/456/78901"
     LabeledValue(
         PiiLabel.ID, label=SENDER_LABEL_CELL, value=SENDER_VALUE, header=SENDER_LABEL_CELL, cell=True
@@ -119,7 +123,8 @@ def labeled_claims(
 
 def _claim(line: Line, kind: PiiLabel | KeepReason, value: re.Pattern[str]) -> Claim:
     m = value.search(line.text)
-    start, end = m.span() if m else (0, len(line.text))
+    group = "value" if "value" in value.groupindex else 0
+    start, end = m.span(group) if m else (0, len(line.text))
     return Claim(kind, start, end)
 
 

@@ -8,6 +8,8 @@ new detector join without the pipeline knowing it.
 
 from __future__ import annotations
 
+import re
+from dataclasses import replace
 from typing import Protocol
 
 from backend.classifiers.base import Classifier
@@ -16,6 +18,7 @@ from backend.harvest import Memory
 from backend.pii import Span, rule_source
 from backend.rules import rule_spans
 from backend.rules.keep import KeepReason
+from backend.rules.patterns import LABEL_WORD
 from backend.trace import Trace
 from backend.wordlists import WordLists
 
@@ -47,7 +50,8 @@ class ModelDetector:
         self._classifier = classifier
 
     def spans(self, doc: Document, trace: Trace) -> list[Span]:
-        return self._classifier.spans(doc.text, trace)
+        spans = (_without_labels(s) for s in self._classifier.spans(doc.text, trace))
+        return [s for s in spans if s is not None]
 
     def admits(self, span: Span, keep: str | None) -> bool:  # noqa: ARG002
         return keep is None
@@ -78,3 +82,22 @@ class ListDetector:
 
     def admits(self, span: Span, keep: str | None) -> bool:  # noqa: ARG002
         return True
+
+
+_TOKEN = re.compile(r"\S+")
+
+
+def _without_labels(span: Span) -> Span | None:
+    """``span`` without the label words at either end ("Person: Andrea" ->
+    "Andrea"); ``None`` when nothing else is left."""
+    tokens = list(_TOKEN.finditer(span.text))
+    while tokens and LABEL_WORD.match(tokens[0].group()):
+        tokens.pop(0)
+    while tokens and LABEL_WORD.match(tokens[-1].group()):
+        tokens.pop()
+    if not tokens:
+        return None
+    a, b = tokens[0].start(), tokens[-1].end()
+    if (a, b) == (0, len(span.text)):
+        return span
+    return replace(span, start=span.start + a, end=span.start + b, text=span.text[a:b])

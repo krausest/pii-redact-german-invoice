@@ -26,7 +26,7 @@ flowchart TD
 | Service | [`service.py`](../backend/service.py) | framework-free core: `run_redaction` → `Redaction` (pages + `is_pdf`) → `produce_output` |
 | Pipeline | [`pipeline.py`](../backend/pipeline.py), [`redactor.py`](../backend/redactor.py), [`detectors.py`](../backend/detectors.py), [`registry.py`](../backend/registry.py) | `RedactionPipeline`: `unwarp`, `read_lines`, `regions`, `compute_boxes`, `apply_boxes`; `PageRedactor` decides a page; each `Detector` proposes spans; `ModelRegistry` builds the models |
 | Construction | [`factory.py`](../backend/factory.py) | `build_pipeline(config)`: OCR backend, layout detector, lazy classifier and unwarper factories |
-| Detectors | [`rules/`](../backend/rules/), [`classifiers/`](../backend/classifiers/), [`harvest.py`](../backend/harvest.py), [`layout.py`](../backend/layout.py) | rules, model, name memory, layout regions |
+| Detectors | [`rules/`](../backend/rules/), [`classifiers/`](../backend/classifiers/), [`harvest.py`](../backend/harvest.py), [`layout.py`](../backend/layout.py), [`codes.py`](../backend/codes.py) | rules, model, memory, layout regions, barcodes and QR codes |
 | Shared types | [`models.py`](../backend/models.py), [`pii.py`](../backend/pii.py) | `Line`, `Box`; `Span` and `PiiLabel` — the one format every detector returns |
 | Diagnostics | [`trace.py`](../backend/trace.py) | the debug trace (`?debug=true`, `PII_LOG_LEVEL=DEBUG`) |
 
@@ -99,19 +99,24 @@ The heart of the pipeline, per page:
    ([`ocr_variants.py`](../backend/ocr_variants.py)): a page word whose look-alike
    skeleton equals the name's (`llja` for `Ilja`, `Kem` for `Kern`), or, from six
    letters on, one glyph-shape confusion away (`Loneburg` for `Lüneburg`). The word
-   must itself look like a name; the trace logs `name variant 'llja' ~ 'Ilja'`. The memory (`harvest.Memory`) is shared across the pages of a
-   document, so a name or birthdate labelled on page 1 is caught bare on page 2
+   must itself look like a name; the trace logs `name variant 'llja' ~ 'Ilja'`. An
+   **identifier** a rule or labeled value found (`ID`: invoice, customer or tax number)
+   with six digits or more is remembered too, and every bare recurrence of it is
+   redacted (`id-memory`): the invoice number repeated unlabelled in a corner. The memory (`harvest.Memory`) is shared across the pages of a
+   document, so a name, birthdate or identifier labelled on page 1 is caught bare on page 2
    (forward only).
 5. **Word boxes.** Only the words a span covers are boxed, plus `padding`: each span is
-   widened to whole tokens, runs separated only by whitespace or punctuation are
+   widened to whole tokens (but not over a glued label), runs separated only by whitespace or punctuation are
    joined, and only those runs are boxed, positioned by the OCR's word geometry
    (`Line.words`, by character share where there is none); the padding is clipped where it would reach into a
    kept line, the line's own box never is. A line holding a birthdate also gets a *note*: the
    birth year (`YYYY`), printed white where the date stood (`rules.birth_year_note`;
    a two-digit year is written out, several dates without a birth marker give none).
-6. **Region and signature boxes.** `layout.region_boxes` and
-   `layout.signature_boxes` add the only boxes not tied to an OCR line
-   ([details](#layout-regions)).
+6. **Region, signature and code boxes.** `layout.region_boxes`,
+   `layout.signature_boxes` and `codes.code_boxes` add the only boxes not tied to an
+   OCR line ([details](#layout-regions)). `code_boxes` blackens every barcode and QR
+   code OpenCV finds on the page image (an invoice number, a GiroCode's payee and
+   IBAN); a barcode's box is stretched over the full height of its bars.
 7. **Trace.** Steps 2–6 produce one `verdict.PageVerdict`; `trace.trace_page` narrates it:
    region, its text, each line with its spans and verdict.
 
@@ -128,6 +133,17 @@ All in [`rules/`](../backend/rules/): the regexes in `patterns.py`, the one-line
 `line_rules.py`; a trace line `rule NAME` names the pattern. Why a pattern has its
 shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
 
+**The value, never its label.** A rule whose pattern has a `value` group claims only that
+group: `Patient: [Andrea]`, `Rechn.Nr. [1234 5678]`, `geb. [01.02.1980]`,
+`Telefon: [0123 456789]`; labeled values claim their value the same way. A classifier
+span loses label words at either end (`Person: Andrea` → `Andrea`, `Andrea geb.` →
+`Andrea`, `IK-Nr. 123456789` → `123456789`), and the name memory never learns one (`patterns.LABEL_WORD`). A label OCR
+glued to its value is torn off (`models.glued_parts`): `Tel.:[0123]`, `Internet:[www…]`,
+`Kto.-Nr.[1234567]`, `[0123/4567-0]·Fax`. A known label ending in `.`, `:` or `|`
+counts in front; any other word closed by a colon only before a value (a digit,
+`(`, `+`, `DE123…`); behind a value only after `·`, `|`, `,` or `;`. Word widening
+and the replay's word scoring both use these parts.
+
 | Rule | Catches |
 |---|---|
 | `SALUT` | salutations (`Herrn`, `Frau`, `Familie`, …) — the recipient block |
@@ -135,7 +151,8 @@ shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
 | `TITLE_NAME` | a title and name (`Dr. med. Max Mustermann`) |
 | `NAME_DATE` | `Surname,Forename DD.MM.YY` — an unlabelled patient table row |
 | `BIRTH_MARK` | a birthdate with its mark on the line (`geb. 13.08.1954`, `*13.08.1954`); after `geb` a comma OCR read for a dot is accepted (`geb, 13,08.1954`), as it is wherever a line is known to hold a birthdate (birth label, birthdate memory, birth-year note) |
-| `REF_MERGED` | an invoice number with its label on the line (`Rg.-Nr. 4711`, `Rechnung 2026-0815`), with all its digit groups (`Rechn.Nr. 1234 5678 9012 34`) up to a date, amount or word |
+| `REF_MERGED` | an invoice, order, customer or client number with its label on the line (`Rg.-Nr. 4711`, `Auftragsnummer 123.456`, `Rechnung 2026-0815`, `Kunde 12345`, `Mandant: 012345/678`), with all its digit groups (`Rechn.Nr. 1234 5678 9012 34`) up to a date, amount or word |
+| `BARCODE_TEXT` | a barcode's printed text between its stars (`*123456-7890123*`), six digits at least |
 | `DE_STREET`, `DE_PLZ_CITY` | German street + number (suffix glued or as its own word: `Musterstr. 1`, `Musterer Straße 12`), postcode + city |
 | `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
 | `PHONE` | phone/fax number behind `Tel`/`Fax`/`Mobil`, or unlabelled with `+49`/`0049` (also `43`, `41`) |
@@ -152,10 +169,11 @@ shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
   also means *Gebühren*), and treatment dates stay visible.
 - **Identifiers** — insurance, patient, case, admission, member and contract numbers
   next to their label.
-- **References** — invoice, receipt and customer number (`Rechnungsnummer`,
-  `Rg.-Nr.`, `Re.-Nr.`, `BFS-Nr.`, `Kd.-Nr.`, …): glued to the label, in the cell right of a label cell,
+- **References** — invoice, order, receipt and customer number (`Rechnungsnummer`,
+  `Rg.-Nr.`, `Re.-Nr.`, `Auftragsnummer`, `BFS-Nr.`, `Kd.-Nr.`, …): glued to the label, in the cell right of a label cell,
   or under it. An OCR-damaged `Nr` (`Nz`) and a comma after the label still count. A line starting with `Rechnung` or `Nummer:` followed by a value of three
-  or more digits counts as well. A date or an amount is never taken for one, so the invoice date in
+  or more digits counts as well, and so does an `Nr. 123456` cell beside or under a cell
+  holding only `Rechnung` (OCR split the title from its number). A date or an amount is never taken for one, so the invoice date in
   the same row stays.
 - **Sender identifiers in their own cell** — the value beside or under a
   `Steuernummer:`, `USt-IdNr.:`, `IK:`, `LANR:` or `BSNR:` cell (`IMPRINT` covers

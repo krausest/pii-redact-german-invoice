@@ -148,6 +148,8 @@ def trace_page(trace: Trace, verdict: PageVerdict) -> None:
             if ln in signed:
                 trace.add("      signature %s", signed[ln].as_list())
 
+    for code in verdict.codes:
+        trace.add("--- code %s %s -> REDACT", code.kind, code.box.as_list())
     for r, region in enumerate(verdict.regions):
         why = why_by_region.get(r)
         narrate(

@@ -56,6 +56,25 @@ def test_a_birthdate_misread_with_commas_is_learned_and_recalled():
     assert [(s.label, s.text) for s in recalled[lines[1]]] == [(PiiLabel.DATE_OF_BIRTH, "01.02.1980")]
 
 
+def test_an_invoice_number_is_recalled_bare_elsewhere():
+    lines = [cell("Rechnung 123456-654321", 10, 10, width=300), cell("123456-654321 1", 10, 60)]
+    doc = Document(lines)
+    recalled = doc.per_line(_learn(doc).recall(doc))
+    assert [(s.label, s.text) for s in recalled[lines[1]]] == [(PiiLabel.ID, "123456-654321")]
+
+
+def test_a_short_number_is_not_remembered():
+    lines = [cell("Rechnung 4711", 10, 10, width=300), cell("Ziffer 4711", 10, 60)]
+    doc = Document(lines)
+    assert doc.per_line(_learn(doc).recall(doc))[lines[1]] == []
+
+
+def test_a_label_after_a_name_is_not_learned():
+    lines = [cell("Herrn Andrea Muster Telefon 0123 456789", 10, 10, width=400)]
+    names = _learn(Document(lines)).names
+    assert "Muster" in names and "Telefon" not in names
+
+
 def test_a_name_is_found_in_any_casing_that_starts_with_a_capital():
     assert mentions_name("MUSTER, ANDREA", {"Muster"}) == "MUSTER"
     assert mentions_name("klein gedruckt", {"Klein"}) is None

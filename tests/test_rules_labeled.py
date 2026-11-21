@@ -10,6 +10,7 @@ from backend.rules.labeled import (
     LabeledValue,
     _column_value,
     _row_value,
+    labeled_claims,
     labeled_values,
 )
 from backend.rules.patterns import ID_LABEL, ID_VALUE, REF_VALUE
@@ -49,6 +50,24 @@ def test_a_sender_identifier_in_the_cell_beside_its_label(label, value):
 
 def test_a_sender_label_does_not_take_the_date_beside_it():
     lines = [cell("Steuernummer:", 10, 100), cell("12.03.2026", 130, 100)]
+    assert labeled_values(lines) == {}
+
+
+def test_an_invoice_title_takes_the_number_cell_beside_it():
+    """OCR split "RECHNUNG Nr. 123456" into two cells; the "Nr." stays readable."""
+    lines = [cell("RECHNUNG", 10, 100), cell("Nr. 123456", 300, 102)]
+    assert labeled_values(lines) == {lines[1]: PiiLabel.ID}
+    assert labeled_claims(lines)[lines[1]][1:] == (4, 10)
+
+
+@pytest.mark.parametrize("value", ["Nr. 12", "Nr. 123456"])
+def test_a_bare_number_cell_without_an_invoice_title_is_kept(value):
+    lines = [cell("Leistung", 10, 100), cell(value, 300, 102)]
+    assert labeled_values(lines) == {}
+
+
+def test_an_invoice_title_takes_no_short_count():
+    lines = [cell("Rechnung", 10, 100), cell("Nr. 2", 300, 102)]
     assert labeled_values(lines) == {}
 
 

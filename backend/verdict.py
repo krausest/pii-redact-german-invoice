@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from backend.codes import CodeBox
 from backend.layout import LayoutRegion, RegionBox, SignatureBox
 from backend.models import Box, Line
 from backend.pii import Span
@@ -28,6 +29,7 @@ class PageVerdict:
     notes: dict[Line, Box]
     region_boxes: list[RegionBox]
     signatures: list[SignatureBox]
+    codes: list[CodeBox] = field(default_factory=list)
 
     @property
     def boxes(self) -> list[Box]:
@@ -36,5 +38,6 @@ class PageVerdict:
             *self.line_boxes,
             *(hit.box for hit in self.region_boxes),
             *(sig.box for sig in self.signatures),
+            *(code.box for code in self.codes),
             *self.notes.values(),
         ]

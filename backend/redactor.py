@@ -7,6 +7,7 @@ import re
 from collections.abc import Iterable
 
 from backend.classifiers.base import Classifier
+from backend.codes import CodeBox
 from backend.detectors import Detector, ListDetector, MemoryDetector, ModelDetector, RuleDetector
 from backend.document import Document
 from backend.harvest import Memory
@@ -37,6 +38,7 @@ class PageRedactor:
         memory: Memory,
         trace: Trace,
         lists: WordLists = EMPTY,
+        codes: list[CodeBox] | None = None,
     ) -> PageVerdict:
         text_lines = [ln for ln in lines if ln.text.strip()]
         doc = _read(text_lines, regions)
@@ -66,6 +68,7 @@ class PageRedactor:
             notes=_birth_year_notes(found),
             region_boxes=region_boxes(lines, regions, set(found), pad, set(keep)),
             signatures=signature_boxes(lines, page_width, pad),
+            codes=codes or [],
         )
 
 

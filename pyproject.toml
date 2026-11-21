@@ -9,6 +9,8 @@ dependencies = [
     "fastapi>=0.162.4",
     "gunicorn>=27.0.0",
     "onnxruntime>=1.31.1",
+    # Barcode and QR detection (backend.codes); paddlex pulls it in anyway.
+    "opencv-contrib-python>=4.10.0.84",
     "paddleocr>=3.7.0",
     "paddlepaddle>=3.3.1",
     "pillow>=13.0.0",

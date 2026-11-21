@@ -155,11 +155,12 @@ A region of a blackened-whole type (`footer`, `image`, …) ends with
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,
-`birthdate-memory`, `user-list` (a `redact_words` entry), or the classifier (`presidio`, `guard-omni`). A span a kept
+`birthdate-memory`, `id-memory`, `user-list` (a `redact_words` entry), or the classifier (`presidio`, `guard-omni`). A span a kept
 line rejected prints the same way after `rejected `. A `name-memory`
 or `birthdate-memory` span quotes the remembered name or date it matched; each
 enters the memory with a page-level line `name memory 'Muster' <- '<line>'` or
-`birthdate memory '01.02.1980' <- '<line>'` before the regions. Lines in no region follow under
+`birthdate memory '01.02.1980' <- '<line>'` (or `id memory '123456-789' <- '<line>'`) before the regions.
+A blackened barcode or QR code prints as `--- code barcode [x0, y0, x1, y1] -> REDACT`. Lines in no region follow under
 `--- unclaimed lines ---`; pages are separated by `=== page N ===`. See
 [Redaction](Redaction.md) for what each detector does.
 

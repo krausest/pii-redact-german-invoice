@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from backend.document import Document
 from backend.pii import PiiLabel, Span, rule_source
 from backend.rules.patterns import (
+    BARCODE_TEXT,
     BIRTH_MARK,
     CONTACT,
     DE_PLZ_CITY,
@@ -41,6 +42,7 @@ STATIC_RULES: list[LineRule] = [
     LineRule(PiiLabel.PERSON, "NAME_DATE", NAME_DATE),
     LineRule(PiiLabel.DATE_OF_BIRTH, "BIRTH_MARK", BIRTH_MARK),
     LineRule(PiiLabel.ID, "REF_MERGED", REF_MERGED),
+    LineRule(PiiLabel.ID, "BARCODE_TEXT", BARCODE_TEXT),
     LineRule(PiiLabel.ADDRESS, "DE_STREET", DE_STREET),
     LineRule(PiiLabel.ADDRESS, "DE_PLZ_CITY", DE_PLZ_CITY),
     LineRule(PiiLabel.ORG, "ORG_LEGAL", ORG_NAME),
@@ -58,9 +60,11 @@ def line_spans(doc: Document) -> list[Span]:
             continue
         offset = doc.range_of(line).start
         for rule in STATIC_RULES:
+            # A rule with a "value" group claims only the value, never its label.
+            group = "value" if "value" in rule.pattern.groupindex else 0
             for m in rule.pattern.finditer(line.text):
-                start, end = offset + m.start(), offset + m.end()
-                spans.append(Span(rule.label, start, end, m.group(), rule_source(rule.name)))
+                start, end = offset + m.start(group), offset + m.end(group)
+                spans.append(Span(rule.label, start, end, m.group(group), rule_source(rule.name)))
     return spans
 
 

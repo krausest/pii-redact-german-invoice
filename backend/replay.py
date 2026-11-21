@@ -82,7 +82,7 @@ from PIL import Image
 from backend.classifiers.base import Classifier
 from backend.config import Config
 from backend.harvest import Memory
-from backend.models import Box, Line
+from backend.models import Box, Line, glued_parts
 from backend.pipeline import RedactionPipeline
 from backend.textnorm import fold
 from backend.trace import Trace, format_line
@@ -309,20 +309,22 @@ def marked_words(line: Line, boxes: Sequence[Box]) -> tuple[str, int, int]:
     extent, by character share: the dumps hold no word geometry."""
     out: list[str] = []
     pos = covered = gap = 0
-    for m in _TOKEN.finditer(line.text):
-        x0, x1 = line.x_range(m.start(), m.end())
-        word = Line(m.group(), x0, line.top, max(x1 - x0, 1), line.height)
+    parts = (p for m in _TOKEN.finditer(line.text) for p in glued_parts(line.text, m.start(), m.end()))
+    for start, end in parts:
+        text = line.text[start:end]
+        x0, x1 = line.x_range(start, end)
+        word = Line(text, x0, line.top, max(x1 - x0, 1), line.height)
         cov = coverage(word, boxes)
-        out.append(line.text[pos : m.start()])
+        out.append(line.text[pos:start])
         if cov >= COVERED:
-            out.append(f"[{m.group()}]")
+            out.append(f"[{text}]")
             covered += 1
         elif cov > UNTOUCHED:
-            out.append(f"{{{m.group()}}}")
+            out.append(f"{{{text}}}")
             gap += 1
         else:
-            out.append(m.group())
-        pos = m.end()
+            out.append(text)
+        pos = end
     out.append(line.text[pos:])
     return "".join(out), covered, gap
 

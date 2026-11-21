@@ -50,7 +50,8 @@ select one with `-k 'onnxruntime and w2'`.
 | `test_rules_birth_year.py` | which date is the birthdate, and the year printed over it |
 | `test_document.py` | joining a page into one text and mapping spans back to lines |
 | `test_detectors.py` | what each detector may still redact on a kept line |
-| `test_harvest.py` | the name and birthdate memory: what it learns, what it recalls |
+| `test_harvest.py` | the name, birthdate and identifier memory: what it learns, what it recalls |
+| `test_codes.py` | barcode and QR boxes on synthetic images |
 | `test_verdict.py` | the boxes of one page, in drawing order |
 | `test_windows.py` | classifying a long page in line-aligned windows |
 | `test_layout.py` | line-to-region assignment, reading order, region boxes |
@@ -67,8 +68,8 @@ OCR is slow and machine-dependent, and it is not what changes when a rule is tun
 So it is run **once** per sample into `<stem>_ocr.txt`; everything after it — rules,
 classifier, name memory, item table — is replayed against that text. A corpus
 replays in seconds, and the snapshot `<stem>_ocr.expected.txt` holds **one verdict
-per OCR line**. Each word is scored on
-its own extent — `[covered]` at ≥ 90 %, `{in the gap}` above 10 %:
+per OCR line**. Each word — a glued label and its value count as two,
+`Tel.:[0123]` — is scored on its own extent — `[covered]` at ≥ 90 %, `{in the gap}` above 10 %:
 
 - `REDACT` — at least one word is covered; the marked text is pinned beneath it,
   e.g. `'[Max] [Mustermann,] geboren am [15.01.1990]'`
@@ -89,10 +90,10 @@ uv run python -m backend.replay check tests/regression --safe-update  # rewrite 
 uv run python -m backend.replay check <dir> --ignore-text          # after scrubbing
 ```
 
-- Replay runs **no OCR, no dewarping and no layout-region pass** — regions are
-  detected from pixels, and the replayed page is blank. Snapshots therefore pin the
+- Replay runs **no OCR, no dewarping, no layout-region and no barcode/QR pass** —
+  they work on pixels, and the replayed page is blank. Snapshots therefore pin the
   per-line detection only; region boxes are covered by `-m slow` and
-  `test_layout.py`.
+  `test_layout.py`, code boxes by `test_codes.py`.
 - `--safe-update` rewrites lines whose verdict kind (`REDACT`/`keep`/`PARTIAL`) and
   marked words are unchanged and holds the others at their snapshot entry, so the remaining
   failures are exactly the verdict changes (exit 1 if there are any).
