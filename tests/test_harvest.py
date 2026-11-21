@@ -49,6 +49,13 @@ def test_a_birthdate_is_recalled_in_another_spelling():
     assert [(s.label, s.text) for s in recalled[lines[1]]] == [(PiiLabel.DATE_OF_BIRTH, "1.2.80")]
 
 
+def test_a_birthdate_misread_with_commas_is_learned_and_recalled():
+    lines = [cell("Andrea Muster, geb, 01,02.1980", 10, 10, width=300), cell("01.02.1980", 10, 60)]
+    doc = Document(lines)
+    recalled = doc.per_line(_learn(doc).recall(doc))
+    assert [(s.label, s.text) for s in recalled[lines[1]]] == [(PiiLabel.DATE_OF_BIRTH, "01.02.1980")]
+
+
 def test_a_name_is_found_in_any_casing_that_starts_with_a_capital():
     assert mentions_name("MUSTER, ANDREA", {"Muster"}) == "MUSTER"
     assert mentions_name("klein gedruckt", {"Klein"}) is None

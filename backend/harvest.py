@@ -24,10 +24,10 @@ from backend.ocr_variants import VariantIndex
 from backend.pii import BIRTHDATE_MEMORY, LABELED_VALUE, NAME_MEMORY, PiiLabel, Span
 from backend.rules.birth_year import DateKey, birth_date_in, date_key
 from backend.rules.patterns import (
+    BIRTH_DATE,
     BIRTH_LABEL,
     BIRTH_MARK,
     DATE_KEEP_LABEL,
-    DATE_RE,
     NAME_AT,
     NAME_DATE,
     NAME_TOKEN,
@@ -155,7 +155,7 @@ def _named_by_patterns(text: str) -> list[str]:
         found += NAME_TOKEN.findall(m.group())
     for m in BIRTH_MARK.finditer(text):
         found += _run_before(text, m.start())
-    if DATE_RE.search(text):
+    if BIRTH_DATE.search(text):
         for m in BIRTH_LABEL.finditer(text):
             found += _run_before(text, m.start())
     return found
@@ -256,7 +256,7 @@ def _is_birth_evidence(line: Line, spans: Sequence[Span]) -> bool:
     return (
         any(s.label is PiiLabel.DATE_OF_BIRTH and s.source == LABELED_VALUE for s in spans)
         or bool(BIRTH_MARK.search(text) or NAME_DATE.search(text))
-        or bool(BIRTH_LABEL.search(text) and DATE_RE.search(text))
+        or bool(BIRTH_LABEL.search(text) and BIRTH_DATE.search(text))
     )
 
 
@@ -284,7 +284,7 @@ def _birthdate_spans(doc: Document, birthdates: set[DateKey]) -> list[Span]:
     """A span over every remembered birthdate."""
     spans: list[Span] = []
     for line in doc.lines:
-        for m in DATE_RE.finditer(line.text):
+        for m in BIRTH_DATE.finditer(line.text):
             if date_key(m.group()) in birthdates:
                 spans.append(doc.part_of(line, m.start(), m.end(), PiiLabel.DATE_OF_BIRTH, BIRTHDATE_MEMORY))
     return spans

@@ -80,8 +80,10 @@ NAME_DATE = re.compile(rf"{_NAME_PART}\s*,\s*{_NAME_PART}\s+{DATE_RE.pattern}")
 # "Geburtsdatum", "geboren", "Geb.Dat." — but not a bare "Geb." (Gebühren).
 BIRTH_LABEL = re.compile(r"(?i)geburt|geboren|geb[.\s-]*dat")
 BIRTH_LABEL_CELL = re.compile(r"(?i)^\s*(?:geburts(?:datum|tag)|geb[.\s-]*dat(?:um)?)\.?\s*:?\s*$")
+# A date on a line known to hold a birthdate; OCR may read a dot as a comma.
+BIRTH_DATE = re.compile(r"\b\d{1,2}[.,]\s?\d{1,2}[.,]\s?\d{2,4}\b")
 # "geb. 01.02.1980": the abbreviation directly before a date.
-GEB_DATE = re.compile(rf"(?i)\bgeb\.?\s*(?:am\s+)?{DATE_RE.pattern}")
+GEB_DATE = re.compile(rf"(?i)\bgeb[.,]?\s*(?:am\s+)?{BIRTH_DATE.pattern}")
 # "*01.02.1980": the star reads "geboren".
 STAR_DATE = re.compile(rf"\*\s*{DATE_RE.pattern}")
 BIRTH_MARK = re.compile(rf"{GEB_DATE.pattern}|{STAR_DATE.pattern}")

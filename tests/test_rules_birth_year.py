@@ -19,6 +19,8 @@ from backend.rules.birth_year import birth_date_in, birth_year_note
         ("12.03.2026 Andrea Muster *01.02.1980", "01.02.1980"),
         ("Geb.-Datum: 01.02.1980 Re.-Datum: 01.03.2026", None),
         ("Geburtsdatum", None),
+        ("Andrea Muster, geb, 01,02.1980", "01,02.1980"),
+        ("Geburtsdatum: 01.02,1980", "01.02,1980"),
     ],
 )
 def test_the_birthdate_on_a_birth_line(text, expected):
@@ -40,6 +42,10 @@ def test_the_birth_year_is_printed_where_the_date_stood():
 def test_a_two_digit_birth_year_is_written_out():
     assert _note("geb. 05.03.11").text == "2011"
     assert _note("geb. 05.03.75").text == "1975"
+
+
+def test_the_birth_year_survives_a_comma_for_a_dot():
+    assert _note("geb, 05,03.1975").text == "1975"
 
 
 def test_no_year_when_the_birthdate_is_ambiguous():

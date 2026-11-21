@@ -15,9 +15,9 @@ from backend.models import Line
 from backend.pii import PiiLabel
 from backend.rules.geometry import below, column_gap, left_aligned, same_row
 from backend.rules.patterns import (
+    BIRTH_DATE,
     BIRTH_LABEL,
     BIRTH_LABEL_CELL,
-    DATE_RE,
     DATE_VALUE,
     ID_LABEL,
     ID_VALUE,
@@ -55,7 +55,7 @@ class LabeledValue:
 
 LABELED_VALUES: list[LabeledValue] = [
     # "Geburtsdatum:" | "01.02.1980"
-    LabeledValue(PiiLabel.DATE_OF_BIRTH, label=BIRTH_LABEL, value=DATE_RE, header=BIRTH_LABEL_CELL),
+    LabeledValue(PiiLabel.DATE_OF_BIRTH, label=BIRTH_LABEL, value=BIRTH_DATE, header=BIRTH_LABEL_CELL),
     # "Versicherten-Nr.:" | "A123456789"
     LabeledValue(PiiLabel.ID, label=ID_LABEL, value=ID_VALUE),
     # "Rg.-Nr.:" | "AB-12-3456"

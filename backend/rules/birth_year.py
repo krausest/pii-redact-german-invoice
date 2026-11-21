@@ -9,7 +9,7 @@ from typing import NamedTuple
 
 from backend.models import Box, Line
 from backend.pii import PiiLabel, Span, rule_source
-from backend.rules.patterns import BIRTH_MARK, DATE_RE, NAME_DATE
+from backend.rules.patterns import BIRTH_DATE, BIRTH_MARK, NAME_DATE
 
 
 def birth_year_note(line: Line, spans: list[Span]) -> Box | None:
@@ -21,7 +21,7 @@ def birth_year_note(line: Line, spans: list[Span]) -> Box | None:
     found = birth_date_in(line.text)
     if found is None:
         return None
-    year = _full_year(re.split(r"\.\s?", found.group())[-1])
+    year = _full_year(re.split(r"[.,]\s?", found.group())[-1])
     box = line.span_box(found.start(), found.end())
     return Box(box.x0, box.y0, box.x1, box.y1, text=year)
 
@@ -31,8 +31,8 @@ def birth_date_in(text: str) -> re.Match[str] | None:
     row points at, else the line's only date."""
     marked = BIRTH_MARK.search(text) or NAME_DATE.search(text)
     if marked is not None:
-        return DATE_RE.search(text, marked.start())
-    dates = list(DATE_RE.finditer(text))
+        return BIRTH_DATE.search(text, marked.start())
+    dates = list(BIRTH_DATE.finditer(text))
     return dates[0] if len(dates) == 1 else None
 
 
@@ -46,7 +46,7 @@ class DateKey(NamedTuple):
 
 
 def date_key(text: str) -> DateKey:
-    day, month, year = re.split(r"\.\s?", text)
+    day, month, year = re.split(r"[.,]\s?", text)
     return DateKey(int(day), int(month), int(_full_year(year)))
 
 

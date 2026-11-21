@@ -192,6 +192,10 @@ PATTERN_CASES: list[tuple[str, str, bool]] = [
     ("BIRTH_MARK", "* 01.02.1980", True),
     ("BIRTH_MARK", "* Bitte beachten: Termin am 01.02.2026", False),
     ("BIRTH_MARK", "Geb.Nr. 5 13.08.2026", False),
+    # OCR reads the dots of the mark and the date as commas.
+    ("BIRTH_MARK", "Andrea Muster, geb, 01,02.1980", True),
+    ("BIRTH_MARK", "geb. 01.02,1980", True),
+    ("BIRTH_MARK", "Geb. 12,50 EUR", False),
     # "Weg" counts glued to the name, not as a word of its own.
     ("DE_STREET", "Musterweg 3", True),
     ("DE_STREET", "Langer Weg 12", False),

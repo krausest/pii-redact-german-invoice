@@ -135,7 +135,7 @@ shape is pinned by `PATTERN_CASES` in `tests/test_rules_patterns.py`.
 | `PATIENT_NAME` | a person label with the name on the same line (`Patient: Muster, Andrea`) |
 | `TITLE_NAME` | a title and name (`Dr. med. Max Mustermann`) |
 | `NAME_DATE` | `Surname,Forename DD.MM.YY` — an unlabelled patient table row |
-| `BIRTH_MARK` | a birthdate with its mark on the line (`geb. 13.08.1954`, `*13.08.1954`) |
+| `BIRTH_MARK` | a birthdate with its mark on the line (`geb. 13.08.1954`, `*13.08.1954`); after `geb` a comma OCR read for a dot is accepted (`geb, 13,08.1954`), as it is wherever a line is known to hold a birthdate (birth label, birthdate memory, birth-year note) |
 | `REF_MERGED` | an invoice number with its label on the line (`Rg.-Nr. 4711`, `Rechnung 2026-0815`), with all its digit groups (`Rechn.Nr. 1234 5678 9012 34`) up to a date, amount or word |
 | `DE_STREET`, `DE_PLZ_CITY` | German street + number (suffix glued or as its own word: `Musterstr. 1`, `Musterer Straße 12`), postcode + city |
 | `STREET_ABOVE_CITY` | a street without suffix (`Am Musteranger 3a`): the line ending in a house number directly above a line holding only postcode + city, left-aligned with it |
