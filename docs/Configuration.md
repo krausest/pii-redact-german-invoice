@@ -70,15 +70,18 @@ The layout detector behind the region pass ([details](Redaction.md#layout-region
 
 | Key | Default | Meaning |
 |---|---|---|
-| `max_upload_bytes` | `31457280` (30 MiB) | request body limit (`413` above it) |
+| `max_upload_bytes` | `31457280` (30 MiB) | `/api/redact` file size limit (`413` above it) |
+| `max_assemble_bytes` | `314572800` (300 MiB) | `/api/assemble` body limit (`413` above it) |
 | `input_content_types` | PNG, JPEG, PDF | accepted `Content-Type`s for `/api/redact` |
 | `max_image_pixels` | `40000000` | per-page pixel limit (decompression-bomb guard) |
-| `max_concurrent_per_worker` | `1` | redactions running at once inside one worker |
+| `max_queued_per_worker` | `8` | `/api/redact` and `/api/assemble` requests waiting behind the running one; more get `503` with `Retry-After`. Each waiting request holds its raw body in memory; parsing and decoding happen when its turn comes |
 
 Bind address, worker count and request timeout are not config keys: pass them to
 the server (`-b`, `-w`, `--timeout`; in Docker `WEB_CONCURRENCY` and
 `REQUEST_TIMEOUT`).
 
-`max_concurrent_per_worker` bounds memory: a 30-page PDF holds several hundred MB of
-page images. Parallelism comes from worker processes, not from this value — see
+A worker runs one redaction at a time; that is fixed, not a key. Its models are
+shared by every request it serves and are not known to be thread-safe, so two
+users' documents never run through them at once. Parallelism comes from worker
+processes, which share nothing — see
 [Running › Production](Running.md#production-without-docker).

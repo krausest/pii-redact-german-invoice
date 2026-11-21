@@ -121,11 +121,14 @@ class RedactionConfig(BaseModel):
 class ApiConfig(BaseModel):
     model_config = _STRICT
 
-    # 30 MiB: PDF uploads and JSON page payloads are larger than single images.
+    # 30 MiB: PDF uploads are larger than single images.
     max_upload_bytes: Annotated[int, Field(ge=1)] = 30 * 1024 * 1024
+    # /api/assemble gets every page back as base64 JPEG: a long PDF at a high DPI.
+    max_assemble_bytes: Annotated[int, Field(ge=1)] = 300 * 1024 * 1024
     input_content_types: tuple[str, ...] = ("image/png", "image/jpeg", "application/pdf")
     max_image_pixels: Annotated[int, Field(ge=1)] = 40_000_000
-    max_concurrent_per_worker: Annotated[int, Field(ge=1)] = 1
+    # Requests waiting behind the running one; more get a 503. Each holds its body.
+    max_queued_per_worker: Annotated[int, Field(ge=0)] = 8
 
 
 class Config(BaseModel):

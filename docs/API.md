@@ -8,9 +8,15 @@ Three routes, all on one origin (port 8000 by default):
 | `POST /api/redact` | detect PII in a PNG/JPEG/PDF and black it out |
 | `POST /api/assemble` | turn page images + (edited) boxes into a file — no models involved |
 
-All options are **query parameters**. An unknown parameter, a misspelled one
-(`?unwrap=false`) or an out-of-range value is a `400`, never silently ignored.
-Errors are always `{"detail": "…"}`.
+All options are **query parameters**, except the word lists of `/api/redact`, which
+go in the body. An unknown parameter, a misspelled one (`?unwrap=false`) or an
+out-of-range value is a `400`, never silently ignored. Errors are always
+`{"detail": "…"}`.
+
+Every response carries a strict `Content-Security-Policy` (same origin only, no
+framing), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and
+`Referrer-Policy: no-referrer`; API responses are `Cache-Control: no-store`. There
+is no Swagger/ReDoc page (it would load from a CDN); `GET /openapi.json` remains.
 
 This page is the API contract — change it together with the code.
 
@@ -38,8 +44,21 @@ variables.
 
 ## `POST /api/redact`
 
-Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
-`image/png`, `image/jpeg` or `application/pdf`.
+Body, one of:
+
+- the **raw file bytes** (not multipart) with a matching `Content-Type`:
+  `image/png`, `image/jpeg` or `application/pdf`;
+- `Content-Type: application/json` with the file as base64 and the word lists —
+  the only way to send word lists:
+
+  ```jsonc
+  {
+    "content_type": "application/pdf",   // image/png | image/jpeg | application/pdf
+    "data": "<base64>",                   // decoded size ≤ api.max_upload_bytes
+    "redact_words": ["Andrea Muster"],    // optional
+    "keep_words": ["Musterpraxis"]        // optional
+  }
+  ```
 
 | Parameter | Values | Default | Meaning |
 |---|---|---|---|
@@ -50,21 +69,23 @@ Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
 | `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it. `guard-omni` only if enabled, otherwise `400` |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report — **requires `json-output=true`** |
 | `granularity` | `word` \| `line` | `redaction.granularity` | `word` boxes only the redacted words of a line, `line` the whole line |
-| `redact-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: always redact the line holding this word or phrase |
-| `keep-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: drop every finding whose text contains this word or phrase |
 
-**Word lists.** An entry matches as a whole word or phrase, case-insensitively;
+**Word lists** (`redact_words`, `keep_words` in the JSON body; ≤ 200 entries of
+1–100 chars each). They name people, so they are never query parameters — a URL
+lands in access and proxy logs — and the server never logs them. An entry matches as a whole word or phrase, case-insensitively;
 whitespace inside a phrase matches any whitespace, line breaks included. Entries are
 folded like the OCR text (`René` meets `Rene`), and from four letters on an entry also
-matches its OCR variants (`llja` for `Ilja`, `Amèlie` for `Amelie`).
-`redact-word` wins over every kept line (item table, dates, …) and over
-`keep-word`. `keep-word` vetoes rule, classifier and memory findings; it does not
+matches its OCR variants (`llja` for `Ilja`, `Andréa` for `Andrea`).
+`redact_words` wins over every kept line (item table, dates, …) and over
+`keep_words`. `keep_words` vetoes rule, classifier and memory findings; it does not
 lift whole-region or signature boxes. An entry in both lists is a `400`.
 
 ```bash
-curl -X POST --data-binary @example/GOÄ_Rechnung1.pdf \
-     -H "Content-Type: application/pdf" \
-     "http://localhost:8000/api/redact?redact-word=Andrea%20Muster&keep-word=Musterpraxis" -o redacted.pdf
+jq -n --rawfile data <(base64 < example/GOÄ_Rechnung1.pdf | tr -d '\n') \
+   '{content_type: "application/pdf", data: $data,
+     redact_words: ["Andrea Muster"], keep_words: ["Musterpraxis"]}' |
+curl -X POST --data-binary @- -H "Content-Type: application/json" \
+     http://localhost:8000/api/redact -o redacted.pdf
 ```
 
 ### File response (default)
@@ -134,7 +155,7 @@ A region of a blackened-whole type (`footer`, `image`, …) ends with
 
 A span prints as `LABEL 'text' [source score]`; the source names what to look at
 when a box is wrong — a rule (`rule DE_STREET`), `labeled-value`, `name-memory`,
-`birthdate-memory`, `user-list` (a `redact-word` entry), or the classifier (`presidio`, `guard-omni`). A span a kept
+`birthdate-memory`, `user-list` (a `redact_words` entry), or the classifier (`presidio`, `guard-omni`). A span a kept
 line rejected prints the same way after `rejected `. A `name-memory`
 or `birthdate-memory` span quotes the remembered name or date it matched; each
 enters the memory with a page-level line `name memory 'Muster' <- '<line>'` or
@@ -193,7 +214,8 @@ jq '{pages: [.pages[] | {data: .image.data, boxes: .boxes, notes: .notes}]}' rep
 | Status | When |
 |---|---|
 | `400` | bad or unknown parameter, empty or malformed body, undecodable image or PDF, image over `api.max_image_pixels` (decompression-bomb guard), more pages than `redaction.max_pages`, `debug=true` without `json-output=true`, a classifier not enabled on this server |
-| `413` | body larger than `api.max_upload_bytes` — checked on `Content-Length` and while streaming |
+| `413` | body larger than `api.max_upload_bytes` (`/api/redact`) or `api.max_assemble_bytes` (`/api/assemble`) — checked on `Content-Length` and while streaming |
 | `415` | unsupported content type or image format |
+| `503` | the worker already holds one running and `api.max_queued_per_worker` waiting requests; retry after `Retry-After` seconds |
 
 Limits are set in [`config.toml`](Configuration.md#api).

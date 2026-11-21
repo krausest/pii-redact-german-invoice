@@ -56,6 +56,7 @@ dev = [
 markers = [
     "slow: end-to-end tests that load real ML models (deselect with -m 'not slow')",
     "regression: OCR-replay snapshots; opt in with --regression (loads the classifier)",
+    "stress: concurrent load on a real server; opt in with --stress (minutes)",
 ]
 
 # torch, CPU-only. The default linux/amd64 wheel bundles ~4.6 GB of CUDA

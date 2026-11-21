@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 
 import pymupdf
 import pytest
@@ -378,22 +379,102 @@ def test_health_lists_guard_omni_only_when_enabled():
     assert r.json()["classifiers"] == ["presidio", "guard-omni"]
 
 
+def envelope(data: bytes, content_type: str = "image/png", **lists) -> dict:
+    return {"content_type": content_type, "data": base64.b64encode(data).decode(), **lists}
+
+
 def test_word_lists_reach_the_pipeline(png_bytes):
     client, fake = build_client()
     with client:
         r = client.post(
-            f"{URL}?redact-word=Andrea%20Muster&redact-word=Muster&keep-word=Praxis",
-            content=png_bytes,
-            headers=PNG,
+            URL,
+            json=envelope(png_bytes, redact_words=["Andrea Muster", "Muster"], keep_words=["Praxis"]),
         )
     assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
     assert fake.lists.redact == ("Andrea Muster", "Muster")
     assert fake.lists.keep == ("Praxis",)
+
+
+def test_a_json_body_carries_a_pdf(png_bytes):
+    client, _ = build_client()
+    with client:
+        r = client.post(URL, json=envelope(pdf_bytes(), "application/pdf"))
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+
+
+@pytest.mark.parametrize(
+    "body, status",
+    [
+        ({"content_type": "image/gif", "data": "AAAA"}, 415),
+        ({"content_type": "image/png", "data": "not base64!"}, 400),
+        ({"data": "AAAA"}, 400),
+        ({"content_type": "image/png", "data": "AAAA", "extra": 1}, 400),
+    ],
+)
+def test_a_bad_json_body_is_rejected(body, status):
+    client, _ = build_client()
+    with client:
+        assert client.post(URL, json=body).status_code == status
+
+
+def test_the_decoded_file_is_held_to_the_upload_cap(png_bytes):
+    client, _ = build_client(Config(api=ApiConfig(max_upload_bytes=len(png_bytes) - 1)))
+    with client:
+        assert client.post(URL, json=envelope(png_bytes)).status_code == 413
 
 
 def test_a_word_in_both_lists_is_a_400(png_bytes):
     client, _ = build_client()
     with client:
-        r = client.post(f"{URL}?redact-word=Muster&keep-word=muster", content=png_bytes, headers=PNG)
+        r = client.post(URL, json=envelope(png_bytes, redact_words=["Muster"], keep_words=["muster"]))
     assert r.status_code == 400
     assert "both" in r.json()["detail"]
+
+
+def test_word_lists_in_the_query_are_a_400(png_bytes):
+    client, _ = build_client()
+    with client:
+        r = client.post(f"{URL}?redact-word=Muster", content=png_bytes, headers=PNG)
+    assert r.status_code == 400
+
+
+def test_word_lists_never_reach_the_log(png_bytes, caplog):
+    caplog.set_level(logging.INFO)
+    client, _ = build_client()
+    with client:
+        client.post(URL, json=envelope(png_bytes, redact_words=["Andrea Muster"]))
+        client.post(URL, json=envelope(png_bytes, redact_words=["Andrea"], keep_words=["andrea"]))
+        client.post(f"{URL}?redact-word=Andrea", content=png_bytes, headers=PNG)
+    server = [r.getMessage() for r in caplog.records if not r.name.startswith("httpx")]
+    assert server
+    assert not [m for m in server if "andrea" in m.casefold()]
+
+
+def test_image_comments_do_not_survive(png_bytes):
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), (255, 255, 255)).save(buf, "JPEG", comment=b"Andrea Muster")
+    client, _ = build_client()
+    with client:
+        file = client.post(URL, content=buf.getvalue(), headers=JPEG).content
+        report = client.post(f"{URL}?json-output=true", content=buf.getvalue(), headers=JPEG).json()
+    assert b"Andrea" not in file
+    assert b"Andrea" not in base64.b64decode(report["pages"][0]["image"]["data"])
+
+
+def test_responses_carry_security_headers(png_bytes):
+    client, _ = build_client()
+    with client:
+        for r in (client.get("/health"), client.post(URL, content=png_bytes, headers=PNG)):
+            assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+            assert "connect-src 'self'" in r.headers["content-security-policy"]
+            assert r.headers["x-content-type-options"] == "nosniff"
+            assert r.headers["cache-control"] == "no-store"
+
+
+def test_no_swagger_page_loads_from_a_cdn():
+    client, _ = build_client()
+    with client:
+        assert client.get("/docs").status_code == 404
+        assert client.get("/openapi.json").status_code == 200

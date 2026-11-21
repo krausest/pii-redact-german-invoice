@@ -19,7 +19,7 @@ the server stores nothing.
    PDF or JPEG — per document, or all finished documents as one ZIP.
 
 Two word lists above the toolbar (also on the start page) hold for the whole
-batch: *Always redact* and *Never redact* (`redact-word` / `keep-word`). Editing
+batch: *Always redact* and *Never redact* (`redact_words` / `keep_words` in the request body). Editing
 them re-analyzes nothing; *Refresh* below them re-analyzes every document with the
 current lists, asking first if boxes were edited. On the start page they apply to
 the next upload directly. The lists are not saved across reloads.

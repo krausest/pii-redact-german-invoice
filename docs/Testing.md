@@ -6,13 +6,14 @@ uv sync --group dev                 # pytest + httpx
 uv run pytest -m 'not slow'         # fast suite: no model loads, ~2 s
 uv run pytest -m slow               # end-to-end with the real models (minutes)
 uv run pytest --regression          # + OCR-replay snapshots (loads the classifier only)
+uv run pytest tests/test_stress_concurrency.py --stress -s   # concurrent users on a real server
 uv run pytest tests/test_rules_patterns.py   # one file
 ```
 
 Frontend: `cd frontend && npm run check` (type check; also fails on a missing
 translation). It has no unit tests.
 
-## Three kinds of tests
+## Four kinds of tests
 
 **Fast** (default). [`tests/conftest.py`](../tests/conftest.py) injects
 `FakePipeline`, `StubOCR` and `StubClassifier`, so no model is ever loaded. They
@@ -23,6 +24,14 @@ cover validation, the rules, the pipeline's composition and both endpoints.
 
 **Regression** (`--regression`). Every frozen sample against its snapshot — see
 below. It is a flag, not a marker, so it combines with either `-m` selection.
+
+**Stress** (`--stress`, minutes per case). Starts gunicorn with the real models
+for each OCR engine with 1 and 2 worker processes (`WEB_CONCURRENCY`), then has
+`STRESS_USERS` (8) clients send their own synthetic invoice `STRESS_ROUNDS` (2)
+times at once over HTTP. It fails on an error, a worker restart, a trace quoting
+another user's invoice number, or boxes that differ from the document redacted
+alone. `-s` prints latency, throughput and how many requests each worker took;
+select one with `-k 'onnxruntime and w2'`.
 
 | File | Covers |
 |---|---|
@@ -50,6 +59,7 @@ below. It is a flag, not a marker, so it combines with either `-m` selection.
 | `test_pdf.py` | PDF rasterization and assembly (PyMuPDF only) |
 | `test_integration.py`, `test_redact_integration.py` | *slow* — end-to-end with real models |
 | `test_regression.py` | *regression* — frozen OCR replays |
+| `test_stress_concurrency.py` | *stress* — many users at once against a real server |
 
 ## Regression tests on frozen OCR
 

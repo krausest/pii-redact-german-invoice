@@ -33,7 +33,7 @@ export function isUnsaved(d: Doc): boolean {
 
 /**
  * The batch. Files are analyzed one at a time, in upload order: a worker runs one
- * redaction at once (`api.max_concurrent_per_worker`), so sending more in parallel
+ * redaction at once, so sending more in parallel
  * would only queue them on the server — against its request timeout.
  */
 export class Documents {
