@@ -1,15 +1,21 @@
 # classifier: presidio
+# granularity: word
 === page 0 ===
 line @(134,80 677x37 conf=99.8498022556305): 'Dr. Allgemein, Praxisstraße 1, 12345 Musterhausen'
     -> REDACT (rule TITLE_NAME+rule DE_STREET+rule DE_PLZ_CITY+presidio+name-memory)
+       '[Dr.] [Allgemein,] [Praxisstraße] [1,] [12345] [Musterhausen]'
 line @(136,177 67x33 conf=99.99914169311523): 'Herr'
     -> REDACT (rule SALUT)
+       '[Herr]'
 line @(139,214 227x35 conf=99.96858239173889): 'Max Mustermann'
     -> REDACT (presidio+name-memory)
+       '[Max] [Mustermann]'
 line @(142,253 190x31 conf=99.99810457229614): 'Musterstraße 7'
     -> REDACT (rule DE_STREET+presidio)
+       '[Musterstraße] [7]'
 line @(145,322 263x33 conf=99.79574680328369): '12345 Musterhausen'
     -> REDACT (rule DE_PLZ_CITY+presidio)
+       '[12345] [Musterhausen]'
 line @(1096,414 323x33 conf=99.97772574424744): 'Musterhausen, 24.07.2026'
     -> keep
 line @(147,485 184x31 conf=99.99620318412781): 'RECHNUNG'
@@ -20,8 +26,10 @@ line @(145,597 104x39 conf=99.99668002128601): 'Patient:'
     -> keep
 line @(370,601 514x29 conf=99.94713068008423): 'Max Mustermann, geboren am 15.01.1990'
     -> REDACT (labeled-value+presidio+name-memory+birthdate-memory)
+       '[Max] [Mustermann,] geboren am [15.01.1990]'
 line @(370,637 459x31 conf=99.66363310813904): 'Musterstraße 7 - 12345 Musterhausen'
     -> REDACT (rule DE_STREET+rule DE_PLZ_CITY+presidio)
+       '[Musterstraße] [7] [-] [12345] [Musterhausen]'
 line @(149,705 1104x47 conf=99.44257140159607): 'Nachstehend erhalten Sie eine Aufstellung der erbrachten ärztlichen Leistungen nach GOÄ.'
     -> keep
 line @(334,812 64x33 conf=99.97372627258301): 'GNr'
@@ -57,8 +65,9 @@ line @(154,959 98x35 conf=99.99958276748657): 'Summe'
 line @(151,1081 872x34 conf=99.99923706054688): 'Zahlung bis zum 23.08.2026 unter Angabe der Rechnungsnummer.'
     -> keep
 line @(151,1162 229x34 conf=99.99905824661255): 'Bankverbindung:'
-    -> PARTIAL 15% (overlap)
+    -> keep
 line @(151,1193 1087x37 conf=98.94462823867798): 'Musterbank Musterhausen · IBAN DE00 0000 0000 0000 0000 00 · BIC MUSTDEXXX'
     -> REDACT (rule IMPRINT)
+       'Musterbank Musterhausen · IBAN [DE00] [0000] [0000] [0000] [0000] [00] · BIC MUSTDEXXX'
 line @(146,1364 368x34 conf=99.83245134353638): 'Wir danken für Ihr Vertrauen!'
     -> keep

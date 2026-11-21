@@ -80,6 +80,7 @@ curl -X POST --data-binary @invoice.pdf -H "Content-Type: application/pdf" \
 | [Configuration](docs/Configuration.md) | `config.toml` and environment variables |
 | [CLI](docs/CLI.md) | batch redaction from the command line |
 | [API](docs/API.md) | REST API reference |
+| [Flow](docs/FLOW.md) | one diagram: upload → OCR → detection → boxes → file |
 | [Redaction](docs/Redaction.md) | how detection works, rules, models, code structure |
 | [Frontend](docs/Frontend.md) | the web UI |
 | [Testing](docs/Testing.md) | test suites and regression snapshots |

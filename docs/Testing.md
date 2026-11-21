@@ -57,11 +57,13 @@ OCR is slow and machine-dependent, and it is not what changes when a rule is tun
 So it is run **once** per sample into `<stem>_ocr.txt`; everything after it — rules,
 classifier, name memory, item table — is replayed against that text. A corpus
 replays in seconds, and the snapshot `<stem>_ocr.expected.txt` holds **one verdict
-per OCR line**:
+per OCR line**, replayed in `redaction.granularity` (`word`). Each word is scored on
+its own extent — `[covered]` at ≥ 90 %, `{in the gap}` above 10 %:
 
-- `REDACT` — boxes cover ≥ 90 % of the line
-- `keep` — ≤ 10 %
-- `PARTIAL` — anything in between; matches neither expectation and needs a look
+- `REDACT` — at least one word is covered; the marked text is pinned beneath it,
+  e.g. `'[Max] [Mustermann,] geboren am [15.01.1990]'`
+- `keep` — no covered word and ≤ 10 % of the line covered
+- `PARTIAL` — no covered word but more of the line; matches neither expectation and needs a look
 
 Each verdict names its reason — the sources of the spans that redact the line (`rule SALUT`,
 `labeled-value`, `name-memory`, `birthdate-memory`, `presidio`, …), `overlap` for a neighbour's
@@ -81,10 +83,11 @@ uv run python -m backend.replay check <dir> --ignore-text          # after scrub
   detected from pixels, and the replayed page is blank. Snapshots therefore pin the
   per-line detection only; region boxes are covered by `-m slow` and
   `test_layout.py`.
-- `--safe-update` rewrites lines whose verdict kind (`REDACT`/`keep`/`PARTIAL`) is
-  unchanged and holds the others at their snapshot entry, so the remaining
+- `--safe-update` rewrites lines whose verdict kind (`REDACT`/`keep`/`PARTIAL`) and
+  marked words are unchanged and holds the others at their snapshot entry, so the remaining
   failures are exactly the verdict changes (exit 1 if there are any).
 - Re-run `dump` after a change that alters what OCR reads (e.g. `det_box_thresh`).
+  Dumps hold raw OCR text; replay folds diacritics on read, like the pipeline does.
 - Samples: `tests/regression/` (synthetic, committed) and `tests/Arztrechnungen/`
   (real layouts, scrubbed, git-ignored).
 - **A dump and its snapshot contain the document's full text — that is PII.** To

@@ -17,12 +17,14 @@ in for the image. The result is a ``<stem>_ocr.expected.txt`` snapshot holding o
 asserted verdict per OCR line, so a whole document is pinned rather than the few
 PII snippets someone thought to annotate, and the suite runs in seconds.
 
-**Verdicts are effective, not per-line.** ``compute_boxes`` decides per line, but
-a line it kept can still be blackened by a neighbour's padded box. What
-matters is whether the pixels end up covered, so each line is scored against
-*every* box: ``>= COVERED`` is ``REDACT``, ``<= UNTOUCHED`` is ``keep``, and the
-deliberate gap between them is ``PARTIAL``, which satisfies neither expectation
-and so forces a human to look at a line some neighbour's padding merely nicked.
+**Verdicts are effective, and scored word by word.** What matters is whether
+the pixels end up covered, so each word of a line is scored against *every*
+box: ``>= COVERED`` marks it ``[covered]``, the gap up to ``UNTOUCHED`` marks it
+``{in the gap}``. A line with a covered word is ``REDACT`` and its marked text
+is pinned beneath the verdict; without one, the whole line's coverage decides
+between ``keep`` and the deliberate gap ``PARTIAL``, which satisfies neither
+expectation and so forces a human to look at a line some neighbour's padding
+merely nicked. Snapshots replay in ``redaction.granularity`` (``word``).
 The verdict carries *why*, which is how a snapshot diff says whether a rule
 stopped firing or a neighbouring box moved off the line it used to cover.
 Asserting ``keep`` is the point of the exercise: without it the suite could not
@@ -78,10 +80,11 @@ import numpy as np
 from PIL import Image
 
 from backend.classifiers.base import Classifier
-from backend.config import Config
+from backend.config import Config, Granularity
 from backend.harvest import Memory
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
+from backend.textnorm import fold
 from backend.trace import Trace, format_line
 from backend.verdict import PageVerdict
 
@@ -119,6 +122,9 @@ class Verdict:
     # `DIAG`, `PVS`, `FACH`).
     reason: str | None
     coverage: float
+    # The line's text with each covered word in [brackets] and each word in the
+    # gap in {braces}; None on a kept line.
+    words: str | None = None
 
     def render(self) -> str:
         if self.kind == "keep":
@@ -126,8 +132,10 @@ class Verdict:
         if self.kind == "PARTIAL":
             # The percentage is commentary (it is not compared) but it is the
             # first thing you want to see when a line lands in the gap.
-            return f"    -> PARTIAL {round(self.coverage * 100)}% ({self.reason})"
-        return f"    -> REDACT ({self.reason})"
+            head = f"    -> PARTIAL {round(self.coverage * 100)}% ({self.reason})"
+        else:
+            head = f"    -> REDACT ({self.reason})"
+        return head + (f"\n       {self.words!r}" if self.words is not None else "")
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,7 @@ _LINE_RE = re.compile(r"^line @\((-?\d+),(-?\d+) (\d+)x(\d+) conf=(\S+)\): (.+)$
 _VERDICT_RE = re.compile(r"^\s+-> (REDACT|keep|PARTIAL)\b(.*)$")
 _REASON_RE = re.compile(r"\(([^)]*)\)\s*$")
 _PERCENT_RE = re.compile(r"^\s*(\d+)%")
+_WORDS_RE = re.compile(r"^\s+(['\"].*)$")
 
 
 def _parse_line(text: str) -> Line | None:
@@ -153,7 +162,7 @@ def _parse_line(text: str) -> Line | None:
     if not isinstance(body, str):
         raise ValueError(f"line text is not a string: {text!r}")
     return Line(
-        text=body,
+        text=fold(body),  # dumps hold raw OCR; replay sees what the pipeline sees
         left=int(m.group(1)),
         top=int(m.group(2)),
         width=int(m.group(3)),
@@ -219,6 +228,10 @@ def parse_expected(text: str) -> list[Outcome]:
             continue
         if raw.startswith("line @"):
             verdicts.append(Verdict(line=raw, kind="keep", reason=None, coverage=0.0))
+            continue
+        words = _WORDS_RE.match(raw)
+        if words is not None and verdicts and verdicts[-1].kind != "keep":
+            verdicts[-1] = replace(verdicts[-1], words=ast.literal_eval(words.group(1)))
             continue
         verdict = _VERDICT_RE.match(raw)
         if verdict is not None:
@@ -287,8 +300,36 @@ def build_replay_pipeline(config: Config, classifier: Classifier) -> RedactionPi
     )
 
 
+_TOKEN = re.compile(r"\S+")
+
+
+def marked_words(line: Line, boxes: Sequence[Box]) -> tuple[str, int, int]:
+    """``line``'s text with every covered word in [brackets] and every word in
+    the gap in {braces}, and how many of each. A word is scored on its own
+    extent, by character share: the dumps hold no word geometry."""
+    out: list[str] = []
+    pos = covered = gap = 0
+    for m in _TOKEN.finditer(line.text):
+        x0, x1 = line.x_range(m.start(), m.end())
+        word = Line(m.group(), x0, line.top, max(x1 - x0, 1), line.height)
+        cov = coverage(word, boxes)
+        out.append(line.text[pos : m.start()])
+        if cov >= COVERED:
+            out.append(f"[{m.group()}]")
+            covered += 1
+        elif cov > UNTOUCHED:
+            out.append(f"{{{m.group()}}}")
+            gap += 1
+        else:
+            out.append(m.group())
+        pos = m.end()
+    out.append(line.text[pos:])
+    return "".join(out), covered, gap
+
+
 def _outcome(page: Page, verdict: PageVerdict) -> Outcome:
-    """Each line's effective verdict: how much ink its pixels got, and from whom.
+    """Each line's effective verdict: ``REDACT`` when at least one word is
+    covered, else ``PARTIAL`` when the line sits in the gap, else ``keep``.
 
     The reason is the source of every span that redacts the line, joined with
     "+", or ``overlap`` when only a neighbour's padded box reached it; on a kept
@@ -301,16 +342,21 @@ def _outcome(page: Page, verdict: PageVerdict) -> Outcome:
         header = format_line(line)
         sources = list(dict.fromkeys(s.source for s in verdict.found.get(line, [])))
         cov = coverage(line, boxes)
-        if cov <= UNTOUCHED:
+        words, covered, _ = marked_words(line, boxes)
+        # Without a covered word, the whole line decides, as it always did: a
+        # neighbour's padding nicking one short word is not worth a look.
+        if not covered and cov <= UNTOUCHED:
             why = None if line in verdict.found else verdict.keep.get(line)
             verdicts.append(Verdict(header, "keep", why, cov))
             continue
         reason = "+".join(sources) or "overlap"
-        verdicts.append(Verdict(header, "REDACT" if cov >= COVERED else "PARTIAL", reason, cov))
+        verdicts.append(Verdict(header, "REDACT" if covered else "PARTIAL", reason, cov, words))
     return Outcome(index=page.index, verdicts=tuple(verdicts))
 
 
-def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
+def replay(
+    pipeline: RedactionPipeline, pages: list[Page], granularity: Granularity = "line"
+) -> list[Outcome]:
     """Run the detection passes over frozen pages, in document order.
 
     One :class:`~backend.harvest.Memory` spans the pages exactly as ``run_redaction`` does it,
@@ -328,14 +374,15 @@ def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
             lines=list(page.lines),
             memory=memory,
             trace=trace,
+            granularity=granularity,
         )
         outcomes.append(_outcome(page, verdict))
     return outcomes
 
 
 # -- rendering and comparing ----------------------------------------------- #
-def render(outcomes: list[Outcome], classifier: str) -> str:
-    out = [f"# classifier: {classifier}"]
+def render(outcomes: list[Outcome], classifier: str, granularity: Granularity = "line") -> str:
+    out = [f"# classifier: {classifier}", f"# granularity: {granularity}"]
     for outcome in outcomes:
         out.append(f"=== page {outcome.index} ===")
         for verdict in outcome.verdicts:
@@ -350,7 +397,8 @@ def _excerpt(header: str, width: int = 48) -> str:
 
 
 def _verdict_text(verdict: Verdict) -> str:
-    return verdict.kind + (f" ({verdict.reason})" if verdict.reason else "")
+    text = verdict.kind + (f" ({verdict.reason})" if verdict.reason else "")
+    return text + (f" {verdict.words!r}" if verdict.words is not None else "")
 
 
 def _geometry(header: str) -> str:
@@ -395,7 +443,7 @@ def compare(
                     f"output, regenerate it\n    dump:     {got.line}\n"
                     f"    snapshot: {wanted.line}"
                 )
-            elif (got.kind, got.reason) != (wanted.kind, wanted.reason):
+            elif (got.kind, got.reason, got.words) != (wanted.kind, wanted.reason, wanted.words):
                 failures.append(
                     f"{page} line {i} {_excerpt(got.line)}: expected "
                     f"{_verdict_text(wanted)}, got {_verdict_text(got)}"
@@ -428,7 +476,7 @@ def safe_update(
         for i, (got, wanted) in enumerate(zip(actual.verdicts, want.verdicts)):
             if not _same_line(got, wanted, ignore_text):
                 return None
-            if got.kind == wanted.kind:
+            if (got.kind, got.words) == (wanted.kind, wanted.words):
                 reasons += got.reason != wanted.reason
                 verdicts.append(got)
                 continue
@@ -565,10 +613,11 @@ def _check_one(
     update: bool,
     ignore_text: bool,
     safe: bool,
+    granularity: Granularity = "line",
 ) -> int:
     """Replay one dump and print its result. Returns how many differences it has."""
-    outcomes = replay(pipeline, parse_ocr(ocr.read_text(encoding="utf-8")))
-    text = render(outcomes, classifier_name)
+    outcomes = replay(pipeline, parse_ocr(ocr.read_text(encoding="utf-8")), granularity)
+    text = render(outcomes, classifier_name, granularity)
     out = expected_path(ocr)
     if update:
         out.write_text(text, encoding="utf-8")
@@ -582,7 +631,7 @@ def _check_one(
     if safe:
         result = safe_update(outcomes, expected, ignore_text)
         if result is not None:
-            merged = render(result.outcomes, classifier_name)
+            merged = render(result.outcomes, classifier_name, granularity)
             if merged != snapshot:
                 out.write_text(merged, encoding="utf-8")
             note = f" ({result.reasons} reason(s) updated)" if result.reasons else ""
@@ -629,7 +678,8 @@ def _check(
     failed: dict[str, int] = {}
     for ocr in files:
         differences = _check_one(
-            ocr, pipeline, config.engine.classifier, update, ignore_text, safe
+            ocr, pipeline, config.engine.classifier, update, ignore_text, safe,
+            config.redaction.granularity,
         )
         if differences:
             failed[ocr.name] = differences

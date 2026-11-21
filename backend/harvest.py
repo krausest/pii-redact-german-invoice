@@ -20,6 +20,7 @@ from typing import NamedTuple
 
 from backend.document import Document
 from backend.models import Line
+from backend.ocr_variants import VariantIndex
 from backend.pii import BIRTHDATE_MEMORY, LABELED_VALUE, NAME_MEMORY, PiiLabel, Span
 from backend.rules.birth_year import DateKey, birth_date_in, date_key
 from backend.rules.patterns import (
@@ -190,14 +191,32 @@ def name_mentions(text: str, names: set[str]) -> list[re.Match[str]]:
     ]
 
 
-def _name_spans(doc: Document, names: set[str]) -> list[Span]:
-    """A span over every mention of a remembered name."""
+# A first glyph OCR prints for the capital "I".
+_LOOKS_CAPITAL = frozenset("l1|!")
+
+
+def _variant_ok(word: str) -> bool:
+    """A page word that may be an OCR variant of a name: shaped like one."""
+    return (
+        len(word) >= _MIN_NAME_LENGTH
+        and (word[0].isupper() or word[0] in _LOOKS_CAPITAL)
+        and _is_name(word)
+    )
+
+
+def _name_spans(doc: Document, names: set[str], trace: Trace | None = None) -> list[Span]:
+    """A span over every mention of a remembered name, and of its OCR variants."""
     spans: list[Span] = []
+    variants = VariantIndex(sorted(names))
     for line in doc.lines:
         if not line.text.strip():
             continue
         for m in name_mentions(line.text, names):
             spans.append(doc.part_of(line, m.start(), m.end(), PiiLabel.PERSON, NAME_MEMORY))
+        for start, end, name in variants.find(line.text, _variant_ok):
+            if trace is not None:
+                trace.add("    name variant %r ~ %r", line.text[start:end], name)
+            spans.append(doc.part_of(line, start, end, PiiLabel.PERSON, NAME_MEMORY))
     return spans
 
 
@@ -224,10 +243,10 @@ class Memory:
                 trace.add("    birthdate memory %r <- %r", witness.printed, witness.line_text)
                 self.birthdates.add(key)
 
-    def recall(self, doc: Document) -> list[Span]:
-        """Whole-line spans for every line of ``doc`` mentioning a remembered name
-        or birthdate."""
-        return _name_spans(doc, self.names) + _birthdate_spans(doc, self.birthdates)
+    def recall(self, doc: Document, trace: Trace | None = None) -> list[Span]:
+        """Spans over every remembered name, its OCR variants, and every
+        remembered birthdate in ``doc``."""
+        return _name_spans(doc, self.names, trace) + _birthdate_spans(doc, self.birthdates)
 
 
 def _is_birth_evidence(line: Line, spans: Sequence[Span]) -> bool:

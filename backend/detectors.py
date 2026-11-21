@@ -60,8 +60,8 @@ class MemoryDetector:
     def __init__(self, memory: Memory) -> None:
         self._memory = memory
 
-    def spans(self, doc: Document, trace: Trace) -> list[Span]:  # noqa: ARG002
-        return self._memory.recall(doc)
+    def spans(self, doc: Document, trace: Trace) -> list[Span]:
+        return self._memory.recall(doc, trace)
 
     def admits(self, span: Span, keep: str | None) -> bool:  # noqa: ARG002
         return keep not in (KeepReason.FACH, KeepReason.PVS)

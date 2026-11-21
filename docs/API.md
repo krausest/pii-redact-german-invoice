@@ -54,7 +54,9 @@ Body: the **raw file bytes** (not multipart) with a matching `Content-Type`:
 | `keep-word` | text, 1–100 chars | — | **repeatable**, ≤ 200: drop every finding whose text contains this word or phrase |
 
 **Word lists.** An entry matches as a whole word or phrase, case-insensitively;
-whitespace inside a phrase matches any whitespace, line breaks included.
+whitespace inside a phrase matches any whitespace, line breaks included. Entries are
+folded like the OCR text (`René` meets `Rene`), and from four letters on an entry also
+matches its OCR variants (`llja` for `Ilja`, `Amèlie` for `Amelie`).
 `redact-word` wins over every kept line (item table, dates, …) and over
 `keep-word`. `keep-word` vetoes rule, classifier and memory findings; it does not
 lift whole-region or signature boxes. An entry in both lists is a `400`.

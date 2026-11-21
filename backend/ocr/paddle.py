@@ -29,6 +29,7 @@ import numpy as np
 from PIL import Image
 
 from backend.models import Line, WordBox
+from backend.textnorm import fold
 
 logging.getLogger("paddlex").setLevel(logging.WARNING)
 
@@ -77,7 +78,8 @@ class PaddleOCRBackend:
         piece_boxes = result.get("text_word_boxes") or [[] for _ in texts]
 
         out: list[Line] = []
-        for text, score, box, words, wboxes in zip(texts, scores, boxes, pieces, piece_boxes):
+        for raw, score, box, words, wboxes in zip(texts, scores, boxes, pieces, piece_boxes):
+            text = fold(raw)
             x1, y1, x2, y2 = (int(v) for v in np.asarray(box).tolist())
             out.append(
                 Line(
@@ -87,7 +89,7 @@ class PaddleOCRBackend:
                     width=x2 - x1,
                     height=y2 - y1,
                     conf=float(score) * 100.0,  # Presidio uses a 0-100 scale
-                    words=_word_boxes(text, words, wboxes),
+                    words=_word_boxes(text, [fold(w) for w in words], wboxes),
                 )
             )
         return out

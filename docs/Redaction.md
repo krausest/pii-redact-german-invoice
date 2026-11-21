@@ -1,7 +1,7 @@
 # How redaction works
 
 This page follows one document from upload to redacted file and names the Python
-classes and functions involved.
+classes and functions involved. The detection stages at a glance: [Flow](FLOW.md).
 
 ## Overview
 
@@ -50,8 +50,12 @@ that gets OCR'd is the page that gets redacted, so the boxes match by constructi
 
 ### 3. OCR and layout
 
-- `read_lines` — PaddleOCR returns one `Line` (text, box, confidence) per text line
-  ([`ocr/paddle.py`](../backend/ocr/paddle.py)).
+- `read_lines` — PaddleOCR returns one `Line` (text, box, confidence, word boxes)
+  per text line ([`ocr/paddle.py`](../backend/ocr/paddle.py)). Its text is **folded**
+  right away ([`textnorm.py`](../backend/textnorm.py)): a Latin letter with a diacritic
+  becomes its base letter, upper and lower case (`Símone` → `Simone`, `É` → `E`);
+  `äöüÄÖÜß` stay. One character for one, so offsets keep pointing at the same glyphs.
+  Every later stage — rules, classifier, memory, word lists, trace — sees this text.
 - `regions` — PP-DocLayout returns typed `LayoutRegion`s: `text`, `table`,
   `header`, `footer`, `image`, `seal`, … ([`layout.py`](../backend/layout.py)).
 
@@ -91,7 +95,11 @@ The heart of the pipeline, per page:
    date` row) also teaches its *date*, and `Memory.recall` marks every other
    line holding that date in any spelling (`01.02.1980`, `1.2.1980`, `01.02.80`).
    A line with several dates teaches none, and a classifier's birthdate never
-   feeds it. The memory (`harvest.Memory`) is shared across the pages of a
+   feeds it. A remembered name is also recalled in its **OCR variants**
+   ([`ocr_variants.py`](../backend/ocr_variants.py)): a page word whose look-alike
+   skeleton equals the name's (`llja` for `Ilja`, `Kem` for `Kern`), or, from six
+   letters on, one glyph-shape confusion away (`Loneburg` for `Lüneburg`). The word
+   must itself look like a name; the trace logs `name variant 'llja' ~ 'Ilja'`. The memory (`harvest.Memory`) is shared across the pages of a
    document, so a name or birthdate labelled on page 1 is caught bare on page 2
    (forward only).
 5. **Line boxes.** Every line that carries at least one span gets a box over the

@@ -1,9 +1,11 @@
+from backend.models import Box, Line
 from backend.replay import (
     Outcome,
     Verdict,
     _summary,
     compare,
     main,
+    marked_words,
     parse_expected,
     render,
     safe_update,
@@ -70,3 +72,23 @@ def test_summary_names_each_failed_document():
 def test_check_fails_when_there_is_nothing_to_replay(tmp_path, capsys):
     assert main(["check", str(tmp_path)]) == 1
     assert capsys.readouterr().out.startswith("FAILED: no _ocr.txt dumps found")
+
+
+def test_the_marked_words_survive_a_render_and_a_parse():
+    verdict = Verdict(NAME, "REDACT", "presidio", 0.6, "[Andrea] Muster")
+    snapshot = parse_expected(render(_outcome(verdict), "presidio", "word"))
+    assert snapshot[0].verdicts[0].words == "[Andrea] Muster"
+    assert compare(_outcome(verdict), snapshot) == []
+
+
+def test_a_word_leaving_its_box_is_a_difference():
+    snapshot = _outcome(Verdict(NAME, "REDACT", "presidio", 1.0, "[Andrea] [Muster]"))
+    replayed = _outcome(Verdict(NAME, "REDACT", "presidio", 0.6, "[Andrea] Muster"))
+    [failure] = compare(replayed, snapshot)
+    assert "'[Andrea] Muster'" in failure
+
+
+def test_words_are_scored_on_their_own_extent():
+    line = Line("Andrea Muster am 01.02.2000", left=0, top=0, width=270, height=10)
+    boxes = [Box(0, 0, 135, 10), Box(170, 0, 200, 10)]  # all of the name, part of the date
+    assert marked_words(line, boxes) == ("[Andrea] [Muster] am {01.02.2000}", 2, 1)
