@@ -36,7 +36,7 @@ from PIL import Image, ImageOps
 
 from backend.config import load_config
 from backend.factory import build_pipeline
-from backend.options import RedactOptions
+from backend.options import RedactOptions, WordListsIn
 from backend.service import Redaction, produce_output, run_redaction
 
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf"}
@@ -199,6 +199,9 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config()
     try:
         opts = RedactOptions.from_query(query_from_args(args), config)
+        lists = WordListsIn.from_json(
+            {"redact_words": args.redact_word or [], "keep_words": args.keep_word or []}
+        ).lists()
     except ValueError as e:
         # The same one-line detail the API reports as a 400 — a bad --pdf-dpi is a
         # usage error, so nothing is processed.
@@ -212,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if f.suffix.lower() == ".pdf":
                 redaction = run_redaction(
-                    pipeline, f.read_bytes(), opts, config, layout_debug=args.debug_layout
+                    pipeline, f.read_bytes(), opts, config, layout_debug=args.debug_layout, lists=lists
                 )
             else:
                 with Image.open(f) as src:
@@ -227,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
                         opts,
                         config,
                         layout_debug=args.debug_layout,
+                        lists=lists,
                     )
             # The same bytes POST /api/redact would return, so the extension is the
             # one that belongs to the media type service chose — never re-derived.

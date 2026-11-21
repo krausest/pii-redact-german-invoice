@@ -52,9 +52,14 @@ def rasterize_pdf(
 
 
 def encode_jpeg(image: Image.Image, quality: int = 90) -> bytes:
-    """Encode a PIL image as JPEG bytes (visually lossless at the default quality)."""
+    """Encode a PIL image as JPEG bytes (visually lossless at the default quality).
+
+    Pixels only: Pillow would carry ``info["comment"]`` of the source over, and
+    a comment can name the patient."""
+    clean = image.convert("RGB")  # a copy, so clearing it leaves the caller's info
+    clean.info = {}
     buf = io.BytesIO()
-    image.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    clean.save(buf, format="JPEG", quality=quality, optimize=True)
     return buf.getvalue()
 
 

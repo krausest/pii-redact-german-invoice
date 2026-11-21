@@ -36,6 +36,7 @@ from backend.options import AssembleOptions, RedactOptions
 from backend.pdf import assemble_pdf, encode_jpeg, rasterize_pdf
 from backend.pipeline import RedactionPipeline
 from backend.trace import Trace
+from backend.wordlists import EMPTY, WordLists
 
 # The PIL formats of the images we accept on input. Output images are always JPEG.
 IMAGE_FORMATS = frozenset({"PNG", "JPEG"})
@@ -114,6 +115,7 @@ def run_redaction(
     opts: RedactOptions,
     config: Config,
     layout_debug: bool = False,
+    lists: WordLists = EMPTY,
 ) -> Redaction:
     """Redact ``source`` — a PDF's bytes, or a single decoded image.
 
@@ -166,7 +168,7 @@ def run_redaction(
             memory=memory,
             trace=trace,
             classifier=opts.classifier,
-            lists=opts.lists,
+            lists=lists,
             granularity=opts.granularity,
         )
         # apply_boxes fills in place, so redact a copy — `image` is the clean page

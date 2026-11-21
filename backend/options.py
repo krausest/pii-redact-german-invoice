@@ -123,14 +123,7 @@ class RedactOptions(_QueryModel):
     # Not config-backed: nothing sensible would turn the trace on for every
     # request, so this one really is a class default, like `json_output`.
     debug: bool = False
-    # The user's word lists, repeatable: `?redact-word=a&redact-word=b`.
-    redact_word: WordList = []
-    keep_word: WordList = []
     granularity: Granularity
-
-    @property
-    def lists(self) -> WordLists:
-        return WordLists(tuple(self.redact_word), tuple(self.keep_word))
 
     @classmethod
     def from_query(cls, raw: Mapping[str, Any], config: Config) -> RedactOptions:
@@ -154,9 +147,6 @@ class RedactOptions(_QueryModel):
             raise ValueError("debug=true requires json-output=true")
         if opts.classifier not in config.engine.classifiers:
             raise ValueError(f"classifier {opts.classifier!r} is not enabled on this server")
-        both = {w.casefold() for w in opts.redact_word} & {w.casefold() for w in opts.keep_word}
-        if both:
-            raise ValueError(f"in both redact-word and keep-word: {sorted(both)}")
         return opts
 
 
@@ -199,3 +189,35 @@ class AssembleBody(BaseModel):
             return cls.model_validate(data)
         except ValidationError as e:
             raise ValueError(_detail(e)) from e
+
+
+class WordListsIn(BaseModel):
+    """The user's word lists. They name people, so they travel in a request body,
+    never in the URL, where access logs and proxies would keep them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    redact_words: WordList = []
+    keep_words: WordList = []
+
+    def lists(self) -> WordLists:
+        return WordLists(tuple(self.redact_words), tuple(self.keep_words))
+
+    @classmethod
+    def from_json(cls, data: Any) -> Self:
+        try:
+            body = cls.model_validate(data)
+        except ValidationError as e:
+            raise ValueError(_detail(e)) from e
+        both = {w.casefold() for w in body.redact_words} & {w.casefold() for w in body.keep_words}
+        if both:
+            raise ValueError(f"in both redact_words and keep_words: {sorted(both)}")
+        return body
+
+
+class RedactBody(WordListsIn):
+    """The ``POST /api/redact`` JSON body: the file as base64 beside the word
+    lists. ``content_type`` is what the bytes are, as for a raw upload."""
+
+    content_type: str
+    data: Base64Bytes

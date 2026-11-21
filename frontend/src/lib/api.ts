@@ -18,6 +18,19 @@ export class ApiError extends Error {
   }
 }
 
+/** How often a request the server turned away as busy (503) is sent again. */
+const BUSY_RETRIES = 60
+
+/** `fetch`, sending again after `Retry-After` while the server's queue is full. */
+async function fetchQueued(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, init)
+    if (res.status !== 503 || attempt >= BUSY_RETRIES) return res
+    const seconds = Number(res.headers.get('Retry-After')) || 5
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
+  }
+}
+
 async function toError(res: Response): Promise<ApiError> {
   let detail = `Request failed (${res.status})`
   try {
@@ -104,7 +117,21 @@ export async function fetchDebugLog(file: File, opts: AnalyzeOptions): Promise<s
   return data.debug ?? ''
 }
 
-/** `POST /api/redact` asking for the JSON report; the options are always explicit. */
+/** The file's bytes as base64, without the `data:` prefix. */
+function toBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(',') + 1))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * `POST /api/redact` asking for the JSON report; the options are always explicit.
+ * The file goes in a JSON body beside the word lists: they name people, and a
+ * URL ends up in logs.
+ */
 async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Promise<Response> {
   const params = new URLSearchParams({
     'json-output': 'true',
@@ -114,12 +141,16 @@ async function postDocument(file: File, opts: AnalyzeOptions, debug = false): Pr
   })
   if (opts.classifier) params.set('classifier', opts.classifier)
   if (debug) params.set('debug', 'true')
-  for (const w of opts.redactWords) params.append('redact-word', w)
-  for (const w of opts.keepWords) params.append('keep-word', w)
-  const res = await fetch(`${REDACT_URL}?${params}`, {
+  const body = JSON.stringify({
+    content_type: file.type,
+    data: await toBase64(file),
+    redact_words: opts.redactWords,
+    keep_words: opts.keepWords,
+  })
+  const res = await fetchQueued(`${REDACT_URL}?${params}`, {
     method: 'POST',
-    headers: { 'Content-Type': file.type },
-    body: file,
+    headers: { 'Content-Type': 'application/json' },
+    body,
   })
   if (!res.ok) throw await toError(res)
   return res
@@ -141,17 +172,18 @@ export async function render(
 ): Promise<Blob> {
   const params = new URLSearchParams({ format, dpi: String(dpi) })
   if (quality != null) params.set('jpeg-quality', String(quality))
-  const res = await fetch(`${ASSEMBLE_URL}?${params}`, {
+  const body = JSON.stringify({
+    pages: pages.map((p) => ({
+      content_type: 'image/jpeg',
+      data: p.image,
+      boxes: p.boxes,
+      notes: p.notes,
+    })),
+  })
+  const res = await fetchQueued(`${ASSEMBLE_URL}?${params}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      pages: pages.map((p) => ({
-        content_type: 'image/jpeg',
-        data: p.image,
-        boxes: p.boxes,
-        notes: p.notes,
-      })),
-    }),
+    body,
   })
   if (!res.ok) throw await toError(res)
   return await res.blob()

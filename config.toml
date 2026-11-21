@@ -36,7 +36,8 @@ threshold = 0.35
 layout_nms = true          # prune the near-duplicate boxes a low threshold lets through
 
 [api]
-max_upload_bytes = 31457280          # 30 MiB — covers PDF uploads + /api/assemble payloads
+max_upload_bytes = 31457280          # 30 MiB — /api/redact uploads
+max_assemble_bytes = 314572800       # 300 MiB — /api/assemble payloads (all pages, base64)
 input_content_types = ["image/png", "image/jpeg", "application/pdf"]
 max_image_pixels = 40000000          # decompression-bomb guard (~40 MP), per page
-max_concurrent_per_worker = 1        # in-flight redactions per worker
+max_queued_per_worker = 8            # waiting behind the running redaction; more get 503

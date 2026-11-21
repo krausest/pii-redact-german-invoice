@@ -100,6 +100,13 @@ class FakePipeline:
         return Image.new("RGB", image.size, (0, 0, 0))
 
 
+# Opt-in suites: marker -> the flag that runs it.
+_OPT_IN = {
+    "regression": "--regression",
+    "stress": "--stress",
+}
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--regression",
@@ -107,21 +114,28 @@ def pytest_addoption(parser):
         default=False,
         help="also run the OCR-replay regression suite (loads the classifier)",
     )
+    parser.addoption(
+        "--stress",
+        action="store_true",
+        default=False,
+        help="run the concurrency stress test against a real server (minutes)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Make ``regression`` opt-in via a flag rather than a marker expression.
+    """Make ``regression`` and ``stress`` opt-in via a flag rather than a marker expression.
 
     A marker alone would not do it: the documented selectors are ``-m 'not slow'``
     and ``-m slow``, and a command-line ``-m`` replaces anything in ``addopts``,
     so one of the two would always drag the suite in. A flag is orthogonal to
     ``-m`` and holds whatever the caller selects."""
-    if config.getoption("--regression"):
-        return
-    skip = pytest.mark.skip(reason="needs --regression")
-    for item in items:
-        if "regression" in item.keywords:
-            item.add_marker(skip)
+    for marker, flag in _OPT_IN.items():
+        if config.getoption(flag):
+            continue
+        skip = pytest.mark.skip(reason=f"needs {flag}")
+        for item in items:
+            if marker in item.keywords:
+                item.add_marker(skip)
 
 
 @pytest.fixture

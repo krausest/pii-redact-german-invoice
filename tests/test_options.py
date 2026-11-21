@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.config import Config, RedactionConfig
-from backend.options import AssembleOptions, RedactOptions
+from backend.options import AssembleOptions, RedactOptions, WordListsIn
 
 
 def redact(raw: dict, config: Config | None = None) -> RedactOptions:
@@ -79,30 +79,32 @@ def test_assemble_rejects(raw):
         assemble(raw)
 
 
-def test_word_lists_collect_every_repeat():
-    raw = RedactOptions.raw_query(
-        [("redact-word", "Andrea Muster"), ("unwarp", "true"), ("redact-word", " Muster "), ("keep-word", "Praxis")]
-    )
-    opts = redact(raw)
-    assert opts.lists.redact == ("Andrea Muster", "Muster")
-    assert opts.lists.keep == ("Praxis",)
-    assert opts.unwarp is True
-    assert redact({}).lists.redact == ()
+def test_word_lists_come_from_a_body():
+    body = WordListsIn.from_json({"redact_words": ["Andrea Muster", " Muster "], "keep_words": ["Praxis"]})
+    assert body.lists().redact == ("Andrea Muster", "Muster")
+    assert body.lists().keep == ("Praxis",)
+    assert WordListsIn.from_json({}).lists().redact == ()
 
 
 @pytest.mark.parametrize(
-    "raw",
+    "data",
     [
-        {"redact-word": ["  "]},
-        {"keep-word": ["x" * 101]},
-        {"redact-word": ["w"] * 201},
-        {"redact-word": ["Muster"], "keep-word": ["MUSTER"]},
-        {"redact_word": ["Muster"]},
+        {"redact_words": ["  "]},
+        {"keep_words": ["x" * 101]},
+        {"redact_words": ["w"] * 201},
+        {"redact_words": ["Muster"], "keep_words": ["MUSTER"]},
+        {"redact-word": ["Muster"]},
     ],
 )
-def test_word_lists_reject(raw):
+def test_word_lists_reject(data):
     with pytest.raises(ValueError):
-        redact(raw)
+        WordListsIn.from_json(data)
+
+
+@pytest.mark.parametrize("name", ["redact-word", "keep-word"])
+def test_word_lists_are_not_query_parameters(name):
+    with pytest.raises(ValueError, match="unknown parameter"):
+        redact({name: "Muster"})
 
 
 def test_granularity_comes_from_config_and_the_query_wins():

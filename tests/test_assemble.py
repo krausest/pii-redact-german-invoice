@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from backend.api import create_app
-from backend.config import Config
+from backend.config import ApiConfig, Config
 from backend.pipeline import RedactionPipeline
 from tests.conftest import StubClassifier, StubOCR
 
@@ -168,3 +168,33 @@ def test_rejects_invalid_json():
     with client:
         r = client.post(URL, content=b"{not json", headers={"content-type": "application/json"})
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "jpeg"])
+def test_image_comments_do_not_survive(fmt):
+    from PIL import PngImagePlugin
+
+    text = PngImagePlugin.PngInfo()
+    text.add_text("comment", "Andrea Muster")
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), (255, 255, 255)).save(buf, "PNG", pnginfo=text)
+    payload = {"pages": [{"data": base64.b64encode(buf.getvalue()).decode("ascii")}]}
+    with build() as client:
+        out = client.post(f"{URL}?format={fmt}", json=payload).content
+    if fmt == "pdf":
+        doc = pymupdf.open(stream=out, filetype="pdf")
+        out = doc.extract_image(doc[0].get_images()[0][0])["image"]
+    assert b"Andrea" not in out
+
+
+def test_assemble_has_its_own_size_cap():
+    """Every page comes back as base64, so its cap is not the upload cap."""
+    payload = {"pages": [{"data": b64_png()}]}
+    app = create_app(Config(api=ApiConfig(max_upload_bytes=10, max_assemble_bytes=50)))
+    app.state.pipeline = RedactionPipeline(ocr=StubOCR([]), classifier=StubClassifier([]))
+    with TestClient(app) as client:
+        assert client.post(URL, json=payload).status_code == 413
+    app = create_app(Config(api=ApiConfig(max_upload_bytes=10)))
+    app.state.pipeline = RedactionPipeline(ocr=StubOCR([]), classifier=StubClassifier([]))
+    with TestClient(app) as client:
+        assert client.post(URL, json=payload).status_code == 200

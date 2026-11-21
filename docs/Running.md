@@ -62,8 +62,10 @@ new release is therefore picked up on the next page load, without a forced reloa
 
 **Scaling.** Each Gunicorn worker (`-w`) is a process with its own copy of the
 models (~4 GB RAM with both classifiers loaded). Inside a worker, redactions run
-one at a time ([`max_concurrent_per_worker`](Configuration.md#api)) on a background
-thread, so `/health` stays responsive. More throughput means more workers or more
+one at a time — fixed, see [Configuration › api](Configuration.md#api) — on a
+background thread, so `/health` stays responsive; the rest queue in arrival order.
+Gunicorn hands a connection to whichever worker accepts it first, not to an idle
+one, so a request can wait behind a busy worker while another is free. More throughput means more workers or more
 containers. Keep `--timeout` above the slowest document you expect — a long PDF on
 CPU takes well over a minute.
 
