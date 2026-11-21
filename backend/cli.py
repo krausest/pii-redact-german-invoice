@@ -114,15 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="include the per-line detection trace in the report (needs --json-output)",
     )
     opts.add_argument(
-        "--granularity",
-        metavar="MODE",
-        help="word: black out only a finding's words; line: its whole line (default: redaction.granularity)",
-    )
-    opts.add_argument(
         "--redact-word",
         metavar="WORD",
         action="append",
-        help="always redact the line holding this word or phrase (repeatable)",
+        help="always redact this word or phrase (repeatable)",
     )
     opts.add_argument(
         "--keep-word",

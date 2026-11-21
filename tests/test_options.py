@@ -107,10 +107,6 @@ def test_word_lists_are_not_query_parameters(name):
         redact({name: "Muster"})
 
 
-def test_granularity_comes_from_config_and_the_query_wins():
-    assert redact({}).granularity == "word"
-    line = Config(redaction=RedactionConfig(granularity="line"))
-    assert redact({}, line).granularity == "line"
-    assert redact({"granularity": "word"}, line).granularity == "word"
-    with pytest.raises(ValueError):
-        redact({"granularity": "letter"})
+def test_granularity_is_gone_words_are_always_boxed():
+    with pytest.raises(ValueError, match="unknown parameter"):
+        redact({"granularity": "line"})

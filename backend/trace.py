@@ -137,10 +137,7 @@ def trace_page(trace: Trace, verdict: PageVerdict) -> None:
                     "      rejected %s %r [%s %.2f]", span.label, span.text, span.source, span.score
                 )
             if ln in verdict.found:
-                if verdict.granularity == "word":
-                    trace.add("      -> REDACT %r", _bracketed(ln.text, redacted_runs(ln, verdict.found[ln])))
-                else:
-                    trace.add("      -> REDACT")
+                trace.add("      -> REDACT %r", _bracketed(ln.text, redacted_runs(ln, verdict.found[ln])))
                 if ln in verdict.notes:
                     trace.add("      note %r", verdict.notes[ln].text)
             elif ln in verdict.keep:

@@ -68,7 +68,6 @@ Body, one of:
 | `jpeg-quality` | 1–100 | `redaction.jpeg_quality` | quality of every JPEG produced |
 | `classifier` | `presidio` \| `guard-omni` | `engine.classifier` | which classifier runs; the first request naming one loads it. `guard-omni` only if enabled, otherwise `400` |
 | `debug` | `true` \| `false` | `false` | add the detection trace to the report — **requires `json-output=true`** |
-| `granularity` | `word` \| `line` | `redaction.granularity` | `word` boxes only the redacted words of a line, `line` the whole line |
 
 **Word lists** (`redact_words`, `keep_words` in the JSON body; ≤ 200 entries of
 1–100 chars each). They name people, so they are never query parameters — a URL
@@ -76,6 +75,7 @@ lands in access and proxy logs — and the server never logs them. An entry matc
 whitespace inside a phrase matches any whitespace, line breaks included. Entries are
 folded like the OCR text (`René` meets `Rene`), and from four letters on an entry also
 matches its OCR variants (`llja` for `Ilja`, `Andréa` for `Andrea`).
+Only the matched words are boxed, as for every finding.
 `redact_words` wins over every kept line (item table, dates, …) and over
 `keep_words`. `keep_words` vetoes rule, classifier and memory findings; it does not
 lift whole-region or signature boxes. An entry in both lists is a `400`.

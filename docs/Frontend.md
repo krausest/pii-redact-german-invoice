@@ -24,7 +24,7 @@ them re-analyzes nothing; *Refresh* below them re-analyzes every document with t
 current lists, asking first if boxes were edited. On the start page they apply to
 the next upload directly. The lists are not saved across reloads.
 
-Resolution, dewarping, *Word-level* (`granularity`, on by default) and classifier are set per document; changing one re-runs
+Resolution, dewarping and classifier are set per document; changing one re-runs
 the analysis for that document (asking first if boxes were edited). The footer's
 *Debug log* re-runs detection with `debug=true` and shows the trace without
 touching your edits.

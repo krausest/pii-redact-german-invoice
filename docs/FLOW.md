@@ -23,11 +23,8 @@ flowchart TD
     SIFT --> HARV["Harvest name + birthdate memory"]
     HARV --> REC["Recall: remembered names + OCR variants,<br/>remembered birthdates"]
     REC --> SIFT2["Sift recalled"]
-    SIFT2 --> GRAN{"granularity"}
-    GRAN -- word --> WB["Boxes over redacted word runs"]
-    GRAN -- line --> LB["Boxes over whole lines"]
+    SIFT2 --> WB["Boxes over redacted word runs"]
     WB --> EXTRA["+ birth-year notes · region boxes · signature boxes"]
-    LB --> EXTRA
     EXTRA --> REP["JSON report: page images + boxes"]
     REP --> UI["Web UI: review and edit boxes"]
     UI --> ASM["POST /api/assemble: fill boxes → PDF / JPEG"]

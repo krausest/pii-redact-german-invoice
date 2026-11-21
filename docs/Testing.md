@@ -67,7 +67,7 @@ OCR is slow and machine-dependent, and it is not what changes when a rule is tun
 So it is run **once** per sample into `<stem>_ocr.txt`; everything after it — rules,
 classifier, name memory, item table — is replayed against that text. A corpus
 replays in seconds, and the snapshot `<stem>_ocr.expected.txt` holds **one verdict
-per OCR line**, replayed in `redaction.granularity` (`word`). Each word is scored on
+per OCR line**. Each word is scored on
 its own extent — `[covered]` at ≥ 90 %, `{in the gap}` above 10 %:
 
 - `REDACT` — at least one word is covered; the marked text is pinned beneath it,

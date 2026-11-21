@@ -1,5 +1,4 @@
 # classifier: presidio
-# granularity: word
 === page 0 ===
 line @(134,80 677x37 conf=99.8498022556305): 'Dr. Allgemein, Praxisstraße 1, 12345 Musterhausen'
     -> REDACT (rule TITLE_NAME+rule DE_STREET+rule DE_PLZ_CITY+presidio+name-memory)

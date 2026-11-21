@@ -23,7 +23,7 @@ from typing import Annotated, Any, Literal, Self, get_origin
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from backend.config import ClassifierName, Config, Granularity
+from backend.config import ClassifierName, Config
 from backend.wordlists import WordLists
 
 Quality = Annotated[int, Field(ge=1, le=100)]
@@ -123,7 +123,6 @@ class RedactOptions(_QueryModel):
     # Not config-backed: nothing sensible would turn the trace on for every
     # request, so this one really is a class default, like `json_output`.
     debug: bool = False
-    granularity: Granularity
 
     @classmethod
     def from_query(cls, raw: Mapping[str, Any], config: Config) -> RedactOptions:
@@ -134,7 +133,6 @@ class RedactOptions(_QueryModel):
                 "pdf-dpi": red.pdf_dpi,
                 "jpeg-quality": red.jpeg_quality,
                 "classifier": config.engine.classifier,
-                "granularity": red.granularity,
             },
             raw,
         )

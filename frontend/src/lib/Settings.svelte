@@ -38,11 +38,6 @@
     el.checked = options.unwarp
   }
 
-  function pickWordLevel(el: HTMLInputElement) {
-    onChange({ ...options, wordLevel: el.checked })
-    el.checked = options.wordLevel
-  }
-
   function pickClassifier(el: HTMLSelectElement) {
     onChange({ ...options, classifier: el.value })
     el.value = options.classifier ?? ''
@@ -75,17 +70,6 @@
       onchange={(e) => pickUnwarp(e.currentTarget)}
     />
     <span class="caption">{m.settings.unwarp}</span>
-  </label>
-
-  <label class="check" class:disabled>
-    <input
-      type="checkbox"
-      checked={options.wordLevel}
-      {disabled}
-      title={m.settings.wordLevelTitle}
-      onchange={(e) => pickWordLevel(e.currentTarget)}
-    />
-    <span class="caption">{m.settings.wordLevel}</span>
   </label>
 
   {#if classifiers.length > 1}

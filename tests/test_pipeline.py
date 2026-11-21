@@ -130,7 +130,7 @@ def test_the_name_memory_carries_a_surname_across_pages():
     p1 = _pipeline([_line("Patient Mustermann, Max", top=10)], [], padding=0)
     p1.compute_boxes(_page(), memory=memory)
     p2 = _pipeline([_line("Diagnose Mustermann", top=10)], [], padding=0)
-    assert p2.compute_boxes(_page(), memory=memory) == [Box(10, 10, 90, 20)]
+    assert p2.compute_boxes(_page(), memory=memory) == [Box(45, 10, 90, 20)]  # "Mustermann"
 
 
 def test_a_name_only_the_model_found_still_redacts_its_bare_recurrence():
@@ -142,7 +142,7 @@ def test_a_name_only_the_model_found_still_redacts_its_bare_recurrence():
     is."""
     lines = [_line("Anna Beispiel", top=10), _line("Betrifft: Beispiel", top=200)]
     boxes = _pipeline(lines, ["Anna Beispiel"], padding=0).compute_boxes(_page())
-    assert boxes == [Box(10, 10, 90, 20), Box(10, 200, 90, 210)]
+    assert boxes == [Box(10, 10, 90, 20), Box(52, 200, 90, 210)]
 
 
 def test_the_memory_takes_the_model_span_not_the_line_around_it():
@@ -179,7 +179,7 @@ def test_a_label_word_on_an_evidence_line_is_not_remembered():
         _line("Datum", top=200),
     ]
     boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
-    assert [b for b in boxes if b.text is None] == [Box(10, 10, 90, 20)]  # no year note
+    assert _rows(boxes) == [(10, 20)]
 
 
 def test_the_name_beside_a_label_word_is_still_remembered():
@@ -189,7 +189,7 @@ def test_the_name_beside_a_label_word_is_still_remembered():
         _line("Datum", top=200),
     ]
     boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
-    assert boxes == [Box(10, 10, 90, 20), Box(10, 100, 90, 110)]
+    assert _rows(boxes) == [(10, 20), (100, 110)]
 
 
 def test_the_trace_names_what_the_memory_harvested_and_where():
@@ -206,6 +206,11 @@ def test_the_trace_names_what_the_memory_harvested_and_where():
 def _black(boxes):
     """The redaction rectangles, without the birth-year notes drawn over them."""
     return [b for b in boxes if b.text is None]
+
+
+def _rows(boxes):
+    """The rows that go black, top to bottom."""
+    return sorted({(b.y0, b.y1) for b in _black(boxes)})
 
 
 class _BirthdateStub:
@@ -229,7 +234,7 @@ def test_a_birthdate_is_remembered_and_its_bare_recurrence_redacted(recurrence):
         _line("01.03.2026", top=200),
     ]
     boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
-    assert _black(boxes) == [Box(10, 10, 90, 20), Box(10, 100, 90, 110)]
+    assert _rows(boxes) == [(10, 20), (100, 110)]
 
 
 def test_the_birthdate_memory_carries_across_pages():
@@ -250,7 +255,7 @@ def test_a_birth_line_with_two_dates_teaches_no_date():
         _line("01.03.2026", top=200),
     ]
     boxes = _pipeline(lines, [], padding=0).compute_boxes(_page())
-    assert _black(boxes) == [Box(10, 10, 90, 20)]
+    assert _rows(boxes) == [(10, 20)]
 
 
 def test_a_model_birthdate_never_feeds_the_memory():
@@ -258,7 +263,7 @@ def test_a_model_birthdate_never_feeds_the_memory():
     every repetition of it in the item table."""
     lines = [_line("Kontrolle 01.02.2026", top=10), _line("01.02.2026", top=100)]
     p = RedactionPipeline(ocr=StubOCR(lines), classifier=_BirthdateStub("01.02.2026"), padding=0)
-    assert _black(p.compute_boxes(_page())) == [Box(10, 10, 90, 20)]
+    assert _rows(p.compute_boxes(_page())) == [(10, 20)]
 
 
 def test_the_trace_names_the_remembered_birthdate_and_where():
@@ -303,7 +308,7 @@ def test_the_clearing_house_keeps_its_name_but_not_its_address():
         _line("Muster VerrechnungsSysteme GmbH", top=10),
         _line("Muster VerrechnungsSysteme GmbH - 12345 Musterhausen", top=30),
     ]
-    assert _pipeline(lines, [], padding=0).compute_boxes(_page()) == [Box(10, 30, 90, 40)]
+    assert _rows(_pipeline(lines, [], padding=0).compute_boxes(_page())) == [(30, 40)]
 
 
 def test_a_specialty_line_survives_the_imprint():
@@ -337,11 +342,12 @@ def test_the_birth_year_is_printed_over_the_redacted_birthdate():
     lines = [_line("Geburtsdatum: 26.06.1975", top=10, width=240, height=20)]
     p = _pipeline(lines, [], padding=0, fill=(0, 0, 0))
     boxes = p.compute_boxes(_page())
-    assert boxes == [Box(10, 10, 250, 30), Box(145, 10, 250, 30, text="1975")]
+    assert boxes == [Box(145, 10, 250, 30), Box(145, 10, 250, 30, text="1975")]
     out = p.apply_boxes(Image.new("RGB", (300, 300), (255, 255, 255)), boxes)
     printed = [out.getpixel((x, y)) for x in range(150, 250) for y in range(10, 30)]
     assert (255, 255, 255) in printed  # the year, white on black
-    assert all(out.getpixel((x, 20)) == (0, 0, 0) for x in range(10, 150))  # day and month
+    assert (0, 0, 0) in printed  # day and month
+    assert all(out.getpixel((x, 20)) == (255, 255, 255) for x in range(10, 140))  # the label
 
 
 # -- composition ------------------------------------------------------------ #
@@ -446,7 +452,7 @@ def test_a_listed_name_blackens_its_whole_line_like_any_finding(text, boxes):
     assert p.compute_verdict(page).boxes == boxes
 
 
-# -- word granularity ---------------------------------------------------------- #
+# -- word boxes ---------------------------------------------------------------- # #
 def _worded(text, top=10):
     """A line whose OCR word geometry puts every character 10 px wide, from x=0."""
     words = tuple(WordBox(i, i + 1, 10 * i, 10 * i + 10) for i in range(len(text)))
@@ -456,26 +462,26 @@ def _worded(text, top=10):
 def test_word_mode_boxes_only_the_listed_name():
     line = _worded("Termin mit Erika am Montag")
     p = _pipeline([line], [], padding=0)
-    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("Erika",)), granularity="word")
+    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("Erika",)))
     assert boxes == [Box(105, 10, 165, 20)]  # half of each neighbouring gap
 
 
 def test_word_mode_widens_a_partial_hit_to_its_token():
     line = _worded("Rechnung an Muster-Probe heute")
     p = _pipeline([line], ["Muster"], padding=0)
-    assert p.compute_boxes(_page(), granularity="word") == [Box(115, 10, 245, 20)]
+    assert p.compute_boxes(_page()) == [Box(115, 10, 245, 20)]
 
 
 def test_word_mode_joins_neighbouring_hits_across_punctuation():
     line = _worded("Andrea Muster, Erika Probe")
     p = _pipeline([line], ["Andrea Muster", "Erika Probe"], padding=0)
-    assert p.compute_boxes(_page(), granularity="word") == [Box(0, 10, 260, 20)]
+    assert p.compute_boxes(_page()) == [Box(0, 10, 260, 20)]
 
 
 def test_word_mode_boxes_only_a_labeled_value():
     line = _worded("Geburtsdatum: 01.02.1980 vorgelegt")
     p = _pipeline([line], [], padding=0)
-    boxes = p.compute_boxes(_page(), granularity="word")
+    boxes = p.compute_boxes(_page())
     assert Box(135, 10, 245, 20) in boxes  # the date, neither label nor "vorgelegt"
     assert all(b.x1 <= 245 and b.x0 >= 135 for b in boxes)
 
@@ -483,14 +489,14 @@ def test_word_mode_boxes_only_a_labeled_value():
 def test_without_word_geometry_the_box_follows_the_character_share():
     line = Line("Termin mit Erika Probe", left=0, top=10, width=220, height=10)
     p = _pipeline([line], [], padding=0)
-    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("Probe",)), granularity="word")
+    boxes = p.compute_boxes(_page(), lists=WordLists(redact=("Probe",)))
     assert boxes == [Box(165, 10, 220, 20)]
 
 
 def test_word_mode_traces_the_redacted_runs():
     line = _worded("Rechnung an Muster-Probe heute")
     trace = Trace(collect=True)
-    _pipeline([line], ["Muster"], padding=0).compute_boxes(_page(), trace=trace, granularity="word")
+    _pipeline([line], ["Muster"], padding=0).compute_boxes(_page(), trace=trace)
     assert "-> REDACT 'Rechnung an [Muster-Probe] heute'" in trace.collected
 
 
@@ -507,7 +513,7 @@ def test_word_mode_boxes_the_value_after_a_footer_marker_not_the_marker(texts, r
     """The value may stand on the next line; the marker stays readable."""
     lines = [_worded(t, top=10 + 30 * i) for i, t in enumerate(texts)]
     trace = Trace(collect=True)
-    _pipeline(lines, [], padding=0).compute_boxes(_page(), trace=trace, granularity="word")
+    _pipeline(lines, [], padding=0).compute_boxes(_page(), trace=trace)
     for want in redacted:
         assert f"-> REDACT {want!r}" in trace.collected
     assert "-> REDACT 'IBAN:'" not in trace.collected

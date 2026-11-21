@@ -38,7 +38,6 @@ export type Dpi = (typeof DPI_CHOICES)[number]
 // (redaction.pdf_dpi, redaction.unwarp) so the out-of-the-box behaviour matches.
 export const DEFAULT_DPI: Dpi = 200
 export const DEFAULT_UNWARP = false
-export const DEFAULT_WORD_LEVEL = true
 
 // Mirror the backend cap so we can reject before uploading. Keep in sync with the
 // redaction service's api.max_upload_bytes.

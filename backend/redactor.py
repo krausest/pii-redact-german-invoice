@@ -7,7 +7,6 @@ import re
 from collections.abc import Iterable
 
 from backend.classifiers.base import Classifier
-from backend.config import Granularity
 from backend.detectors import Detector, ListDetector, MemoryDetector, ModelDetector, RuleDetector
 from backend.document import Document
 from backend.harvest import Memory
@@ -38,7 +37,6 @@ class PageRedactor:
         memory: Memory,
         trace: Trace,
         lists: WordLists = EMPTY,
-        granularity: Granularity = "line",
     ) -> PageVerdict:
         text_lines = [ln for ln in lines if ln.text.strip()]
         doc = _read(text_lines, regions)
@@ -64,11 +62,10 @@ class PageRedactor:
             found=found,
             keep=keep,
             dropped=dropped,
-            line_boxes=(_word_boxes if granularity == "word" else _line_boxes)(found, keep, pad),
+            line_boxes=_word_boxes(found, keep, pad),
             notes=_birth_year_notes(found),
             region_boxes=region_boxes(lines, regions, set(found), pad, set(keep)),
             signatures=signature_boxes(lines, page_width, pad),
-            granularity=granularity,
         )
 
 
@@ -107,22 +104,9 @@ def _merge(per_line: Iterable[dict[Line, list[Span]]]) -> dict[Line, list[Span]]
     return merged
 
 
-def _line_boxes(found: dict[Line, list[Span]], keep: dict[Line, str], pad: int) -> list[Box]:
-    """A padded box over every redacted line. A kept line clips its neighbours'
-    padding, never their own box: the kept line is content, the padding is not."""
-    holes = [ln.box for ln in keep if ln not in found]
-    boxes: list[Box] = []
-    for line in found:
-        padded = line.box.padded(pad)
-        parts = subtract(padded, holes)
-        if parts != [padded]:
-            parts = [p for p in parts if not line.box.contains(p)] + [line.box]
-        boxes.extend(parts)
-    return boxes
-
-
 def _word_boxes(found: dict[Line, list[Span]], keep: dict[Line, str], pad: int) -> list[Box]:
-    """A padded box over every run of redacted words; clipped like :func:`_line_boxes`."""
+    """A padded box over every run of redacted words. A kept line clips the
+    padding, never the box itself: the kept line is content, the padding is not."""
     holes = [ln.box for ln in keep if ln not in found]
     boxes: list[Box] = []
     for line, spans in found.items():

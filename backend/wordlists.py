@@ -1,4 +1,4 @@
-"""The user's word lists: entries that always redact their line, and entries no
+"""The user's word lists: entries that are always redacted, and entries no
 finding may contain.
 
 An entry matches as a whole word or phrase, in any casing; whitespace inside a
@@ -35,7 +35,7 @@ def _pattern(entries: tuple[str, ...]) -> re.Pattern[str] | None:
 
 @dataclass(frozen=True)
 class WordLists:
-    """``redact``: always blacken the line. ``keep``: drop every other finding
+    """``redact``: always blacken the entry. ``keep``: drop every other finding
     whose text contains the entry."""
 
     redact: tuple[str, ...] = ()

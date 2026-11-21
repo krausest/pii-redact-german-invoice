@@ -36,8 +36,7 @@ error messages. A flag you leave out takes its default from
 | `--jpeg-quality N` | `redaction.jpeg_quality` | quality of every JPEG produced (1–100) |
 | `--classifier NAME` | `engine.classifier` | `presidio` \| `guard-omni` (needs `PII_GUARD_OMNI=true`) |
 | `--debug` | off | add the detection trace to the report (needs `--json-output`) |
-| `--granularity MODE` | `redaction.granularity` | `word` boxes only the redacted words of a line, `line` the whole line |
-| `--redact-word WORD` | — | repeatable: always redact the line holding this word or phrase |
+| `--redact-word WORD` | — | repeatable: always redact this word or phrase |
 | `--keep-word WORD` | — | repeatable: drop every finding containing this word or phrase |
 | `--debug-layout` | off | CLI only: write `<stem>_layout.jpg` (per page `_layout_pN.jpg`) with the detected layout regions drawn and the item-table lines tinted blue |
 

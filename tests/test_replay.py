@@ -76,7 +76,7 @@ def test_check_fails_when_there_is_nothing_to_replay(tmp_path, capsys):
 
 def test_the_marked_words_survive_a_render_and_a_parse():
     verdict = Verdict(NAME, "REDACT", "presidio", 0.6, "[Andrea] Muster")
-    snapshot = parse_expected(render(_outcome(verdict), "presidio", "word"))
+    snapshot = parse_expected(render(_outcome(verdict), "presidio"))
     assert snapshot[0].verdicts[0].words == "[Andrea] Muster"
     assert compare(_outcome(verdict), snapshot) == []
 

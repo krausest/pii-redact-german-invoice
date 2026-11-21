@@ -61,8 +61,7 @@ def test_sample_matches_its_snapshot(pipeline, sample):
             f"no snapshot at {snapshot.name} — write one with:\n"
             f"  uv run python -m backend.replay check {sample} --update"
         )
-    granularity = load_config().redaction.granularity
-    outcomes = replay(pipeline, parse_ocr(sample.read_text(encoding="utf-8")), granularity)
+    outcomes = replay(pipeline, parse_ocr(sample.read_text(encoding="utf-8")))
     failures = compare(outcomes, parse_expected(snapshot.read_text(encoding="utf-8")))
     assert not failures, "\n".join(["", *failures])
 

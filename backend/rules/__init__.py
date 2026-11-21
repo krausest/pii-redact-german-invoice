@@ -28,7 +28,7 @@ __all__ = ["birth_year_note", "item_table_lines", "kept_lines", "rule_spans"]
 def rule_spans(doc: Document) -> list[Span]:
     """Every deterministic finding in ``doc``, as spans in document coordinates.
     The regexes run per line, since several are anchored to a whole cell; a
-    labeled value or a street above its city becomes a span over its whole line."""
+    labeled value becomes a span over its value, a street above its city one over its line."""
     spans = line_spans(doc) + imprint_spans(doc)
     for line, claim in labeled_claims(doc.lines, doc.item_table).items():
         spans.append(doc.part_of(line, claim.start, claim.end, PiiLabel(claim.kind), LABELED_VALUE))

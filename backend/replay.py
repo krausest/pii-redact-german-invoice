@@ -24,7 +24,7 @@ box: ``>= COVERED`` marks it ``[covered]``, the gap up to ``UNTOUCHED`` marks it
 is pinned beneath the verdict; without one, the whole line's coverage decides
 between ``keep`` and the deliberate gap ``PARTIAL``, which satisfies neither
 expectation and so forces a human to look at a line some neighbour's padding
-merely nicked. Snapshots replay in ``redaction.granularity`` (``word``).
+merely nicked.
 The verdict carries *why*, which is how a snapshot diff says whether a rule
 stopped firing or a neighbouring box moved off the line it used to cover.
 Asserting ``keep`` is the point of the exercise: without it the suite could not
@@ -80,7 +80,7 @@ import numpy as np
 from PIL import Image
 
 from backend.classifiers.base import Classifier
-from backend.config import Config, Granularity
+from backend.config import Config
 from backend.harvest import Memory
 from backend.models import Box, Line
 from backend.pipeline import RedactionPipeline
@@ -354,9 +354,7 @@ def _outcome(page: Page, verdict: PageVerdict) -> Outcome:
     return Outcome(index=page.index, verdicts=tuple(verdicts))
 
 
-def replay(
-    pipeline: RedactionPipeline, pages: list[Page], granularity: Granularity = "line"
-) -> list[Outcome]:
+def replay(pipeline: RedactionPipeline, pages: list[Page]) -> list[Outcome]:
     """Run the detection passes over frozen pages, in document order.
 
     One :class:`~backend.harvest.Memory` spans the pages exactly as ``run_redaction`` does it,
@@ -374,15 +372,14 @@ def replay(
             lines=list(page.lines),
             memory=memory,
             trace=trace,
-            granularity=granularity,
         )
         outcomes.append(_outcome(page, verdict))
     return outcomes
 
 
 # -- rendering and comparing ----------------------------------------------- #
-def render(outcomes: list[Outcome], classifier: str, granularity: Granularity = "line") -> str:
-    out = [f"# classifier: {classifier}", f"# granularity: {granularity}"]
+def render(outcomes: list[Outcome], classifier: str) -> str:
+    out = [f"# classifier: {classifier}"]
     for outcome in outcomes:
         out.append(f"=== page {outcome.index} ===")
         for verdict in outcome.verdicts:
@@ -613,11 +610,10 @@ def _check_one(
     update: bool,
     ignore_text: bool,
     safe: bool,
-    granularity: Granularity = "line",
 ) -> int:
     """Replay one dump and print its result. Returns how many differences it has."""
-    outcomes = replay(pipeline, parse_ocr(ocr.read_text(encoding="utf-8")), granularity)
-    text = render(outcomes, classifier_name, granularity)
+    outcomes = replay(pipeline, parse_ocr(ocr.read_text(encoding="utf-8")))
+    text = render(outcomes, classifier_name)
     out = expected_path(ocr)
     if update:
         out.write_text(text, encoding="utf-8")
@@ -631,7 +627,7 @@ def _check_one(
     if safe:
         result = safe_update(outcomes, expected, ignore_text)
         if result is not None:
-            merged = render(result.outcomes, classifier_name, granularity)
+            merged = render(result.outcomes, classifier_name)
             if merged != snapshot:
                 out.write_text(merged, encoding="utf-8")
             note = f" ({result.reasons} reason(s) updated)" if result.reasons else ""
@@ -678,8 +674,7 @@ def _check(
     failed: dict[str, int] = {}
     for ocr in files:
         differences = _check_one(
-            ocr, pipeline, config.engine.classifier, update, ignore_text, safe,
-            config.redaction.granularity,
+            ocr, pipeline, config.engine.classifier, update, ignore_text, safe
         )
         if differences:
             failed[ocr.name] = differences

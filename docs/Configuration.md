@@ -15,7 +15,6 @@ process with a message naming the field. A typo is an error, not a no-op.
 | `PII_CLASSIFIER` | overrides `[engine].classifier` |
 | `PII_GUARD_OMNI` | overrides `[engine].guard_omni` |
 | `PII_UNWARP` | overrides `[redaction].unwarp` |
-| `PII_GRANULARITY` | overrides `[redaction].granularity` |
 | `PII_REDACT_REGIONS` | overrides `[redaction].redact_regions` |
 | `PII_LOG_LEVEL` | log level of the `backend` logger (`INFO`); `DEBUG` logs the full detection trace |
 | `PII_STATIC_DIR` | directory of the built web UI the API serves at `/` (see [Running](Running.md)) |
@@ -23,7 +22,7 @@ process with a message naming the field. A typo is an error, not a no-op.
 The overriding variables are validated like the file. Booleans accept
 `true|false|1|0|yes|no|on|off`.
 
-**Defaults vs. absolute values.** `unwarp`, `granularity`, `classifier`, `pdf_dpi`
+**Defaults vs. absolute values.** `unwarp`, `classifier`, `pdf_dpi`
 and `jpeg_quality` are only *defaults*: a request (`?unwarp=…`) or a CLI flag
 (`--unwarp`) that names the option wins. `ocr_backend`, `det_box_thresh`,
 `guard_omni`, `redact_regions` and everything under `[api]` are fixed per process.
@@ -50,7 +49,6 @@ texture is read as text. See [Redaction › Classifiers](Redaction.md#classifier
 | `padding` | `2` | pixels added around each box |
 | `score_threshold` | `0.4` | minimum Presidio entity score |
 | `unwarp` | `false` | dewarp photographed pages before OCR |
-| `granularity` | `word` | `word`: black out only a finding's words; `line`: its whole OCR line — default for `?granularity=` |
 | `pdf_dpi` | `200` | rasterization DPI for PDF input (36–1200) |
 | `max_pages` | `30` | reject documents with more pages |
 | `jpeg_quality` | `90` | quality of every JPEG produced (1–100) |

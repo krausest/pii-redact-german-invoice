@@ -166,13 +166,3 @@ def test_committed_config_toml_loads():
     """The config shipped in the repo must satisfy its own schema."""
     root = Path(__file__).resolve().parent.parent
     assert load_config(root / "config.toml").engine.ocr_backend
-
-
-def test_granularity_defaults_to_word_and_env_overrides_it(tmp_path, monkeypatch):
-    path = _write(tmp_path, "[redaction]\npadding = 2\n")
-    assert load_config(path).redaction.granularity == "word"
-    monkeypatch.setenv("PII_GRANULARITY", "line")
-    assert load_config(path).redaction.granularity == "line"
-    monkeypatch.setenv("PII_GRANULARITY", "letter")
-    with pytest.raises(ValueError):
-        load_config(path)
