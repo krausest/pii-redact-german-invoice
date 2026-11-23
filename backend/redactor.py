@@ -85,16 +85,17 @@ def _sift(
     trace: Trace,
     veto: WordLists = EMPTY,
 ) -> dict[Line, list[Span]]:
-    """``detector``'s spans per line that its line's keep reason admits and
-    ``veto``'s keep list does not name; the rest go to ``dropped``."""
+    """``detector``'s spans per line that its line's keep reason admits, with
+    ``veto``'s keep entries cut out; a rejected or cut span goes to ``dropped``."""
     survivors: dict[Line, list[Span]] = {}
     for line, spans in doc.per_line(detector.spans(doc, trace)).items():
         why = keep.get(line)
-        ok = [detector.admits(s, why) and not veto.vetoes(s) for s in spans]
-        survivors[line] = [s for s, keep_it in zip(spans, ok) if keep_it]
-        lost = [s for s, keep_it in zip(spans, ok) if not keep_it]
-        if lost:
-            dropped.setdefault(line, []).extend(lost)
+        survivors[line] = []
+        for s in spans:
+            rest = veto.carve(s) if detector.admits(s, why) else []
+            survivors[line] += rest
+            if rest != [s]:
+                dropped.setdefault(line, []).append(s)
     return survivors
 
 

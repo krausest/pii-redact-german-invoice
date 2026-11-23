@@ -63,7 +63,7 @@ export const en = {
     redactTitle: 'Always redact',
     redactHint: 'A line holding one of these words is always blacked out.',
     keepTitle: 'Never redact',
-    keepHint: 'No finding containing one of these words is blacked out.',
+    keepHint: 'These words are never blacked out; the rest of a finding still is.',
     placeholder: 'Word or phrase',
     add: 'Add',
     addTo: (list: string) => `Add to “${list}”`,

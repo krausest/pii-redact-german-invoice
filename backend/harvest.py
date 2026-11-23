@@ -259,6 +259,15 @@ class Memory:
             + _id_spans(doc, self.ids)
         )
 
+    def dump(self, trace: Trace) -> None:
+        """Every name, birthdate and identifier remembered so far."""
+        trace.add("=== memory dump ===")
+        dates = [f"{d.day:02}.{d.month:02}.{d.year}" for d in sorted(self.birthdates)]
+        for kind, entries in (("names", sorted(self.names)), ("birthdates", dates), ("ids", sorted(self.ids))):
+            trace.add("  %s (%d):", kind, len(entries))
+            for entry in entries:
+                trace.add("    %r", entry)
+
 
 def _is_birth_evidence(line: Line, spans: Sequence[Span]) -> bool:
     """A deterministic witness that ``line`` holds a birthdate; a model's

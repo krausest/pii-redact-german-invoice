@@ -58,7 +58,7 @@ export const de: Messages = {
     redactTitle: 'Immer schwärzen',
     redactHint: 'Eine Zeile mit einem dieser Wörter wird immer geschwärzt.',
     keepTitle: 'Nie schwärzen',
-    keepHint: 'Kein Fund, der eines dieser Wörter enthält, wird geschwärzt.',
+    keepHint: 'Diese Wörter werden nie geschwärzt, der Rest eines Fundes schon.',
     placeholder: 'Wort oder Wortfolge',
     add: 'Hinzufügen',
     addTo: (list: string) => `Zu „${list}“ hinzufügen`,

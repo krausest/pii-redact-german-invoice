@@ -269,7 +269,7 @@ def test_report_carries_the_trace_only_when_asked(png_bytes):
     assert "debug" not in plain.json()
     # FakePipeline stands in for detection, so this pins the plumbing, not the
     # commentary — that is tests/test_pipeline.py's job.
-    assert traced.json()["debug"] == "fake pipeline: 1 box(es)"
+    assert traced.json()["debug"].splitlines()[0] == "fake pipeline: 1 box(es)"
 
 
 def test_debug_without_json_output_is_rejected(png_bytes):
@@ -284,7 +284,7 @@ def test_trace_marks_page_boundaries():
     client, _ = build_client()
     with client:
         r = client.post(f"{URL}?json-output=true&debug=true", content=pdf_bytes(3), headers=PDF)
-    assert ["=== page 0 ===", "=== page 1 ===", "=== page 2 ==="] == [
+    assert ["=== page 0 ===", "=== page 1 ===", "=== page 2 ===", "=== memory dump ==="] == [
         ln for ln in r.json()["debug"].splitlines() if ln.startswith("===")
     ]
 

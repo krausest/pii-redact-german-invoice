@@ -17,6 +17,7 @@ from backend.layout import LayoutRegion
 from backend.models import Box, Line, WordBox
 from backend.pii import PiiLabel, Span
 from backend.pipeline import RedactionPipeline
+from backend.rules.birth_year import DateKey
 from backend.trace import Trace
 from backend.wordlists import WordLists
 from tests.conftest import (
@@ -200,6 +201,21 @@ def test_the_trace_names_what_the_memory_harvested_and_where():
     assert "name memory 'Muster' <- 'Patient Muster, Andrea'" in out
     # the recurrence quotes the name that matched, not the whole line
     assert "PERSON 'Muster' [name-memory 1.00]" in out
+
+
+def test_the_memory_dump_lists_every_entry_sorted():
+    memory = Memory(names={"Muster", "Andrea"}, birthdates={DateKey(1, 2, 1980)})
+    trace = Trace(collect=True)
+    memory.dump(trace)
+    assert trace.collected.splitlines() == [
+        "=== memory dump ===",
+        "  names (2):",
+        "    'Andrea'",
+        "    'Muster'",
+        "  birthdates (1):",
+        "    '01.02.1980'",
+        "  ids (0):",
+    ]
 
 
 # -- the birthdate memory: a birth line teaches its date, not its label ------ #
@@ -408,8 +424,15 @@ def test_a_keep_word_drops_the_rule_and_the_model_finding():
     lines = [_line("Musterstrasse 7", top=10), _line("Andrea Muster", top=50)]
     p = _pipeline(lines, ["Andrea Muster"], padding=0)
     assert len(p.compute_boxes(_page())) == 2
-    lists = WordLists(keep=("Musterstrasse", "Muster"))
+    lists = WordLists(keep=("Musterstrasse 7", "Andrea Muster"))
     assert p.compute_boxes(_page(), lists=lists) == []
+
+
+def test_a_keep_word_is_carved_out_and_the_rest_of_the_finding_stays_black():
+    line = _line("Andrea Muster", top=50)
+    lists = WordLists(keep=("Andrea",))
+    boxes = _pipeline([line], ["Andrea Muster"], padding=0).compute_boxes(_page(), lists=lists)
+    assert boxes == [line.span_box(7, 13)]
 
 
 def test_a_keep_word_is_not_recalled_from_the_memory():

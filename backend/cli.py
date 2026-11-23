@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-word",
         metavar="WORD",
         action="append",
-        help="drop every finding containing this word or phrase (repeatable)",
+        help="never redact this word or phrase; the rest of a finding still redacts (repeatable)",
     )
     # Deliberately NOT a RedactOptions field / query parameter — it never
     # reaches POST /api/redact, only the CLI. See backend/layout.py.

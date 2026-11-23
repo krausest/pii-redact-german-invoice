@@ -184,6 +184,7 @@ def run_redaction(
                 ),
             )
         )
+    memory.dump(trace)
     return Redaction(pages=results, is_pdf=is_pdf, debug=trace.collected)
 
 

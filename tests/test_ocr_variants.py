@@ -86,10 +86,12 @@ def test_the_positive_list_blackens_an_ocr_variant():
     assert (span.label, span.text) == (PiiLabel.LISTED, "Amèlie")
 
 
-def test_the_negative_list_vetoes_an_ocr_variant():
+def test_the_negative_list_carves_out_an_ocr_variant():
     lists = WordLists(keep=("Simone",))
-    assert lists.vetoes(Span(PiiLabel.PERSON, 0, 13, "Símone Probe", "presidio"))
-    assert not lists.vetoes(Span(PiiLabel.PERSON, 0, 12, "Sabine Probe", "presidio"))
+    carved = lists.carve(Span(PiiLabel.PERSON, 0, 12, "Símone Probe", "presidio"))
+    assert [s.text for s in carved] == ["Probe"]
+    whole = Span(PiiLabel.PERSON, 0, 12, "Sabine Probe", "presidio")
+    assert lists.carve(whole) == [whole]
 
 
 def test_a_list_entry_with_an_accent_meets_the_folded_page():

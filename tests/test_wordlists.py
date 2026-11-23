@@ -36,11 +36,30 @@ def test_a_phrase_wrapped_across_lines_matches():
     assert set(doc.per_line([span])) == set(doc.lines)
 
 
-def test_keep_vetoes_a_span_containing_the_entry():
-    lists = WordLists(keep=("Muster",))
-    assert lists.vetoes(Span(PiiLabel.PERSON, 0, 13, "Andrea Muster", "stub"))
-    assert not lists.vetoes(Span(PiiLabel.PERSON, 0, 10, "Mustermann", "stub"))
-    assert not WordLists().vetoes(Span(PiiLabel.PERSON, 0, 6, "Muster", "stub"))
+@pytest.mark.parametrize(
+    "entry,text,rest",
+    [
+        ("Andrea", "Andrea Muster", ["Muster"]),
+        ("Muster", "Andrea Muster", ["Andrea"]),
+        ("muster", "Frau Andrea MUSTER,", ["Frau Andrea"]),
+        ("Andrea", "Muster, Andrea Erika", ["Muster", "Erika"]),
+        ("Andrea Muster", "Dr. Andrea Muster", ["Dr"]),
+        ("Andrea Muster", "Andrea Muster", []),
+        ("Muster", "Mustermann", ["Mustermann"]),
+    ],
+)
+def test_keep_carves_the_entry_out_of_a_span(entry, text, rest):
+    span = Span(PiiLabel.PERSON, 5, 5 + len(text), text, "stub", 0.8)
+    got = WordLists(keep=(entry,)).carve(span)
+    assert [s.text for s in got] == rest
+    for s in got:
+        assert (s.label, s.source, s.score) == (span.label, span.source, span.score)
+        assert text[s.start - 5 : s.end - 5] == s.text
+
+
+def test_no_keep_list_leaves_the_span_whole():
+    span = Span(PiiLabel.PERSON, 0, 6, "Muster", "stub")
+    assert WordLists().carve(span) == [span]
 
 
 @pytest.mark.parametrize(
@@ -61,4 +80,5 @@ def test_a_symbol_ends_an_entry_like_whitespace_a_letter_does_not(text, hit):
     makes it part of a longer word."""
     lists = WordLists(redact=("Beratung",), keep=("Beratung",))
     assert bool(lists.redact_spans(_doc(text))) is hit
-    assert lists.vetoes(Span(PiiLabel.PERSON, 0, len(text), text, "stub")) is hit
+    span = Span(PiiLabel.PERSON, 0, len(text), text, "stub")
+    assert (lists.carve(span) != [span]) is hit

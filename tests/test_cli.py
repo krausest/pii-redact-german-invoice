@@ -142,7 +142,7 @@ def test_debug_writes_the_trace_into_the_report(run_cli, tmp_path):
     write_png(tmp_path)
     assert run_cli(["--debug", "--json-output", str(tmp_path)]) == 0
     report = json.loads((tmp_path / "page_redacted.json").read_text())
-    assert report["debug"] == "fake pipeline: 1 box(es)"
+    assert report["debug"].splitlines()[0] == "fake pipeline: 1 box(es)"
 
 
 def test_unknown_flag_is_rejected_by_argparse(run_cli, tmp_path):

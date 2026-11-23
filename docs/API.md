@@ -77,8 +77,9 @@ folded like the OCR text (`René` meets `Rene`), and from four letters on an ent
 matches its OCR variants (`llja` for `Ilja`, `Andréa` for `Andrea`).
 Only the matched words are boxed, as for every finding.
 `redact_words` wins over every kept line (item table, dates, …) and over
-`keep_words`. `keep_words` vetoes rule, classifier and memory findings; it does not
-lift whole-region or signature boxes. An entry in both lists is a `400`.
+`keep_words`. `keep_words` entries are cut out of rule, classifier and memory findings
+and the rest of a finding still redacts (keep `Andrea` → `Andrea [Muster]`); they do
+not lift whole-region or signature boxes. An entry in both lists is a `400`.
 
 ```bash
 jq -n --rawfile data <(base64 < example/GOÄ_Rechnung1.pdf | tr -d '\n') \
@@ -161,7 +162,9 @@ or `birthdate-memory` span quotes the remembered name or date it matched; each
 enters the memory with a page-level line `name memory 'Muster' <- '<line>'` or
 `birthdate memory '01.02.1980' <- '<line>'` (or `id memory '123456-789' <- '<line>'`) before the regions.
 A blackened barcode or QR code prints as `--- code barcode [x0, y0, x1, y1] -> REDACT`. Lines in no region follow under
-`--- unclaimed lines ---`; pages are separated by `=== page N ===`. See
+`--- unclaimed lines ---`; pages are separated by `=== page N ===`. The trace ends
+with `=== memory dump ===`: every name token, birthdate and identifier the document's
+memory holds, one per line under `names (N):`, `birthdates (N):` and `ids (N):`. See
 [Redaction](Redaction.md) for what each detector does.
 
 ## `POST /api/assemble`

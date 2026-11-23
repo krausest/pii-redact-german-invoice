@@ -82,8 +82,9 @@ The heart of the pipeline, per page:
      per match; its `ListDetector` admits it on every kept line.
    - Each detector's `admits` drops the candidates a kept line does not allow
      ([below](#what-stays-readable)); the trace lists them as `rejected …`. A
-     rule, classifier or memory span containing a `keep_words` entry is rejected
-     the same way, so it neither redacts nor feeds the name memory.
+     `keep_words` entry is cut out of every rule, classifier or memory span; the
+     span is listed as `rejected …` and its remaining words still redact and feed
+     the name memory, the entry itself does neither.
 4. **Name memory.** `Memory.learn` collects the names a person pattern points at
    — the run of name tokens after a title, salutation or patient label, before a
    birth mark or birth label, in a `Surname,Forename date` row — and a classifier
