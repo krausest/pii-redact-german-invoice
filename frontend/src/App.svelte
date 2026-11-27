@@ -404,9 +404,9 @@
   </header>
 
   {#if !doc}
+    <div class="lists-idle"><WordLists lists={draftLists} onChange={(next) => (draftLists = next)} /></div>
     <FileDrop onselect={onSelectFiles} onerror={(msg) => (errorMsg = msg)} />
     <Settings options={defaults} {classifiers} onChange={requestSettings} />
-    <div class="lists-idle"><WordLists lists={draftLists} onChange={(next) => (draftLists = next)} /></div>
   {:else}
     <div class="workspace" class:batch>
       {#if batch}
@@ -542,7 +542,7 @@
     }
   }
   .lists-idle {
-    margin-top: 1.2rem;
+    margin-bottom: 1.2rem;
   }
   .failed {
     flex-direction: column;
