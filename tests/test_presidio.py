@@ -10,6 +10,8 @@ Only pure functions are exercised; no model loads.
 
 from __future__ import annotations
 
+import pytest
+
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -130,6 +132,23 @@ def test_a_date_or_a_bare_digit_run_is_no_phone_number():
     ]
     kept = _keep(results, text, _tokens(text, {}), Trace())
     assert [text[r.start : r.end] for r in kept] == ["0911 123456"]
+
+
+@pytest.mark.parametrize(
+    "span,kept",
+    [
+        ("16 - 49", False),  # a reference range
+        ("3.5-5.1", False),
+        ("1/2026", False),
+        ("0123 4", False),
+        ("0123 45", True),  # six digits, like the PHONE rule
+        ("(0123) 4567-89", True),
+    ],
+)
+def test_a_phone_number_has_at_least_six_digits(span, kept):
+    text = f"Wert {span} Ende"
+    got = _keep([_result("PHONE_NUMBER", text, span)], text, _tokens(text, {}), Trace())
+    assert bool(got) is kept
 
 
 def test_a_person_needs_two_name_tokens():

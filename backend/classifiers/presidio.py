@@ -39,6 +39,8 @@ _DOTTED_DATE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}[\s\d.\-/]*")
 # An undelimited digit run is an identifier, not a phone number (real ones are
 # written with separators or a label, which the rules catch).
 _BARE_DIGITS = re.compile(r"\d+")
+# Fewer digits are a range or a value ("16 - 49"); the PHONE rule needs six too.
+_MIN_PHONE_DIGITS = 6
 
 
 # The one label that may run across a line break: a name split by a wrap. Every
@@ -203,7 +205,7 @@ def _name_token_count(text: str, tokens: Sequence[_Token], start: int, end: int)
 
 
 def _keep(results, line: str, tokens: Sequence[_Token], trace: Trace) -> list:
-    """The results worth acting on: no date or bare digit run as a phone number,
+    """The results worth acting on: no date, bare digit run or short value as a phone number,
     and no PERSON with fewer than two name tokens — German capitalizes every noun,
     so a two-word service text reads like a name to NER."""
     kept = []
@@ -212,6 +214,9 @@ def _keep(results, line: str, tokens: Sequence[_Token], trace: Trace) -> list:
             span = line[r.start : r.end].strip()
             if _DOTTED_DATE.fullmatch(span) or _BARE_DIGITS.fullmatch(span):
                 trace.add("      Ignoring PHONE_NUMBER %r: a date or an identifier", span)
+                continue
+            if sum(c.isdigit() for c in span) < _MIN_PHONE_DIGITS:
+                trace.add("      Ignoring PHONE_NUMBER %r: too few digits", span)
                 continue
         if r.entity_type == "PERSON":
             names = _name_token_count(line, tokens, r.start, r.end)
