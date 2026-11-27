@@ -6,9 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "de-core-news-lg",
-    "fastapi>=0.162.4",
-    "gunicorn>=27.0.0",
-    "onnxruntime>=1.31.1",
+    "fastapi>=0.165.0",
+    "gunicorn>=27.0.1",
+    "onnxruntime>=1.32.0",
     # Barcode and QR detection (backend.codes); paddlex pulls it in anyway.
     "opencv-contrib-python>=4.10.0.84",
     "paddleocr>=3.7.0",
@@ -17,7 +17,7 @@ dependencies = [
     "presidio-analyzer>=2.2.362",
     # Config + request validation. FastAPI pulls it in anyway; declared because
     # backend.config and backend.options import it directly.
-    "pydantic>=2.14.3",
+    "pydantic>=2.14.4",
     "pymupdf>=2.1",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -40,7 +40,7 @@ pii-redact = "backend.cli:main"
 # model in-process — without it gliner2 2.x is only a client for their hosted
 # API, and importing it fails on `torch`; see the torch pin below.
 guard-omni = [
-    "gliner2[local]>=2.1.0",
+    "gliner2[local]>=2.2.0",
     # Direct only so the CPU index below applies — uv ignores sources on
     # transitive dependencies.
     "torch",
