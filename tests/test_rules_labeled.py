@@ -143,6 +143,53 @@ def test_a_birthdate_alone_under_the_labeled_name():
     assert labeled_values(lines) == {lines[1]: PiiLabel.PERSON, lines[2]: PiiLabel.DATE_OF_BIRTH}
 
 
+def _card_header(*rows):
+    """The insurance-card header of a statutory form: labels above, values beneath."""
+    return [
+        cell("Name, Vorname des Versicherten", 100, 220, width=220, height=21),
+        cell("geb. am", 500, 220, width=64, height=25),
+        *rows,
+    ]
+
+
+def test_the_card_header_claims_surname_forename_and_birthdate():
+    lines = _card_header(
+        cell("Musterfrau", 100, 254, width=160, height=34),
+        cell("01.02.1980", 502, 255, width=140, height=28),
+        cell("Andrea", 98, 289, width=90, height=40),
+        cell("VK gültig bis", 502, 291, width=90),
+        cell("Musterstr. 12", 100, 334, width=170, height=28),
+    )
+    assert labeled_values(lines) == {
+        lines[2]: PiiLabel.PERSON,
+        lines[3]: PiiLabel.DATE_OF_BIRTH,
+        lines[4]: PiiLabel.PERSON,
+    }
+
+
+def test_the_card_header_takes_a_name_in_one_cell_but_not_the_street_beneath():
+    lines = _card_header(
+        cell("Muster, Andrea", 100, 254, width=180, height=34),
+        cell("Musterstr. 12", 100, 289, width=170, height=34),
+    )
+    assert labeled_values(lines) == {lines[2]: PiiLabel.PERSON}
+
+
+def test_the_card_header_takes_no_column_header_in_its_row():
+    lines = _card_header(cell("Status", 700, 220, width=60))
+    assert labeled_values(lines) == {}
+
+
+def test_a_plain_name_header_still_needs_two_name_tokens():
+    lines = [cell("Name", 100, 220, width=60), cell("Musterfrau", 100, 250, width=120)]
+    assert labeled_values(lines) == {}
+
+
+def test_a_bare_geb_column_over_amounts_owns_nothing():
+    lines = [cell("Geb.", 100, 220, width=60), cell("01.02.1980", 100, 250, width=120)]
+    assert labeled_values(lines) == {}
+
+
 def test_a_sender_identifier_under_a_label_closing_a_holder_line():
     lines = [
         cell("Dr. Andrea Muster, Vertragsarztnr.:", 400, 100, width=500),

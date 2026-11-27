@@ -62,6 +62,15 @@ NAME_VALUE = re.compile(
     rf"^\s*(?:{_NAME_PART}{_NAME_SEP}{_NAME_PART_OCR}"
     rf"|{_NAME_PART_OCR}{_NAME_SEP}{_NAME_PART})\s*$"
 )
+# A form header naming both name parts: "Name, Vorname des Versicherten".
+_NAME_WORD = r"(?:Nach|Vor|Familien)?name"
+NAME_HEADER_CELL = re.compile(
+    rf"(?i)^\s*(?=.*(?:Nach|Vor|Familien)name){_NAME_WORD}\s*[,/]?\s*{_NAME_WORD}"
+    rf"(?:\s+(?:des|der)\s+{_PERSON_LABEL})?\s*:?\s*$"
+)
+# One name token alone in its cell: a surname or forename under that header.
+NAME_TOKEN_CELL = re.compile(rf"^\s*{_NAME_PART}\s*$")
+NAME_CELL = re.compile(rf"{NAME_VALUE.pattern}|{NAME_TOKEN_CELL.pattern}")
 # Title(s) and a name: "Prof. Dr. med. Andrea Muster", "DR. MED. ANDREA MUSTER".
 _TITLE_WORD = r"Prof|Priv\.-Doz|Dr(?:es)?|med|dent|vet|univ|habil|Dipl\.-?Med"
 # The titles before a name: "Prof. Dr. med. ".
@@ -77,9 +86,12 @@ TITLE_NAME = re.compile(
 NAME_DATE = re.compile(rf"{_NAME_PART}\s*,\s*{_NAME_PART}\s+{DATE_RE.pattern}")
 
 # --- birthdates -------------------------------------------------------------- #
-# "Geburtsdatum", "geboren", "Geb.Dat." — but not a bare "Geb." (Gebühren).
-BIRTH_LABEL = re.compile(r"(?i)geburt|geboren|geb[.\s-]*dat")
-BIRTH_LABEL_CELL = re.compile(r"(?i)^\s*(?:geburts(?:datum|tag)|geb[.\s-]*dat(?:um)?)\.?\s*:?\s*$")
+# "Geburtsdatum", "geboren", "Geb.Dat.", "geb. am" — not a bare "Geb." (Gebühren).
+BIRTH_LABEL = re.compile(r"(?i)geburt|geboren|geb[.\s-]*dat|\bgeb\.?\s*am\b")
+# Alone in its cell "geb." also reads "geboren" before "am" or a colon.
+BIRTH_LABEL_CELL = re.compile(
+    r"(?i)^\s*(?:(?:geburts(?:datum|tag)|geb[.\s-]*dat(?:um)?|geb(?:oren|\.)?\s*am)\.?\s*:?|geb\.?\s*:)\s*$"
+)
 # A date on a line known to hold a birthdate; OCR may read a dot as a comma.
 BIRTH_DATE = re.compile(r"\b\d{1,2}[.,]\s?\d{1,2}[.,]\s?\d{2,4}\b")
 # "geb. 01.02.1980" or "*01.02.1980" (the star reads "geboren"); only the date

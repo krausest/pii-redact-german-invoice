@@ -210,6 +210,14 @@ PATTERN_CASES: list[tuple[str, str, bool]] = [
     ("PERSON_LABEL_CELL", "Beratung Person", False),
     ("PERSON_LABEL_CELL", "Leistung Name", False),
     ("PERSON_LABEL_CELL", "Beratung des Patienten", False),
+    # A form header naming both name parts; "Name" alone needs a two-token value.
+    ("NAME_HEADER_CELL", "Name, Vorname des Versicherten", True),
+    ("NAME_HEADER_CELL", "Nachname, Vorname:", True),
+    ("NAME_HEADER_CELL", "Vorname Name", True),
+    ("NAME_HEADER_CELL", "Name/Vorname", True),
+    ("NAME_HEADER_CELL", "Name", False),
+    ("NAME_HEADER_CELL", "Name des Arztes", False),
+    ("NAME_HEADER_CELL", "Name, Vorname des Versicherten bitte angeben", False),
     # Two name tokens, one may have lost its capital to OCR, not both.
     ("NAME_VALUE", "Muster, Andrea", True),
     ("NAME_VALUE", "loanna Mustermann", True),
@@ -226,6 +234,12 @@ PATTERN_CASES: list[tuple[str, str, bool]] = [
     ("BIRTH_LABEL", "Geb.Dat.", True),
     ("BIRTH_LABEL", "Geb.Nr. 5", False),
     ("BIRTH_LABEL", "Gebühren Datum", False),
+    ("BIRTH_LABEL", "geb. am", True),
+    # Alone in its cell, "geb." needs "am" or a colon to read "geboren".
+    ("BIRTH_LABEL_CELL", "geb. am", True),
+    ("BIRTH_LABEL_CELL", "Geb.:", True),
+    ("BIRTH_LABEL_CELL", "Geb.", False),
+    ("BIRTH_LABEL_CELL", "Geb.-Nr.", False),
     # The mark directly before the date, even glued to the name before it.
     ("BIRTH_MARK", "Mustermann, Max'geb. 13.08.1964", True),
     ("BIRTH_MARK", "* 01.02.1980", True),

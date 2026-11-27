@@ -21,6 +21,9 @@ from backend.rules.patterns import (
     DATE_VALUE,
     ID_LABEL,
     ID_VALUE,
+    NAME_CELL,
+    NAME_HEADER_CELL,
+    NAME_TOKEN_CELL,
     NAME_VALUE,
     PERSON_LABEL_CELL,
     PHONE_LABEL_CELL,
@@ -44,7 +47,8 @@ class LabeledValue:
     ``header``: the label alone in its cell — only then may its value sit beneath it.
     ``cell``: the value is too plain to stand alone ("11"), so in the row it must be
     right of the label, and beneath it may share the label's left edge.
-    ``below``: a line directly under each claimed value, claimed as ``below_kind``."""
+    ``below``: a line directly under each claimed value, claimed as ``below_kind``.
+    ``row``: whether the value may sit beside the label; a form header's sits beneath."""
 
     kind: PiiLabel | KeepReason
     label: re.Pattern[str]
@@ -53,11 +57,14 @@ class LabeledValue:
     cell: bool = False
     below: re.Pattern[str] | None = None
     below_kind: PiiLabel | None = None
+    row: bool = True
 
 
 LABELED_VALUES: list[LabeledValue] = [
     # "Geburtsdatum:" | "01.02.1980"
-    LabeledValue(PiiLabel.DATE_OF_BIRTH, label=BIRTH_LABEL, value=BIRTH_DATE, header=BIRTH_LABEL_CELL),
+    LabeledValue(
+        PiiLabel.DATE_OF_BIRTH, label=BIRTH_LABEL, value=BIRTH_DATE, header=BIRTH_LABEL_CELL, cell=True
+    ),
     # "Versicherten-Nr.:" | "A123456789"
     LabeledValue(PiiLabel.ID, label=ID_LABEL, value=ID_VALUE),
     # "Rg.-Nr.:" | "AB-12-3456"
@@ -80,6 +87,17 @@ LABELED_VALUES: list[LabeledValue] = [
         header=PERSON_LABEL_CELL,
         below=DATE_VALUE,
         below_kind=PiiLabel.DATE_OF_BIRTH,
+    ),
+    # "Name, Vorname des Versicherten" over "Muster" and "Andrea" in two cells
+    LabeledValue(
+        PiiLabel.PERSON,
+        label=NAME_HEADER_CELL,
+        value=NAME_CELL,
+        header=NAME_HEADER_CELL,
+        cell=True,
+        below=NAME_TOKEN_CELL,
+        below_kind=PiiLabel.PERSON,
+        row=False,
     ),
 ]
 
@@ -137,7 +155,7 @@ def _paired_values(lines: list[Line], rule: LabeledValue, table: set[Line], gap:
         if _is_value(ln, rule):
             found.add(i)
             continue
-        j = _row_value(lines, ln, rule)
+        j = _row_value(lines, ln, rule) if rule.row else None
         if j is None and _is_header(ln, rule):
             j = _column_value(lines, ln, rule, table, gap)
         if j is not None:

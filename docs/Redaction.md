@@ -165,7 +165,7 @@ and the replay's word scoring both use these parts.
 *different* OCR line by geometry:
 
 - **Birth date** — the date nearest beside a `Geburtsdatum`/`geboren`/`Geb.Dat.`
-  label, or nearest under a `Geburtsdatum` header (the one-line form `geb. 01.02.1980`,
+  label, or under a `Geburtsdatum`/`geb. am`/`Geb.:` header (the one-line form `geb. 01.02.1980`,
   `*01.02.1980` is the static rule `BIRTH_MARK`). A bare `geb.` is not a label (it
   also means *Gebühren*), and treatment dates stay visible.
 - **Identifiers** — insurance, patient, case, admission, member and contract numbers
@@ -182,7 +182,10 @@ and the replay's word scoring both use these parts.
   label may name its holder (`IK Musterstelle`).
 - **Phone in its own cell** — the number beside or under a `Telefon:`/`Fax:` cell.
 - **Names** — `Patient:` alone in its cell makes the name in the next cell (or the
-  cell below) a value, and a date alone directly under that name a birth date.
+  cell below) a value, and a date alone directly under that name a birth date. The
+  insurance-card header of statutory forms (`Name, Vorname des Versicherten`, any header
+  naming `Vorname`/`Nachname`) takes the cell beneath it, even a single name, and a
+  single name directly under that (`Muster` / `Andrea`) — never a cell in its row.
 
 Each label claims one value: itself when the line holds one too, else the nearest
 in its row, else — for a label alone in its cell — the nearest beneath it, never
